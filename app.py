@@ -14,13 +14,13 @@ st.set_page_config(page_title="Firma Bulucu", page_icon="🏭", layout="wide")
 COUNTRIES = {
     "Almanya": {
         "name": "Germany",
-        "terms": ["Nachfolge", "Ruhestand", "Firmenverkauf", "Unternehmen zu verkaufen", "Altersnachfolge"],
+        "terms": ["Nachfolge", "Ruhestand", "Altersnachfolge", "Firmenverkauf", "Unternehmen zu verkaufen"],
         "domains": ["nexxt-change.org", "dub.de", "deal-one.de"],
     },
     "İngiltere": {
         "name": "United Kingdom",
         "terms": ["business for sale", "retirement", "owner retiring", "succession", "offers invited"],
-        "domains": ["uk.businessesforsale.com", "rightbiz.co.uk", "daltonsbusiness.com"],
+        "domains": ["uk.businessesforsale.com", "rightbiz.co.uk", "daltonsbusiness.com", "business-sale.com"],
     },
     "Hollanda": {
         "name": "Netherlands",
@@ -35,13 +35,9 @@ COUNTRIES = {
 }
 
 SECTORS = {
-    "Gıda hammaddesi / Food ingredients": [
-        "food ingredients", "Lebensmittelzutaten", "ingredients alimentaires", "voedingsingrediënten"
-    ],
-    "Gıda katkı maddeleri": [
-        "food additives", "Lebensmittelzusatzstoffe", "additifs alimentaires", "voedingsadditieven"
-    ],
-    "Aroma / renk": ["flavour colour", "flavor color", "Aromen Farbstoffe", "arômes colorants"],
+    "Gıda hammaddesi / Food ingredients": ["food ingredients", "Lebensmittelzutaten"],
+    "Gıda katkı maddeleri": ["food additives", "Lebensmittelzusatzstoffe"],
+    "Aroma / renk": ["flavour colour", "flavor color", "Aromen Farbstoffe"],
     "Emülgatör / stabilizer / hydrocolloid": ["emulsifier stabilizer hydrocolloid", "Emulgator Stabilisator Hydrokolloid"],
     "Premix / powder blending": ["premix powder blending", "dry blending", "Pulvermischung"],
     "Specialty chemicals": ["specialty chemicals", "Spezialchemikalien", "chemical blending"],
@@ -53,62 +49,76 @@ SECTORS = {
 
 STARTER = [
     {
-        "Skor": 92,
-        "Ülke": "İngiltere",
-        "Sektör": "Specialty chemicals",
+        "Skor": 94, "Ülke": "İngiltere", "Sektör": "Specialty chemicals",
         "Başlık": "Long-Running Supplier And Distributor Of Industrial Chemicals",
-        "Kaynak": "uk.businessesforsale.com",
-        "Ciro": "£3.5m",
-        "EBITDA/Kâr": "~£550k adjusted EBITDA",
-        "Fiyat": "Undisclosed",
-        "Satış nedeni": "retirement / lifestyle change",
-        "E-posta": "",
-        "Telefon": "",
+        "Kaynak": "uk.businessesforsale.com", "Ciro": "£3.5m",
+        "EBITDA/Kâr": "~£550k adjusted EBITDA", "Fiyat": "Undisclosed",
+        "Satış nedeni": "retirement / lifestyle change", "E-posta": "", "Telefon": "",
         "Özet": "Industrial chemicals, decanting and bespoke mixtures; freehold property option.",
         "İlan / kaynak URL": "https://uk.businessesforsale.com/uk/long-running-supplier-and-distributor-of-industrial-chemicals.aspx",
-        "Arama tipi": "Doğrulanmış başlangıç",
+        "Arama tipi": "Doğrulanmış başlangıç", "Satış ilanı": "Evet", "Üretici sinyali": "Evet",
     },
     {
-        "Skor": 95,
-        "Ülke": "İngiltere",
-        "Sektör": "Pigment / coating / dye",
+        "Skor": 96, "Ülke": "İngiltere", "Sektör": "Pigment / coating / dye",
         "Başlık": "Manufacturer and supplier of dyes and pigments",
-        "Kaynak": "rightbiz.co.uk",
-        "Ciro": "£3.5m",
-        "EBITDA/Kâr": "£615k adjusted EBITDA",
-        "Fiyat": "Offers invited",
-        "Satış nedeni": "retirement",
-        "E-posta": "",
-        "Telefon": "",
+        "Kaynak": "rightbiz.co.uk", "Ciro": "£3.5m",
+        "EBITDA/Kâr": "£615k adjusted EBITDA", "Fiyat": "Offers invited",
+        "Satış nedeni": "retirement", "E-posta": "", "Telefon": "",
         "Özet": "Water-based dyes, pigment dispersions, coatings and toll manufacturing.",
         "İlan / kaynak URL": "https://www.rightbiz.co.uk/buy_business/for_sale/643296_undisclosed.html",
-        "Arama tipi": "Doğrulanmış başlangıç",
+        "Arama tipi": "Doğrulanmış başlangıç", "Satış ilanı": "Evet", "Üretici sinyali": "Evet",
     },
     {
-        "Skor": 88,
-        "Ülke": "Almanya",
-        "Sektör": "Gıda hammaddesi / Food ingredients",
+        "Skor": 90, "Ülke": "Almanya", "Sektör": "Gıda hammaddesi / Food ingredients",
         "Başlık": "Nachfolge für etabliertes Unternehmen im Lebensmittelbereich",
-        "Kaynak": "dub.de",
-        "Ciro": "€8.5m",
-        "EBITDA/Kâr": "",
-        "Fiyat": "",
-        "Satış nedeni": "Nachfolge / Verkauf",
-        "E-posta": "",
-        "Telefon": "",
+        "Kaynak": "dub.de", "Ciro": "€8.5m", "EBITDA/Kâr": "", "Fiyat": "",
+        "Satış nedeni": "Nachfolge / Verkauf", "E-posta": "", "Telefon": "",
         "Özet": "In-house production, processing, packaging and industrial customers.",
         "İlan / kaynak URL": "https://www.dub.de/de/unternehmen-kaufen/expose/nachfolge-fuer-profitables-etabliertes-unternehmen-im-lebensmittelbereich/",
-        "Arama tipi": "Doğrulanmış başlangıç",
+        "Arama tipi": "Doğrulanmış başlangıç", "Satış ilanı": "Evet", "Üretici sinyali": "Evet",
     },
 ]
 
 EMAIL_RE = re.compile(r'[\w.\-+%]+@[\w.\-]+\.[A-Za-z]{2,}', re.I)
 PHONE_RE = re.compile(r'(?:(?:\+\d{1,3}[\s().-]*)?(?:\d[\s().-]*){8,15})')
 
+SALE_TERMS = [
+    "business for sale", "company for sale", "offers invited", "asking price",
+    "retirement", "retiring", "succession", "owner retiring",
+    "nachfolge", "ruhestand", "altersnachfolge", "firmenverkauf",
+    "unternehmen zu verkaufen", "kaufpreis", "verkaufsgrund",
+    "bedrijf te koop", "opvolging", "pensioen",
+    "entreprise à vendre", "cession entreprise", "retraite"
+]
+
+MANUFACTURING_TERMS = [
+    "manufacturer", "manufacturing", "production", "producer", "factory", "plant",
+    "blending", "formulation", "processing", "toll manufacturing", "contract manufacturing",
+    "hersteller", "produktion", "produzent", "werk", "lohnherstellung", "lohnmischung",
+    "fabricant", "production", "producent", "productie"
+]
+
+BLACKLIST_DOMAINS = {
+    "wikipedia.org", "en.wikipedia.org", "fda.gov", "merriam-webster.com",
+    "foodingredientsfirst.com", "creapure.com", "bareperformancenutrition.com",
+    "britannica.com", "sciencedirect.com", "researchgate.net", "linkedin.com",
+    "facebook.com", "instagram.com", "youtube.com"
+}
+
 def clean(value):
     return re.sub(r"\s+", " ", value or "").strip()
 
-def safe_get(url, params=None, timeout=12):
+def get_domain(url):
+    try:
+        return urlparse(url).netloc.lower().replace("www.", "")
+    except Exception:
+        return ""
+
+def is_blacklisted(url):
+    d = get_domain(url)
+    return any(d == x or d.endswith("." + x) for x in BLACKLIST_DOMAINS)
+
+def safe_get(url, params=None, timeout=10):
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -128,11 +138,14 @@ def search_bing_rss(query, max_results):
     try:
         root = ET.fromstring(r.content)
         for item in root.findall(".//item")[:max_results]:
-            title = clean(item.findtext("title"))
             link = clean(item.findtext("link"))
-            desc = clean(item.findtext("description"))
             if link:
-                out.append({"title": title, "href": link, "body": desc, "_provider": "Bing RSS"})
+                out.append({
+                    "title": clean(item.findtext("title")),
+                    "href": link,
+                    "body": clean(item.findtext("description")),
+                    "_provider": "Bing RSS"
+                })
     except Exception:
         pass
     return out
@@ -158,41 +171,14 @@ def search_ddg_html(query, max_results):
             a = block.select_one(".result__a")
             if not a:
                 continue
-            snippet = block.select_one(".result__snippet")
             href = ddg_final_url(a.get("href", ""))
+            snippet = block.select_one(".result__snippet")
             if href:
                 out.append({
                     "title": clean(a.get_text(" ", strip=True)),
                     "href": href,
                     "body": clean(snippet.get_text(" ", strip=True) if snippet else ""),
-                    "_provider": "DuckDuckGo HTML",
-                })
-            if len(out) >= max_results:
-                break
-    except Exception:
-        pass
-    return out
-
-def search_google_html(query, max_results):
-    out = []
-    r = safe_get("https://www.google.com/search", params={"q": query, "num": max_results, "hl": "en"})
-    if r is None or r.status_code >= 400:
-        return out
-    try:
-        soup = BeautifulSoup(r.text, "html.parser")
-        for h3 in soup.find_all("h3"):
-            a = h3.find_parent("a")
-            if not a:
-                continue
-            href = a.get("href", "")
-            if href.startswith("/url?q="):
-                href = href.split("/url?q=", 1)[1].split("&", 1)[0]
-            if href.startswith("http"):
-                out.append({
-                    "title": clean(h3.get_text(" ", strip=True)),
-                    "href": href,
-                    "body": "",
-                    "_provider": "Google HTML",
+                    "_provider": "DuckDuckGo HTML"
                 })
             if len(out) >= max_results:
                 break
@@ -201,26 +187,24 @@ def search_google_html(query, max_results):
     return out
 
 def live_search(query, max_results):
-    merged = []
-    seen = set()
-    diagnostics = []
-    for fn in (search_bing_rss, search_ddg_html, search_google_html):
+    merged, seen = [], set()
+    for fn in (search_bing_rss, search_ddg_html):
         try:
             results = fn(query, max_results)
         except Exception:
             results = []
-        diagnostics.append((fn.__name__, len(results)))
         for item in results:
             url = item.get("href", "")
-            if url and url not in seen:
-                seen.add(url)
-                merged.append(item)
+            if not url or url in seen or is_blacklisted(url):
+                continue
+            seen.add(url)
+            merged.append(item)
         if len(merged) >= max_results:
             break
-    return merged[:max_results], diagnostics
+    return merged[:max_results]
 
 def fetch_page(url):
-    r = safe_get(url, timeout=9)
+    r = safe_get(url, timeout=8)
     if r is None or r.status_code >= 400 or "text/html" not in r.headers.get("content-type", ""):
         return "", "", ""
     try:
@@ -238,6 +222,27 @@ def fetch_page(url):
     except Exception:
         return "", "", ""
 
+def contains_any(text, terms):
+    low = text.lower()
+    return any(term.lower() in low for term in terms)
+
+def is_preferred_domain(url, country):
+    d = get_domain(url)
+    return any(d == x or d.endswith("." + x) for x in COUNTRIES[country]["domains"])
+
+def candidate_ok(title, snippet, body, url, country):
+    text = f"{title} {snippet} {body[:10000]}"
+    sale = contains_any(text, SALE_TERMS)
+    maker = contains_any(text, MANUFACTURING_TERMS)
+    preferred = is_preferred_domain(url, country)
+
+    # Preferred M&A marketplaces need a sale signal OR a strong manufacturer signal.
+    if preferred:
+        return sale or maker, sale, maker
+
+    # All other sites must clearly look like BOTH a sale and a manufacturer.
+    return sale and maker, sale, maker
+
 def money(text, labels):
     for label in labels:
         pattern = (
@@ -252,99 +257,110 @@ def money(text, labels):
 
 def extract_reason(text):
     low = text.lower()
-    for word in (
+    for word in [
         "retirement", "retiring", "ruhestand", "altersbedingt", "altersnachfolge",
         "pensioen", "retraite", "succession", "nachfolge"
-    ):
+    ]:
         if word in low:
             return word
     return ""
 
-def calc_score(title, snippet, body, sector):
-    text = f"{title} {snippet} {body[:7000]}".lower()
+def calc_score(title, snippet, body, url, country, sector):
+    text = f"{title} {snippet} {body[:10000]}".lower()
     score = 0
-    if any(w in text for w in (
-        "manufacturer", "manufacturing", "production", "producer", "factory", "plant",
-        "hersteller", "produktion", "produzent", "fabricant", "producent", "blending", "formulation"
-    )):
-        score += 35
-    if any(w in text for w in (
-        "retirement", "retiring", "succession", "nachfolge", "ruhestand", "altersbedingt",
-        "pensioen", "opvolging", "retraite", "cession", "for sale", "te koop", "à vendre"
-    )):
+
+    if is_preferred_domain(url, country):
         score += 30
+    if contains_any(text, SALE_TERMS):
+        score += 30
+    if contains_any(text, MANUFACTURING_TERMS):
+        score += 25
+
+    sector_hits = 0
     for phrase in SECTORS[sector]:
         for word in phrase.lower().split():
             if len(word) > 4 and word in text:
-                score += 3
-    if any(x in text for x in ("restaurant", "takeaway", "cafe for sale", "franchise")):
-        score -= 30
+                sector_hits += 1
+    score += min(15, sector_hits * 3)
+
+    if any(x in text for x in ["restaurant", "takeaway", "cafe for sale", "franchise"]):
+        score -= 40
+
     return max(0, min(100, score))
 
-def build_queries(country_label, sector):
-    c = COUNTRIES[country_label]
-    sector_terms = SECTORS[sector][:2]
+def build_queries(country, sector):
+    c = COUNTRIES[country]
+    s = SECTORS[sector][0]
+
+    # First: highly targeted M&A marketplace queries
     q = []
-    for sp in sector_terms:
-        q.append(f'{sp} {c["name"]} retirement succession manufacturer for sale')
-        q.append(f'{sp} {c["name"]} acquisition opportunity')
-        for term in c["terms"][:2]:
-            q.append(f'{sp} {term} {c["name"]}')
     for domain in c["domains"]:
-        q.append(f'site:{domain} {sector_terms[0]}')
-        q.append(f'site:{domain} {c["terms"][0]}')
+        q.append(f'site:{domain} "{s}"')
+        q.append(f'site:{domain} "{c["terms"][0]}" "{s}"')
+
+    # Then: generic, but with explicit sale + manufacturing intent
+    q.append(f'"{s}" "{c["terms"][0]}" manufacturer {c["name"]}')
+    q.append(f'"{s}" "{c["terms"][1]}" manufacturer {c["name"]}')
+    q.append(f'"{s}" "business for sale" manufacturer {c["name"]}')
     return list(dict.fromkeys(q))
 
 def starter_rows(countries, sectors):
-    result = []
+    out = []
     for row in STARTER:
-        if row["Ülke"] in countries:
-            if row["Sektör"] in sectors or row["Sektör"] == "Specialty chemicals":
-                result.append(row.copy())
-    return result
+        if row["Ülke"] in countries and row["Sektör"] in sectors:
+            out.append(row.copy())
+    return out
 
 def scan(countries, sectors, per_query, deep_scan):
     rows = starter_rows(countries, sectors)
     seen = {r["İlan / kaynak URL"] for r in rows}
-    diagnostics = []
-    qlist = [(c, s, q) for c in countries for s in sectors for q in build_queries(c, s)]
-    total = len(qlist)
+    jobs = [(c, s, q) for c in countries for s in sectors for q in build_queries(c, s)]
     progress = st.progress(0)
     status = st.empty()
 
-    for idx, (country, sector, query) in enumerate(qlist, start=1):
+    for i, (country, sector, query) in enumerate(jobs, start=1):
         status.write(f"Canlı arama: **{country} · {sector}**")
-        results, diag = live_search(query, per_query)
-        diagnostics.append((query, diag, len(results)))
+        results = live_search(query, per_query)
 
         for item in results:
             url = item.get("href", "")
-            if not url or url in seen:
+            if not url or url in seen or is_blacklisted(url):
                 continue
-            seen.add(url)
 
             title = clean(item.get("title", ""))
             snippet = clean(item.get("body", ""))
             body = email = phone = ""
-            if deep_scan:
+
+            # First do a cheap title/snippet filter.
+            cheap_ok, cheap_sale, cheap_maker = candidate_ok(title, snippet, "", url, country)
+
+            # On preferred M&A domains we can inspect the page even if snippet is weak.
+            if deep_scan and (cheap_ok or is_preferred_domain(url, country)):
                 body, email, phone = fetch_page(url)
                 time.sleep(0.05)
 
-            text = f"{title} {snippet} {body}"
-            turnover = money(text, [r"turnover", r"revenue", r"umsatz", r"omzet", r"chiffre d['’]affaires"])
-            ebitda = money(text, [r"adjusted EBITDA", r"EBITDA", r"operating profit", r"profit", r"gewinn", r"winst"])
-            price = money(text, [r"asking price", r"price", r"kaufpreis", r"vraagprijs", r"prix"])
+            ok, sale, maker = candidate_ok(title, snippet, body, url, country)
+            if not ok:
+                continue
+
+            seen.add(url)
+            fulltext = f"{title} {snippet} {body}"
+            turnover = money(fulltext, [r"turnover", r"revenue", r"umsatz", r"omzet", r"chiffre d['’]affaires"])
+            ebitda = money(fulltext, [r"adjusted EBITDA", r"EBITDA", r"operating profit", r"profit", r"gewinn", r"winst"])
+            price = money(fulltext, [r"asking price", r"price", r"kaufpreis", r"vraagprijs", r"prix"])
 
             rows.append({
-                "Skor": calc_score(title, snippet, body, sector),
+                "Skor": calc_score(title, snippet, body, url, country, sector),
                 "Ülke": country,
                 "Sektör": sector,
                 "Başlık": title,
-                "Kaynak": urlparse(url).netloc.replace("www.", ""),
+                "Kaynak": get_domain(url),
                 "Ciro": turnover,
                 "EBITDA/Kâr": ebitda,
                 "Fiyat": price,
-                "Satış nedeni": extract_reason(text),
+                "Satış nedeni": extract_reason(fulltext),
+                "Satış ilanı": "Evet" if sale else "Belirsiz",
+                "Üretici sinyali": "Evet" if maker else "Belirsiz",
                 "E-posta": email,
                 "Telefon": phone,
                 "Özet": snippet[:550],
@@ -352,7 +368,7 @@ def scan(countries, sectors, per_query, deep_scan):
                 "Arama tipi": item.get("_provider", "Canlı arama"),
             })
 
-        progress.progress(idx / max(total, 1))
+        progress.progress(i / max(len(jobs), 1))
 
     progress.empty()
     status.empty()
@@ -364,10 +380,10 @@ def scan(countries, sectors, per_query, deep_scan):
               .sort_values(["Skor", "Ülke"], ascending=[False, True])
               .reset_index(drop=True)
         )
-    return df, diagnostics
+    return df
 
 st.title("🏭 Firma Bulucu")
-st.caption("AS İleri / AS Food · Almanya ve İngiltere öncelikli satın alma / halefiyet araştırması")
+st.caption("AS İleri / AS Food · Gerçek satılık üretici / halefiyet fırsatlarını filtreleyen sürüm")
 
 with st.sidebar:
     countries = st.multiselect("Ülkeler", list(COUNTRIES), default=["Almanya", "İngiltere"])
@@ -376,74 +392,63 @@ with st.sidebar:
         list(SECTORS),
         default=["Gıda hammaddesi / Food ingredients", "Gıda katkı maddeleri", "Specialty chemicals"],
     )
-    per_query = st.slider("Her sorguda sonuç", 3, 12, 6)
-    deep_scan = st.checkbox(
-        "İlan sayfalarından finansal ve iletişim bilgisi çıkarmaya çalış",
-        value=True,
-    )
+    per_query = st.slider("Her sorguda sonuç", 3, 10, 5)
+    deep_scan = st.checkbox("İlan sayfasını açıp finansal/iletişim bilgisi çıkarmaya çalış", value=True)
 
 tab1, tab2, tab3 = st.tabs(["🔎 Tara", "📊 Sonuçlar", "✉️ İlk temas"])
 
 with tab1:
-    st.write(
-        "Canlı arama motorlarını ve seçili M&A platformlarını tarar. "
-        "Canlı arama engellenirse doğrulanmış başlangıç adaylarını da gösterir."
+    st.info(
+        "Bu sürüm bilgi sitelerini, Wikipedia/FDA/haber sayfalarını ve satış niyeti taşımayan sonuçları otomatik eler. "
+        "Öncelik M&A / business-for-sale platformlarıdır."
     )
-
     if st.button("ŞİMDİ TARA", type="primary", use_container_width=True):
         if not countries or not sectors:
             st.error("En az bir ülke ve sektör seçin.")
         else:
-            df, diag = scan(countries, sectors, per_query, deep_scan)
+            df = scan(countries, sectors, per_query, deep_scan)
             st.session_state["results"] = df
-            st.session_state["diag"] = diag
-
             if df.empty:
-                st.error("Hiç sonuç alınamadı.")
+                st.warning("Sıkı filtrelerden geçen aday bulunamadı.")
             else:
-                live_count = int((df["Arama tipi"] != "Doğrulanmış başlangıç").sum())
-                starter_count = len(df) - live_count
-                st.success(
-                    f"{len(df)} aday hazır. "
-                    f"Canlı aramadan {live_count}, doğrulanmış başlangıç listesinden {starter_count} kayıt."
-                )
-
-            with st.expander("Arama bağlantı testi / teknik durum"):
-                for query, info, count in diag[:30]:
-                    st.write(query)
-                    st.caption(
-                        f"Sonuç: {count} · " +
-                        " | ".join([f"{name}:{n}" for name, n in info])
-                    )
+                st.success(f"{len(df)} ciddi aday bulundu. Sonuçlar sekmesine geçin.")
 
 with tab2:
     df = st.session_state.get("results", pd.DataFrame())
-
     if df.empty:
         st.info("Önce Tara sekmesinden arama yapın.")
     else:
-        min_score = st.slider("Minimum skor", 0, 100, 35)
-        view = df[df["Skor"] >= min_score].copy()
-        st.metric("Gösterilen aday", len(view))
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            min_score = st.slider("Minimum skor", 50, 100, 70)
+        with c2:
+            only_sale = st.checkbox("Satış ilanı sinyali zorunlu", value=True)
+        with c3:
+            only_maker = st.checkbox("Üretici sinyali zorunlu", value=True)
+
+        view = df.copy()
+        view = view[view["Skor"] >= min_score]
+        if only_sale:
+            view = view[view["Satış ilanı"] == "Evet"]
+        if only_maker:
+            view = view[view["Üretici sinyali"] == "Evet"]
+
+        st.metric("Gösterilen ciddi aday", len(view))
 
         st.dataframe(
             view,
             use_container_width=True,
             hide_index=True,
             column_config={
-                "İlan / kaynak URL": st.column_config.LinkColumn(
-                    "İlan / kaynak URL", display_text="Aç"
-                ),
-                "Skor": st.column_config.ProgressColumn(
-                    "Skor", min_value=0, max_value=100
-                ),
+                "İlan / kaynak URL": st.column_config.LinkColumn("İlan / kaynak URL", display_text="Aç"),
+                "Skor": st.column_config.ProgressColumn("Skor", min_value=0, max_value=100),
             },
         )
 
         st.download_button(
             "CSV indir",
             view.to_csv(index=False).encode("utf-8-sig"),
-            file_name="Firma_Bulucu_Sonuclari.csv",
+            file_name="Firma_Bulucu_Ciddi_Adaylar.csv",
             mime="text/csv",
             use_container_width=True,
         )
@@ -469,7 +474,4 @@ AS Food Global Limited / AS İleri Gıda""",
         height=420,
     )
 
-st.caption(
-    "Bilinmeyen veriyi uydurmaz. Kamuya açık sayfaları kullanır; "
-    "CAPTCHA veya giriş engellerini aşmaz."
-)
+st.caption("Bilinmeyen veriyi uydurmaz. Kamuya açık sayfaları kullanır; CAPTCHA veya giriş engellerini aşmaz.")
