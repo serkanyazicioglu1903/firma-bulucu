@@ -2919,6 +2919,47 @@ def render_control_tower():
                     use_container_width=True,hide_index=True
                 )
 
+            st.markdown("#### Müşteri kredi riski")
+            credit_risk=query_df("""
+                SELECT c.id,c.name AS müşteri,c.credit_limit AS kredi_limiti,
+                       c.currency AS limit_para,
+                       COALESCE(SUM(CASE
+                         WHEN r.status!='İptal' THEN
+                           CASE WHEN r.amount-r.paid_amount>0 THEN
+                             (r.amount-r.paid_amount)*r.fx_to_base
+                           ELSE 0 END
+                         ELSE 0 END),0) AS açık_risk_yönetim,
+                       MAX(CASE
+                         WHEN r.due_date < date('now') AND r.amount-r.paid_amount>0
+                         THEN CAST(julianday(date('now'))-julianday(r.due_date) AS INTEGER)
+                         ELSE 0 END) AS maks_gecikme_gün
+                FROM customers c
+                LEFT JOIN receivables r ON r.customer_id=c.id
+                GROUP BY c.id,c.name,c.credit_limit,c.currency
+                HAVING COALESCE(SUM(CASE
+                         WHEN r.status!='İptal' THEN
+                           CASE WHEN r.amount-r.paid_amount>0 THEN
+                             (r.amount-r.paid_amount)*r.fx_to_base
+                           ELSE 0 END
+                         ELSE 0 END),0) > 0
+                ORDER BY maks_gecikme_gün DESC,açık_risk_yönetim DESC
+            """)
+            if not credit_risk.empty:
+                credit_risk["limit_aşımı"] = credit_risk.apply(
+                    lambda r: (
+                        "EVET"
+                        if float(r["kredi_limiti"] or 0)>0
+                        and float(r["açık_risk_yönetim"] or 0)>float(r["kredi_limiti"] or 0)
+                        else ""
+                    ),
+                    axis=1
+                )
+                st.dataframe(
+                    credit_risk,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
             ar1,ar2=st.tabs(["Yeni Alacak","Tahsilat Gir"])
             with ar1:
                 customers_ar=query_df("SELECT id,name,default_payment_days FROM customers ORDER BY name")
@@ -3531,6 +3572,38 @@ def render_control_tower():
             min_cash=float(fc90["Tahmini Nakit"].min())
             if min_cash<0:
                 st.error(f"30/60/90 günlük projeksiyonda yaklaşık {abs(min_cash):,.0f} EUR nakit açığı riski var.")
+
+        ceo_credit=query_df("""
+            SELECT c.name AS müşteri,c.credit_limit AS kredi_limiti,
+                   COALESCE(SUM(CASE
+                     WHEN r.status!='İptal' AND r.base_currency='EUR'
+                      AND r.amount-r.paid_amount>0
+                     THEN (r.amount-r.paid_amount)*r.fx_to_base ELSE 0 END),0) AS açık_risk_eur,
+                   MAX(CASE
+                     WHEN r.base_currency='EUR' AND r.due_date<date('now')
+                      AND r.amount-r.paid_amount>0
+                     THEN CAST(julianday(date('now'))-julianday(r.due_date) AS INTEGER)
+                     ELSE 0 END) AS gecikme_gün
+            FROM customers c
+            LEFT JOIN receivables r ON r.customer_id=c.id
+            GROUP BY c.id,c.name,c.credit_limit
+            HAVING açık_risk_eur>0
+            ORDER BY gecikme_gün DESC,açık_risk_eur DESC
+            LIMIT 10
+        """)
+        if not ceo_credit.empty:
+            ceo_credit["limit_aşımı"] = ceo_credit.apply(
+                lambda r: (
+                    "EVET"
+                    if float(r["kredi_limiti"] or 0)>0
+                    and float(r["açık_risk_eur"] or 0)>float(r["kredi_limiti"] or 0)
+                    else ""
+                ),
+                axis=1
+            )
+            st.markdown("##### Müşteri kredi riski")
+            st.dataframe(ceo_credit,use_container_width=True,hide_index=True)
+
         if not ceo_rec.empty:
             risky=ceo_rec[ceo_rec["days_overdue"]>0].copy()
             if not risky.empty:
