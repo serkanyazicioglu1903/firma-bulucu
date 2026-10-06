@@ -1151,8 +1151,8 @@ def cash_position_base(base_currency="EUR"):
     accounts = query_df("""
         SELECT id,name,currency,balance,fx_to_base,base_currency,account_type
         FROM cash_accounts
-        WHERE active=1
-    """)
+        WHERE active=1 AND base_currency=?
+    """, (base_currency,))
     if accounts.empty:
         return 0.0
     return float((accounts["balance"] * accounts["fx_to_base"].fillna(1)).sum())
@@ -1162,13 +1162,17 @@ def cash_forecast(base_currency="EUR", horizons=(30,60,90)):
     opening_cash = cash_position_base(base_currency)
     rec = outstanding_receivables()
     pay = outstanding_payables()
+    if not rec.empty:
+        rec = rec[rec["base_currency"] == base_currency].copy()
+    if not pay.empty:
+        pay = pay[pay["base_currency"] == base_currency].copy()
     events = query_df("""
         SELECT id,event_date,direction,category,description,amount,currency,
                fx_to_base,base_currency,status
         FROM cash_events
-        WHERE status='Planlı'
+        WHERE status='Planlı' AND base_currency=?
         ORDER BY event_date
-    """)
+    """, (base_currency,))
     today = pd.Timestamp(date.today())
     rows = []
     for horizon in horizons:
@@ -1516,6 +1520,10 @@ def render_control_tower():
 
         rec_dashboard = outstanding_receivables()
         pay_dashboard = outstanding_payables()
+        if not rec_dashboard.empty:
+            rec_dashboard = rec_dashboard[rec_dashboard["base_currency"]=="EUR"].copy()
+        if not pay_dashboard.empty:
+            pay_dashboard = pay_dashboard[pay_dashboard["base_currency"]=="EUR"].copy()
         open_rec_base = float(rec_dashboard["outstanding_base"].sum()) if not rec_dashboard.empty else 0.0
         overdue_rec_base = float(
             rec_dashboard.loc[rec_dashboard["days_overdue"]>0,"outstanding_base"].sum()
@@ -2845,6 +2853,10 @@ def render_control_tower():
             """)
             rec_all=outstanding_receivables()
             pay_all=outstanding_payables()
+            if not rec_all.empty:
+                rec_all=rec_all[rec_all["base_currency"]==base_currency_fin].copy()
+            if not pay_all.empty:
+                pay_all=pay_all[pay_all["base_currency"]==base_currency_fin].copy()
             cash_total=cash_position_base(base_currency_fin)
             rec_total=float(rec_all["outstanding_base"].sum()) if not rec_all.empty else 0.0
             overdue_total=float(rec_all.loc[rec_all["days_overdue"]>0,"outstanding_base"].sum()) if not rec_all.empty else 0.0
@@ -2966,6 +2978,8 @@ def render_control_tower():
                         key="fin_ar_pay_select"
                     )
                     rr=rec_now[rec_now["id"]==rid].iloc[0]
+                    if not accounts.empty:
+                        accounts=accounts[accounts["currency"]==rr["currency"]].copy()
                     t1,t2=st.columns(2)
                     collection=t1.number_input("Tahsilat",min_value=0.0,max_value=float(rr["outstanding"]),value=float(rr["outstanding"]),step=100.0,key="fin_ar_collect_amount")
                     collection_date=t2.date_input("Tahsilat tarihi",value=date.today(),key="fin_ar_collect_date")
@@ -3057,6 +3071,8 @@ def render_control_tower():
                         key="fin_ap_pay_select"
                     )
                     pp=pay_now[pay_now["id"]==pid].iloc[0]
+                    if not accounts.empty:
+                        accounts=accounts[accounts["currency"]==pp["currency"]].copy()
                     q1,q2=st.columns(2)
                     payment=q1.number_input("Ödeme",min_value=0.0,max_value=float(pp["outstanding"]),value=float(pp["outstanding"]),step=100.0,key="fin_ap_pay_amount")
                     payment_date=q2.date_input("Ödeme tarihi",value=date.today(),key="fin_ap_pay_date")
@@ -3496,6 +3512,10 @@ def render_control_tower():
         st.markdown("#### Finans / tahsilat uyarıları")
         ceo_rec=outstanding_receivables()
         ceo_pay=outstanding_payables()
+        if not ceo_rec.empty:
+            ceo_rec=ceo_rec[ceo_rec["base_currency"]=="EUR"].copy()
+        if not ceo_pay.empty:
+            ceo_pay=ceo_pay[ceo_pay["base_currency"]=="EUR"].copy()
         ceo_cash=cash_position_base("EUR")
         ceo_rec_total=float(ceo_rec["outstanding_base"].sum()) if not ceo_rec.empty else 0.0
         ceo_overdue=float(ceo_rec.loc[ceo_rec["days_overdue"]>0,"outstanding_base"].sum()) if not ceo_rec.empty else 0.0
