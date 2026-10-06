@@ -170,6 +170,47 @@ def init_db():
             FOREIGN KEY(customer_id) REFERENCES customers(id),
             FOREIGN KEY(product_id) REFERENCES product_catalog(id)
         );
+
+        CREATE TABLE IF NOT EXISTS quotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_id INTEGER,
+            opportunity_id INTEGER,
+            product_name TEXT NOT NULL,
+            quantity_kg REAL DEFAULT 0,
+            base_currency TEXT DEFAULT 'EUR',
+            buy_price_per_kg REAL DEFAULT 0,
+            buy_currency TEXT DEFAULT 'EUR',
+            buy_fx_to_base REAL DEFAULT 1,
+            freight_total_base REAL DEFAULT 0,
+            customs_rate_pct REAL DEFAULT 0,
+            customs_fixed_base REAL DEFAULT 0,
+            import_other_total_base REAL DEFAULT 0,
+            handling_total_base REAL DEFAULT 0,
+            finance_rate_pct REAL DEFAULT 0,
+            prepayment_days INTEGER DEFAULT 0,
+            stock_days INTEGER DEFAULT 0,
+            customer_credit_days INTEGER DEFAULT 0,
+            sell_price_per_kg REAL DEFAULT 0,
+            sell_currency TEXT DEFAULT 'EUR',
+            sell_fx_to_base REAL DEFAULT 1,
+            sales_commission_pct REAL DEFAULT 0,
+            target_margin_pct REAL DEFAULT 0,
+            incoterm TEXT DEFAULT '',
+            valid_until TEXT DEFAULT '',
+            status TEXT DEFAULT 'Taslak',
+            notes TEXT DEFAULT '',
+            landed_cost_per_kg REAL DEFAULT 0,
+            finance_cost_per_kg REAL DEFAULT 0,
+            total_cost_per_kg REAL DEFAULT 0,
+            profit_per_kg REAL DEFAULT 0,
+            profit_total_base REAL DEFAULT 0,
+            margin_pct REAL DEFAULT 0,
+            required_sell_price REAL DEFAULT 0,
+            finance_days INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(customer_id) REFERENCES customers(id),
+            FOREIGN KEY(opportunity_id) REFERENCES opportunities(id)
+        );
         """)
 
         ensure_column(conn, "opportunities", "last_contact_date", "TEXT DEFAULT ''")
@@ -700,6 +741,179 @@ def update_opportunity_stage(opportunity_id, new_stage, probability, next_action
         )
 
 
+def calculate_quote(
+    quantity_kg,
+    buy_price_per_kg,
+    buy_fx_to_base,
+    freight_total_base,
+    customs_rate_pct,
+    customs_fixed_base,
+    import_other_total_base,
+    handling_total_base,
+    finance_rate_pct,
+    prepayment_days,
+    stock_days,
+    customer_credit_days,
+    sell_price_per_kg,
+    sell_fx_to_base,
+    sales_commission_pct,
+    target_margin_pct,
+):
+    qty = max(float(quantity_kg or 0), 0.0)
+    if qty <= 0:
+        return {
+            "goods_total_base": 0.0,
+            "customs_total_base": 0.0,
+            "landed_before_finance": 0.0,
+            "landed_cost_per_kg": 0.0,
+            "finance_days": 0,
+            "finance_cost_total": 0.0,
+            "finance_cost_per_kg": 0.0,
+            "total_cost_base": 0.0,
+            "total_cost_per_kg": 0.0,
+            "gross_sales_base": 0.0,
+            "sales_commission_base": 0.0,
+            "net_sales_base": 0.0,
+            "profit_total_base": 0.0,
+            "profit_per_kg": 0.0,
+            "margin_pct": 0.0,
+            "markup_pct": 0.0,
+            "required_sell_price": 0.0,
+        }
+
+    goods_total_base = qty * float(buy_price_per_kg or 0) * float(buy_fx_to_base or 0)
+    customs_total_base = (
+        goods_total_base * float(customs_rate_pct or 0) / 100.0
+        + float(customs_fixed_base or 0)
+    )
+    landed_before_finance = (
+        goods_total_base
+        + float(freight_total_base or 0)
+        + customs_total_base
+        + float(import_other_total_base or 0)
+        + float(handling_total_base or 0)
+    )
+    landed_cost_per_kg = landed_before_finance / qty
+
+    finance_days = max(
+        0,
+        int(prepayment_days or 0)
+        + int(stock_days or 0)
+        + int(customer_credit_days or 0),
+    )
+    finance_cost_total = (
+        landed_before_finance
+        * float(finance_rate_pct or 0)
+        / 100.0
+        * finance_days
+        / 365.0
+    )
+    finance_cost_per_kg = finance_cost_total / qty
+    total_cost_base = landed_before_finance + finance_cost_total
+    total_cost_per_kg = total_cost_base / qty
+
+    gross_sales_base = qty * float(sell_price_per_kg or 0) * float(sell_fx_to_base or 0)
+    sales_commission_base = gross_sales_base * float(sales_commission_pct or 0) / 100.0
+    net_sales_base = gross_sales_base - sales_commission_base
+    profit_total_base = net_sales_base - total_cost_base
+    profit_per_kg = profit_total_base / qty
+
+    margin_pct = (
+        profit_total_base / net_sales_base * 100.0
+        if net_sales_base > 0 else 0.0
+    )
+    markup_pct = (
+        profit_total_base / total_cost_base * 100.0
+        if total_cost_base > 0 else 0.0
+    )
+
+    target_margin = min(max(float(target_margin_pct or 0), 0.0), 95.0) / 100.0
+    commission_rate = min(max(float(sales_commission_pct or 0), 0.0), 95.0) / 100.0
+    required_net_sales_per_kg_base = (
+        total_cost_per_kg / (1.0 - target_margin)
+        if target_margin < 1.0 else 0.0
+    )
+    required_gross_per_kg_base = (
+        required_net_sales_per_kg_base / (1.0 - commission_rate)
+        if commission_rate < 1.0 else 0.0
+    )
+    sell_fx = float(sell_fx_to_base or 0)
+    required_sell_price = (
+        required_gross_per_kg_base / sell_fx if sell_fx > 0 else 0.0
+    )
+
+    return {
+        "goods_total_base": goods_total_base,
+        "customs_total_base": customs_total_base,
+        "landed_before_finance": landed_before_finance,
+        "landed_cost_per_kg": landed_cost_per_kg,
+        "finance_days": finance_days,
+        "finance_cost_total": finance_cost_total,
+        "finance_cost_per_kg": finance_cost_per_kg,
+        "total_cost_base": total_cost_base,
+        "total_cost_per_kg": total_cost_per_kg,
+        "gross_sales_base": gross_sales_base,
+        "sales_commission_base": sales_commission_base,
+        "net_sales_base": net_sales_base,
+        "profit_total_base": profit_total_base,
+        "profit_per_kg": profit_per_kg,
+        "margin_pct": margin_pct,
+        "markup_pct": markup_pct,
+        "required_sell_price": required_sell_price,
+    }
+
+
+def save_quote(customer_id, opportunity_id, product_name, inputs, calc):
+    execute(
+        """INSERT INTO quotes
+        (customer_id,opportunity_id,product_name,quantity_kg,base_currency,
+         buy_price_per_kg,buy_currency,buy_fx_to_base,freight_total_base,
+         customs_rate_pct,customs_fixed_base,import_other_total_base,
+         handling_total_base,finance_rate_pct,prepayment_days,stock_days,
+         customer_credit_days,sell_price_per_kg,sell_currency,sell_fx_to_base,
+         sales_commission_pct,target_margin_pct,incoterm,valid_until,status,notes,
+         landed_cost_per_kg,finance_cost_per_kg,total_cost_per_kg,profit_per_kg,
+         profit_total_base,margin_pct,required_sell_price,finance_days)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            int(customer_id) if customer_id else None,
+            int(opportunity_id) if opportunity_id else None,
+            product_name,
+            float(inputs["quantity_kg"]),
+            inputs["base_currency"],
+            float(inputs["buy_price_per_kg"]),
+            inputs["buy_currency"],
+            float(inputs["buy_fx_to_base"]),
+            float(inputs["freight_total_base"]),
+            float(inputs["customs_rate_pct"]),
+            float(inputs["customs_fixed_base"]),
+            float(inputs["import_other_total_base"]),
+            float(inputs["handling_total_base"]),
+            float(inputs["finance_rate_pct"]),
+            int(inputs["prepayment_days"]),
+            int(inputs["stock_days"]),
+            int(inputs["customer_credit_days"]),
+            float(inputs["sell_price_per_kg"]),
+            inputs["sell_currency"],
+            float(inputs["sell_fx_to_base"]),
+            float(inputs["sales_commission_pct"]),
+            float(inputs["target_margin_pct"]),
+            inputs["incoterm"],
+            str(inputs["valid_until"]),
+            inputs["status"],
+            inputs["notes"],
+            float(calc["landed_cost_per_kg"]),
+            float(calc["finance_cost_per_kg"]),
+            float(calc["total_cost_per_kg"]),
+            float(calc["profit_per_kg"]),
+            float(calc["profit_total_base"]),
+            float(calc["margin_pct"]),
+            float(calc["required_sell_price"]),
+            int(calc["finance_days"]),
+        )
+    )
+
+
 def render_control_tower():
     init_db()
     seed_once()
@@ -708,11 +922,12 @@ def render_control_tower():
     st.subheader("🧭 AS CONTROL TOWER")
     st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
 
-    dashboard, customers_tab, intelligence_tab, pipeline_tab, followup_tab, tasks_tab, ceo_tab = st.tabs(
+    dashboard, customers_tab, intelligence_tab, pricing_tab, pipeline_tab, followup_tab, tasks_tab, ceo_tab = st.tabs(
         [
             "📊 Yönetici Paneli",
             "👥 CRM / Müşteri 360",
             "🧠 Ürün × Müşteri",
+            "🧮 Teklif & Kârlılık",
             "💰 Satış Pipeline",
             "📞 Takip Merkezi",
             "✅ Görevler",
@@ -1352,6 +1567,340 @@ def render_control_tower():
                             st.success("Ürün kataloğa eklendi.")
                             st.rerun()
 
+    with pricing_tab:
+        st.markdown("### 🧮 Teklif + Gerçek Maliyet + Kârlılık Motoru")
+        st.caption(
+            "Alış, kur, navlun, gümrük, ithalat/depo gideri ve finansman süresini "
+            "tek maliyette toplar. KDV bu V1 hesapta kâr maliyetine dahil edilmez; "
+            "indirilemeyen vergi/harç varsa 'Diğer ithalat gideri'ne ekleyin."
+        )
+
+        quote_tab, history_tab = st.tabs(["Yeni Hesap / Teklif", "Teklif Geçmişi"])
+
+        with quote_tab:
+            customers_q = query_df(
+                "SELECT id,name,owner FROM customers ORDER BY name"
+            )
+            products_q = query_df(
+                "SELECT id,name,default_currency FROM product_catalog WHERE active=1 ORDER BY name"
+            )
+            opportunities_q = query_df("""
+                SELECT o.id,c.name AS customer_name,o.customer_id,o.product,o.owner,o.stage
+                FROM opportunities o
+                LEFT JOIN customers c ON c.id=o.customer_id
+                WHERE o.stage NOT IN ('Kaybedildi')
+                ORDER BY o.id DESC
+            """)
+
+            q1, q2 = st.columns(2)
+            customer_options = ["— Müşteri seçilmedi —"] + customers_q["name"].tolist()
+            selected_customer_name = q1.selectbox(
+                "Müşteri",
+                customer_options,
+                key="quote_customer"
+            )
+            customer_id = None
+            customer_owner = ""
+            if selected_customer_name != "— Müşteri seçilmedi —":
+                crow = customers_q[customers_q["name"] == selected_customer_name].iloc[0]
+                customer_id = int(crow["id"])
+                customer_owner = str(crow["owner"] or "")
+
+            product_options = products_q["name"].tolist() + ["Diğer / Manuel"]
+            selected_product = q2.selectbox(
+                "Ürün",
+                product_options,
+                key="quote_product"
+            )
+            product_name = (
+                st.text_input("Manuel ürün adı", key="quote_manual_product")
+                if selected_product == "Diğer / Manuel"
+                else selected_product
+            )
+
+            opp_id = None
+            if customer_id:
+                customer_opps = opportunities_q[
+                    opportunities_q["customer_id"] == customer_id
+                ].copy()
+                opp_labels = ["— Fırsata bağlama —"]
+                opp_map = {"— Fırsata bağlama —": None}
+                for _, r in customer_opps.iterrows():
+                    label = f"#{int(r['id'])} · {r['product']} · {r['stage']}"
+                    opp_labels.append(label)
+                    opp_map[label] = int(r["id"])
+                opp_label = st.selectbox(
+                    "Satış fırsatı",
+                    opp_labels,
+                    key="quote_opportunity"
+                )
+                opp_id = opp_map[opp_label]
+
+            st.markdown("##### 1. Miktar ve alış")
+            a1, a2, a3, a4 = st.columns(4)
+            quantity_kg = a1.number_input(
+                "Miktar (kg)", min_value=1.0, value=24000.0, step=1000.0,
+                key="quote_qty"
+            )
+            buy_price = a2.number_input(
+                "Alış fiyatı / kg", min_value=0.0, value=2.00, step=0.01,
+                format="%.4f", key="quote_buy_price"
+            )
+            buy_currency = a3.selectbox(
+                "Alış para birimi", ["EUR","USD","GBP","TRY"], key="quote_buy_currency"
+            )
+            base_currency = a4.selectbox(
+                "Hesap para birimi", ["EUR","USD","GBP","TRY"], key="quote_base_currency"
+            )
+
+            default_buy_fx = 1.0 if buy_currency == base_currency else 1.0
+            buy_fx = st.number_input(
+                f"1 {buy_currency} = kaç {base_currency}?",
+                min_value=0.0001, value=float(default_buy_fx), step=0.01,
+                format="%.4f", key="quote_buy_fx"
+            )
+
+            st.markdown("##### 2. İthalat ve lojistik maliyetleri")
+            b1, b2, b3, b4 = st.columns(4)
+            freight = b1.number_input(
+                f"Toplam navlun ({base_currency})",
+                min_value=0.0, value=0.0, step=100.0, key="quote_freight"
+            )
+            customs_rate = b2.number_input(
+                "Gümrük oranı %", min_value=0.0, value=0.0, step=0.1,
+                key="quote_customs_rate"
+            )
+            customs_fixed = b3.number_input(
+                f"Sabit gümrük/harç ({base_currency})",
+                min_value=0.0, value=0.0, step=100.0, key="quote_customs_fixed"
+            )
+            import_other = b4.number_input(
+                f"Diğer ithalat gideri ({base_currency})",
+                min_value=0.0, value=0.0, step=100.0, key="quote_import_other"
+            )
+            handling = st.number_input(
+                f"Depo / handling / iç nakliye toplamı ({base_currency})",
+                min_value=0.0, value=0.0, step=100.0, key="quote_handling"
+            )
+
+            st.markdown("##### 3. Paranın bağlı kaldığı süre")
+            c1, c2, c3, c4 = st.columns(4)
+            finance_rate = c1.number_input(
+                "Yıllık finansman faizi %", min_value=0.0, value=45.0, step=1.0,
+                key="quote_finance_rate"
+            )
+            prepayment_days = c2.number_input(
+                "Teslimden önce ödeme (gün)", min_value=0, value=35, step=1,
+                key="quote_prepay_days"
+            )
+            stock_days = c3.number_input(
+                "Stokta bekleme (gün)", min_value=0, value=30, step=1,
+                key="quote_stock_days"
+            )
+            customer_credit_days = c4.number_input(
+                "Müşteri vadesi (gün)", min_value=0, value=105, step=5,
+                key="quote_customer_days"
+            )
+
+            st.markdown("##### 4. Satış fiyatı ve hedef")
+            d1, d2, d3, d4 = st.columns(4)
+            sell_price = d1.number_input(
+                "Satış fiyatı / kg", min_value=0.0, value=2.50, step=0.01,
+                format="%.4f", key="quote_sell_price"
+            )
+            sell_currency = d2.selectbox(
+                "Satış para birimi", ["EUR","USD","GBP","TRY"], key="quote_sell_currency"
+            )
+            sell_fx = d3.number_input(
+                f"1 satış para birimi = kaç {base_currency}?",
+                min_value=0.0001,
+                value=1.0,
+                step=0.01,
+                format="%.4f",
+                key="quote_sell_fx"
+            )
+            target_margin = d4.number_input(
+                "Hedef net katkı marjı %", min_value=0.0, max_value=95.0,
+                value=10.0, step=0.5, key="quote_target_margin"
+            )
+            commission = st.number_input(
+                "Satış komisyonu / iskonto etkisi %", min_value=0.0, max_value=95.0,
+                value=0.0, step=0.5, key="quote_commission"
+            )
+
+            calc = calculate_quote(
+                quantity_kg, buy_price, buy_fx, freight, customs_rate,
+                customs_fixed, import_other, handling, finance_rate,
+                prepayment_days, stock_days, customer_credit_days,
+                sell_price, sell_fx, commission, target_margin
+            )
+
+            st.markdown("### Sonuç")
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric(
+                "Landed maliyet / kg",
+                f"{calc['landed_cost_per_kg']:.4f} {base_currency}"
+            )
+            r2.metric(
+                "Finansman maliyeti / kg",
+                f"{calc['finance_cost_per_kg']:.4f} {base_currency}",
+                help=f"Toplam {calc['finance_days']} gün finansman"
+            )
+            r3.metric(
+                "Gerçek maliyet / kg",
+                f"{calc['total_cost_per_kg']:.4f} {base_currency}"
+            )
+            r4.metric(
+                "Net katkı / kg",
+                f"{calc['profit_per_kg']:.4f} {base_currency}"
+            )
+
+            r5, r6, r7, r8 = st.columns(4)
+            r5.metric(
+                "Toplam net katkı",
+                f"{calc['profit_total_base']:,.0f} {base_currency}"
+            )
+            r6.metric(
+                "Net katkı marjı",
+                f"%{calc['margin_pct']:.2f}"
+            )
+            r7.metric(
+                "Maliyet üstü getiri",
+                f"%{calc['markup_pct']:.2f}"
+            )
+            r8.metric(
+                f"Hedef %{target_margin:.1f} için satış fiyatı",
+                f"{calc['required_sell_price']:.4f} {sell_currency}/kg"
+            )
+
+            st.caption(
+                f"Nakit döngüsü varsayımı: {int(prepayment_days)} gün erken ödeme + "
+                f"{int(stock_days)} gün stok + {int(customer_credit_days)} gün müşteri vadesi "
+                f"= {calc['finance_days']} gün."
+            )
+
+            if calc["profit_total_base"] < 0:
+                st.error(
+                    f"Bu teklif zarar yazıyor: toplam yaklaşık "
+                    f"{abs(calc['profit_total_base']):,.0f} {base_currency} zarar."
+                )
+            elif calc["margin_pct"] + 0.0001 < target_margin:
+                st.warning(
+                    f"Teklif kârlı ama hedef marjın altında. Hedef fiyat yaklaşık "
+                    f"{calc['required_sell_price']:.4f} {sell_currency}/kg."
+                )
+            else:
+                st.success(
+                    f"Teklif hedef marjı karşılıyor. Tahmini net katkı "
+                    f"{calc['profit_total_base']:,.0f} {base_currency}."
+                )
+
+            with st.expander("Maliyet kırılımı"):
+                breakdown = pd.DataFrame([
+                    {"Kalem":"Mal bedeli","Tutar":calc["goods_total_base"],"Para":base_currency},
+                    {"Kalem":"Gümrük / harç","Tutar":calc["customs_total_base"],"Para":base_currency},
+                    {"Kalem":"Navlun","Tutar":freight,"Para":base_currency},
+                    {"Kalem":"Diğer ithalat","Tutar":import_other,"Para":base_currency},
+                    {"Kalem":"Depo / handling / iç nakliye","Tutar":handling,"Para":base_currency},
+                    {"Kalem":"Finansman","Tutar":calc["finance_cost_total"],"Para":base_currency},
+                ])
+                st.dataframe(breakdown, use_container_width=True, hide_index=True)
+
+            st.markdown("##### Teklifi kaydet")
+            e1, e2, e3 = st.columns(3)
+            incoterm = e1.text_input("Satış Incoterm", value="DDP", key="quote_incoterm")
+            valid_until = e2.date_input(
+                "Teklif geçerlilik", value=date.today() + timedelta(days=7),
+                key="quote_valid_until"
+            )
+            quote_status = e3.selectbox(
+                "Durum",
+                ["Taslak","Gönderildi","Revizyon","Kabul","Red"],
+                key="quote_status"
+            )
+            quote_notes = st.text_area(
+                "Teklif notu",
+                key="quote_notes"
+            )
+
+            if st.button(
+                "Hesabı / teklifi kaydet",
+                type="primary",
+                use_container_width=True,
+                key="quote_save"
+            ):
+                if not product_name.strip():
+                    st.error("Ürün adı gerekli.")
+                else:
+                    inputs = {
+                        "quantity_kg": quantity_kg,
+                        "base_currency": base_currency,
+                        "buy_price_per_kg": buy_price,
+                        "buy_currency": buy_currency,
+                        "buy_fx_to_base": buy_fx,
+                        "freight_total_base": freight,
+                        "customs_rate_pct": customs_rate,
+                        "customs_fixed_base": customs_fixed,
+                        "import_other_total_base": import_other,
+                        "handling_total_base": handling,
+                        "finance_rate_pct": finance_rate,
+                        "prepayment_days": prepayment_days,
+                        "stock_days": stock_days,
+                        "customer_credit_days": customer_credit_days,
+                        "sell_price_per_kg": sell_price,
+                        "sell_currency": sell_currency,
+                        "sell_fx_to_base": sell_fx,
+                        "sales_commission_pct": commission,
+                        "target_margin_pct": target_margin,
+                        "incoterm": incoterm,
+                        "valid_until": valid_until,
+                        "status": quote_status,
+                        "notes": quote_notes,
+                    }
+                    save_quote(
+                        customer_id, opp_id, product_name.strip(), inputs, calc
+                    )
+                    if opp_id:
+                        execute(
+                            """UPDATE opportunities
+                               SET stage='Teklif', probability=?,
+                                   next_action='Teklif takibi',
+                                   due_date=?, updated_at=?
+                               WHERE id=?""",
+                            (
+                                STAGE_PROBABILITY["Teklif"],
+                                str(date.today() + timedelta(days=3)),
+                                datetime.now().isoformat(timespec="seconds"),
+                                int(opp_id),
+                            )
+                        )
+                    st.success("Teklif hesabı kaydedildi.")
+                    st.rerun()
+
+        with history_tab:
+            quote_history = query_df("""
+                SELECT q.id, q.created_at AS tarih, c.name AS müşteri,
+                       q.product_name AS ürün, q.quantity_kg AS miktar_kg,
+                       q.buy_price_per_kg AS alış, q.buy_currency AS alış_para,
+                       q.sell_price_per_kg AS satış, q.sell_currency AS satış_para,
+                       q.total_cost_per_kg AS gerçek_maliyet,
+                       q.profit_per_kg AS katkı_kg,
+                       q.margin_pct AS marj_yüzde,
+                       q.profit_total_base AS toplam_katkı,
+                       q.base_currency AS hesap_para,
+                       q.finance_days AS finansman_gün,
+                       q.required_sell_price AS hedef_fiyat,
+                       q.status AS durum, q.valid_until AS geçerlilik
+                FROM quotes q
+                LEFT JOIN customers c ON c.id=q.customer_id
+                ORDER BY q.id DESC
+            """)
+            st.dataframe(
+                quote_history,
+                use_container_width=True,
+                hide_index=True
+            )
+
     with pipeline_tab:
         pipeline = query_df("""
             SELECT o.id, c.name AS müşteri, o.product AS ürün, o.stage AS aşama,
@@ -1675,6 +2224,24 @@ def render_control_tower():
             LIMIT 10
         """)
         st.dataframe(top, use_container_width=True, hide_index=True)
+
+        st.markdown("#### Teklif kârlılığı")
+        recent_quotes = query_df("""
+            SELECT q.id, c.name AS müşteri, q.product_name AS ürün,
+                   q.sell_price_per_kg AS satış_fiyatı,
+                   q.total_cost_per_kg AS gerçek_maliyet,
+                   q.profit_per_kg AS katkı_kg, q.margin_pct AS marj,
+                   q.profit_total_base AS toplam_katkı,
+                   q.base_currency AS para, q.status AS durum
+            FROM quotes q
+            LEFT JOIN customers c ON c.id=q.customer_id
+            ORDER BY q.id DESC
+            LIMIT 8
+        """)
+        if recent_quotes.empty:
+            st.info("Henüz kayıtlı teklif hesabı yok.")
+        else:
+            st.dataframe(recent_quotes, use_container_width=True, hide_index=True)
 
         st.markdown("#### Henüz açılmamış en güçlü ürün fırsatları")
         ceo_recs = recommendation_rows()
