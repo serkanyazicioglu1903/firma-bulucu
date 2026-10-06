@@ -266,8 +266,14 @@ def company_guess(title, url):
 ACQ_COUNTRIES = {
     "Almanya": {
         "name": "Germany",
-        "terms": ["Nachfolge", "Ruhestand", "Altersnachfolge", "Firmenverkauf", "Unternehmen zu verkaufen"],
-        "domains": ["nexxt-change.org", "dub.de", "deal-one.de"],
+        "terms": [
+            "Unternehmensnachfolge", "Altersnachfolge", "Ruhestand",
+            "Verkaufsangebot", "Betriebsübergabe", "Unternehmen zu verkaufen",
+        ],
+        "domains": [
+            "nexxt-change.org", "dub.de", "viaductus.de", "concess.de",
+            "businessmakler.de", "ihk.de",
+        ],
     },
     "İngiltere": {
         "name": "United Kingdom",
@@ -287,11 +293,17 @@ ACQ_COUNTRIES = {
 }
 
 ACQ_SECTORS = {
-    "Gıda hammaddesi / Food ingredients": ["food ingredients", "Lebensmittelzutaten"],
-    "Gıda katkı maddeleri": ["food additives", "Lebensmittelzusatzstoffe"],
-    "Aroma / renk": ["flavour colour", "flavor color", "Aromen Farbstoffe"],
-    "Emülgatör / stabilizer / hydrocolloid": ["emulsifier stabilizer hydrocolloid"],
-    "Premix / powder blending": ["premix powder blending", "dry blending"],
+    "Gıda hammaddesi / Food ingredients": [
+        "food ingredients", "Lebensmittelzutaten", "Lebensmittelrohstoffe",
+    ],
+    "Gıda katkı maddeleri": [
+        "food additives", "Lebensmittelzusatzstoffe", "Zusatzstoffe Lebensmittel",
+    ],
+    "Aroma / renk": ["flavour colour", "flavor color", "Aromen", "Farbstoffe"],
+    "Emülgatör / stabilizer / hydrocolloid": [
+        "emulsifier stabilizer hydrocolloid", "Emulgatoren Stabilisatoren Hydrokolloide",
+    ],
+    "Premix / powder blending": ["premix powder blending", "dry blending", "Pulvermischungen"],
     "Specialty chemicals": ["specialty chemicals", "Spezialchemikalien", "chemical blending"],
     "Pigment / coating / dye": ["pigments dyes coatings"],
     "Detergent / cleaning chemicals": ["detergent cleaning chemicals"],
@@ -308,14 +320,44 @@ ACQ_SALE_TERMS = [
     "entreprise à vendre", "cession entreprise", "retraite"
 ]
 
+ACQ_EXCLUSION_TERMS = [
+    "restaurant", "takeaway", "cafe for sale", "café", "hotel", "guest house",
+    "franchise", "kiosk", "imbiss", "gastronomie", "einzelhandel", "onlineshop",
+    "e-commerce store", "beauty salon", "hair salon",
+]
+
+ACQ_SOURCE_GUIDE = [
+    {"Kaynak": "nexxt-change", "Bölge": "Almanya", "Tip": "Resmî halefiyet borsası", "URL": "https://www.nexxt-change.org/"},
+    {"Kaynak": "DUB", "Bölge": "DACH", "Tip": "Ticari M&A ilanları", "URL": "https://www.dub.de/de/unternehmen-kaufen/"},
+    {"Kaynak": "Viaductus", "Bölge": "DACH", "Tip": "Seçilmiş ilanlar / danışmanlık", "URL": "https://www.viaductus.de/"},
+    {"Kaynak": "con|cess", "Bölge": "DACH", "Tip": "M&A danışman ağı", "URL": "https://www.concess.de/"},
+    {"Kaynak": "BusinessMakler", "Bölge": "Almanya", "Tip": "KOBİ satış ilanları", "URL": "https://www.businessmakler.de/"},
+    {"Kaynak": "IHK", "Bölge": "Almanya / bölgesel", "Tip": "Devir ve halefiyet danışmanlığı", "URL": "https://www.ihk.de/"},
+]
+
+ACQ_REVIEW_QUESTIONS = [
+    ("Kârlılık istikrarlı mı?", "Son 3–5 yıl Jahresabschluss, GuV ve güncel BWA", "Tek iyi yıl; ciro artarken kârın düşmesi"),
+    ("Borç ve gizli yükler açık mı?", "Kredi/leasing listesi ve Pensionszusagen", "Açıklanmayan kefalet veya yüksek emeklilik karşılığı"),
+    ("Makine ve yatırımlar güncel mi?", "Anlagenverzeichnis, makine yaşları ve bakım kayıtları", "Yıllardır yatırım yapılmaması"),
+    ("Şirket patrondan bağımsız çalışabiliyor mu?", "Organizasyon ve satış süreçleri", "Tüm müşteri ve teklif ilişkilerinin patronda olması"),
+    ("Müşteri yoğunlaşması kabul edilebilir mi?", "Anonim müşteri bazında ciro dağılımı", "Tek müşterinin cironun %25'inden fazla olması"),
+    ("İkinci kademe yönetim var mı?", "Kilit personel ve iş sözleşmeleri", "Kilit kadronun da ayrılacak veya emekli olacak olması"),
+    ("Çalışan yapısı sürdürülebilir mi?", "Personel, ücret, kıdem ve Tarifvertrag bilgisi", "Yüksek yaş ortalaması ve yedek kadro olmaması"),
+    ("AS İleri ile ürün ve pazar sinerjisi var mı?", "Ürün gamı, tedarikçi listesi ve teknoloji", "Yalnızca 'Alman şirketi' olduğu için alım"),
+    ("Sertifika ve onaylar devredilebilir mi?", "ISO/FSSC/BRCGS, ruhsatlar ve marka tescilleri", "Onayların kişiye bağlı veya devredilemez olması"),
+    ("Lokasyon ve lojistik uygun mu?", "Kira/tapu, imar, çevre izinleri ve depo bilgisi", "Kısa kira veya devir için ev sahibi onayı gereği"),
+    ("Share Deal / Asset Deal riski anlaşıldı mı?", "Handelsregisterauszug, dava ve vergi incelemeleri", "Açık dava, vergi veya sosyal güvenlik borcu"),
+    ("Fiyat finansallarla destekleniyor mu?", "Değerleme gerekçesi ve normalleştirilmiş EBITDA", "Gerekçesiz fiyat ve 'başka alıcı var' baskısı"),
+]
+
 ACQ_STARTER = [
     {
         "Skor": 94, "Ülke": "İngiltere", "Sektör": "Specialty chemicals",
         "Başlık": "Long-Running Supplier And Distributor Of Industrial Chemicals",
-        "Kaynak": "uk.businessesforsale.com", "Ciro": "£3.5m",
-        "EBITDA/Kâr": "~£550k adjusted EBITDA", "Fiyat": "Undisclosed",
-        "Satış nedeni": "retirement / lifestyle change", "E-posta": "", "Telefon": "",
-        "Özet": "Industrial chemicals, decanting and bespoke mixtures; freehold property option.",
+        "Kaynak": "uk.businessesforsale.com", "Ciro": "£1m–£5m",
+        "EBITDA/Kâr": "", "Fiyat": "Undisclosed",
+        "Satış nedeni": "", "E-posta": "", "Telefon": "",
+        "Özet": "Project Hinode; established supplier and distributor of industrial chemicals. Financial and legal details require NDA.",
         "İlan / kaynak URL": "https://uk.businessesforsale.com/uk/long-running-supplier-and-distributor-of-industrial-chemicals.aspx",
         "Satış ilanı": "Evet", "Üretici sinyali": "Evet",
     },
@@ -329,15 +371,6 @@ ACQ_STARTER = [
         "İlan / kaynak URL": "https://www.rightbiz.co.uk/buy_business/for_sale/643296_undisclosed.html",
         "Satış ilanı": "Evet", "Üretici sinyali": "Evet",
     },
-    {
-        "Skor": 90, "Ülke": "Almanya", "Sektör": "Gıda hammaddesi / Food ingredients",
-        "Başlık": "Nachfolge für etabliertes Unternehmen im Lebensmittelbereich",
-        "Kaynak": "dub.de", "Ciro": "€8.5m", "EBITDA/Kâr": "", "Fiyat": "",
-        "Satış nedeni": "Nachfolge / Verkauf", "E-posta": "", "Telefon": "",
-        "Özet": "In-house production, processing, packaging and industrial customers.",
-        "İlan / kaynak URL": "https://www.dub.de/de/unternehmen-kaufen/expose/nachfolge-fuer-profitables-etabliertes-unternehmen-im-lebensmittelbereich/",
-        "Satış ilanı": "Evet", "Üretici sinyali": "Evet",
-    },
 ]
 
 def acq_preferred(url, country):
@@ -346,14 +379,15 @@ def acq_preferred(url, country):
 
 def acq_build_queries(country, sector):
     c = ACQ_COUNTRIES[country]
-    s = ACQ_SECTORS[sector][0]
+    sector_terms = ACQ_SECTORS[sector]
+    s = sector_terms[1] if country == "Almanya" and len(sector_terms) > 1 else sector_terms[0]
     q = []
     for domain in c["domains"]:
-        q.append(f'site:{domain} "{s}"')
         q.append(f'site:{domain} "{c["terms"][0]}" "{s}"')
     q.append(f'"{s}" "{c["terms"][0]}" manufacturer {c["name"]}')
     q.append(f'"{s}" "{c["terms"][1]}" manufacturer {c["name"]}')
-    q.append(f'"{s}" "business for sale" manufacturer {c["name"]}')
+    if country != "Almanya":
+        q.append(f'"{s}" "business for sale" manufacturer {c["name"]}')
     return list(dict.fromkeys(q))
 
 def acq_candidate_ok(title, snippet, body, url, country):
@@ -378,7 +412,7 @@ def acq_score(title, snippet, body, url, country, sector):
         for word in phrase.lower().split():
             if len(word) > 4 and word in text:
                 score += 3
-    if any(x in text for x in ["restaurant", "takeaway", "cafe for sale", "franchise"]):
+    if any(x in text for x in ACQ_EXCLUSION_TERMS):
         score -= 40
     return max(0, min(100, score))
 
@@ -403,6 +437,7 @@ def extract_sale_reason(text):
     return ""
 
 def acq_scan(countries, sectors, per_query, deep_scan):
+    started_at = time.monotonic()
     rows = [r.copy() for r in ACQ_STARTER if r["Ülke"] in countries and r["Sektör"] in sectors]
     seen = {r["İlan / kaynak URL"] for r in rows}
     jobs = [(c, s, q) for c in countries for s in sectors for q in acq_build_queries(c, s)]
@@ -410,6 +445,9 @@ def acq_scan(countries, sectors, per_query, deep_scan):
     status = st.empty()
 
     for i, (country, sector, query) in enumerate(jobs, start=1):
+        if time.monotonic() - started_at > 120:
+            st.warning("Tarama süre sınırına ulaştı. O ana kadar bulunan adaylar gösteriliyor.")
+            break
         status.write(f"Canlı arama: **{country} · {sector}**")
         for item in live_search(query, per_query):
             url = item.get("href", "")
@@ -461,6 +499,28 @@ def acq_scan(countries, sectors, per_query, deep_scan):
               .reset_index(drop=True)
         )
     return df
+
+def german_acquisition_email(listing_title, listing_url):
+    return f"""Betreff: Interesse an einer Unternehmensnachfolge – {listing_title}
+
+Sehr geehrte Damen und Herren,
+
+mit großem Interesse haben wir Ihr Verkaufsangebot „{listing_title}“ gelesen.
+
+Wir sind mit AS İleri Gıda und AS Food Global Limited seit mehr als 25 Jahren im Import und Vertrieb von Lebensmittelzutaten und industriellen Rohstoffen tätig. Wir beliefern führende Lebensmittelhersteller in der Türkei und verfügen über eine Gesellschaft im Vereinigten Königreich.
+
+Im Rahmen unserer europäischen Expansion suchen wir ein etabliertes Unternehmen, das wir langfristig fortführen und weiterentwickeln können. Der Erhalt des Standorts, der Belegschaft und der bestehenden Kundenbeziehungen ist für uns von besonderer Bedeutung.
+
+Gerne unterzeichnen wir eine Vertraulichkeitsvereinbarung. Bitte senden Sie uns anschließend das Exposé sowie Informationen zu Kaufpreisvorstellung, Transaktionsstruktur, Umsatz, bereinigtem EBITDA, Mitarbeitern, Kunden- und Lieferantenstruktur und Verkaufsgrund.
+
+Inserat: {listing_url}
+
+Mit freundlichen Grüßen
+
+Serkan Yazıcıoğlu
+Managing Director
+AS Food Global Limited / AS İleri Gıda
+E-Mail: importstarch@outlook.com"""
 
 # =========================================================
 # 2) ÜRÜN / HAMMADDE / ÜRETİCİ / TEMSİLCİLİK BULUCU
@@ -747,6 +807,22 @@ main_tab1, main_tab2 = st.tabs([
 # -------------------------
 with main_tab1:
     st.subheader("Satılık firma / halefiyet araştırması")
+    st.info(
+        "Almanya için gıda hammaddesi, katkı maddeleri ve B2B özel kimyasal şirketlerini arar. "
+        "Restoran, kafe, perakende, franchise ve pazar yeri sonuçlarını eler."
+    )
+
+    with st.expander("Almanya kaynakları ve arama yöntemi"):
+        st.dataframe(
+            pd.DataFrame(ACQ_SOURCE_GUIDE),
+            use_container_width=True,
+            hide_index=True,
+            column_config={"URL": st.column_config.LinkColumn("Kaynak", display_text="Aç")},
+        )
+        st.caption(
+            "Platform ilanları başlangıç noktasıdır. Uygun adaylar için IHK, banka, Steuerberater "
+            "ve M&A danışmanı üzerinden ilan dışı (off-market) arama da yapılmalıdır."
+        )
 
     c1, c2 = st.columns([1, 2])
     with c1:
@@ -813,6 +889,77 @@ with main_tab1:
             mime="text/csv",
             use_container_width=True,
         )
+
+        st.divider()
+        st.subheader("Seçilen firma için 12 soruluk ön değerlendirme")
+        if view.empty:
+            st.warning("Mevcut filtrelerle değerlendirilecek aday kalmadı. Minimum skoru düşürün.")
+        else:
+            selected_idx = st.selectbox(
+                "Değerlendirilecek firma / ilan",
+                options=view.index.tolist(),
+                format_func=lambda idx: f"{view.loc[idx, 'Başlık']} · {view.loc[idx, 'Ülke']}",
+                key="acq_review_candidate",
+            )
+            selected = view.loc[selected_idx]
+            answers = []
+            with st.expander("12 soruyu puanla: 0 = olumsuz/bilinmiyor, 1 = kısmen, 2 = olumlu", expanded=True):
+                for number, (question, document, red_flag) in enumerate(ACQ_REVIEW_QUESTIONS, start=1):
+                    left, right = st.columns([3, 1])
+                    with left:
+                        st.markdown(f"**{number}. {question}**")
+                        st.caption(f"İstenecek belge: {document}  ·  Kırmızı bayrak: {red_flag}")
+                    with right:
+                        value = st.select_slider(
+                            "Puan",
+                            options=[0, 1, 2],
+                            value=0,
+                            key=f"acq_review_{selected_idx}_{number}",
+                            label_visibility="collapsed",
+                        )
+                    answers.append(value)
+
+            review_score = sum(answers)
+            if review_score >= 18:
+                review_result = "CİDDİ ADAY — LOI ve due diligence aşamasına geçilebilir."
+                st.success(f"{review_score}/24 · {review_result}")
+            elif review_score >= 12:
+                review_result = "DİKKATLİ İLERLE — Zayıf noktalar fiyat ve sözleşmeye yansıtılmalı."
+                st.warning(f"{review_score}/24 · {review_result}")
+            else:
+                review_result = "DUR — Bilgiler tamamlanmadan zaman ve inceleme maliyeti harcanmamalı."
+                st.error(f"{review_score}/24 · {review_result}")
+
+            assessment = {
+                "firma_ilani": selected["Başlık"],
+                "ulke": selected["Ülke"],
+                "kaynak_url": selected["İlan / kaynak URL"],
+                "puan": review_score,
+                "sonuc": review_result,
+                "cevaplar": [
+                    {"soru": item[0], "puan": score, "istenecek_belge": item[1], "kirmizi_bayrak": item[2]}
+                    for item, score in zip(ACQ_REVIEW_QUESTIONS, answers)
+                ],
+            }
+            st.download_button(
+                "Ön değerlendirmeyi JSON indir",
+                json.dumps(assessment, ensure_ascii=False, indent=2).encode("utf-8"),
+                file_name="Firma_On_Degerlendirme.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+
+            if selected["Ülke"] == "Almanya":
+                st.subheader("Hazır Almanca ilk temas taslağı")
+                email_text = german_acquisition_email(selected["Başlık"], selected["İlan / kaynak URL"])
+                st.text_area("E-posta", email_text, height=430, key=f"acq_mail_{selected_idx}")
+                st.download_button(
+                    "Almanca e-postayı indir",
+                    email_text.encode("utf-8"),
+                    file_name="Almanca_Ilk_Temas.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
 
 # -------------------------
 # TAB 2: SOURCING / MANUFACTURER
