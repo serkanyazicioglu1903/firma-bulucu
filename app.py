@@ -3,7 +3,7 @@ import re
 import time
 import json
 import xml.etree.ElementTree as ET
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, unquote, urljoin
 
 import pandas as pd
 import requests
@@ -26,7 +26,54 @@ MARKETPLACE_BLACKLIST = {
     "fda.gov", "merriam-webster.com", "britannica.com", "researchgate.net",
     "sciencedirect.com", "linkedin.com", "facebook.com", "instagram.com",
     "youtube.com", "foodingredientsfirst.com"
+    , "healthline.com", "webmd.com", "health.com", "medicalnewstoday.com",
+    "thenutritioninsider.com", "scienceinsights.org", "drugs.com", "verywellhealth.com"
 }
+
+def product_aliases(product):
+    key = clean(product).lower()
+    aliases = {
+        "dekstroz": "dextrose", "dekstrose": "dextrose", "dextrose": "dextrose",
+        "dekstroz monohidrat": "dextrose monohydrate",
+        "dextrose monohydrate": "dextrose monohydrate",
+    }
+    value = aliases.get(key, key)
+    return [value, "monohydrate dextrose"] if value == "dextrose monohydrate" else [value]
+
+# Manually researched official sources, not fabricated live search results.
+# Kept separate from automated candidates and dated visibly in the UI.
+VERIFIED_DEXTROSE = [
+    ("Gulshan Polyols Limited", "Hindistan", "https://www.gulshanindia.com/dextrose_monohydrate.html",
+     "https://www.gulshanindia.com/manufacturing_unit.html",
+     "Muzaffarnagar tesisinde pirinçten dekstroz monohidrat üretimi açıklanıyor."),
+    ("The Sukhjit Starch & Chemicals Limited", "Hindistan", "https://www.sukhjitgroup.com/monohydrate-dextrose",
+     "https://www.sukhjitgroup.com/company-profile",
+     "Resmî şirket profili dört üretim konumunu ve monohidrat dekstroz üretimini belirtiyor."),
+    ("Sanstar Limited", "Hindistan", "https://sanstar.in/product/dextrose-monohydrate/",
+     "https://sanstar.in/about-us/",
+     "Resmî şirket sayfası iki üretim tesisini ve dekstroz monohidrat ürününü açıklıyor."),
+]
+
+def editorial_result(title, url):
+    value = (title + " " + urlparse(url).path).lower()
+    return bool(re.search(r"side.effects|dosage|health.benefits|what.is|why.is|/blog/|/news/|/journal/|/article", value))
+
+def official_supplier_pages(url):
+    """Read at most three company/contact links from the same public website."""
+    response = safe_get(url, timeout=8)
+    if response is None or response.status_code != 200:
+        return []
+    soup = BeautifulSoup(response.text, "html.parser")
+    links = []
+    for a in soup.select("a[href]"):
+        target = urljoin(url, a["href"])
+        label = (a.get_text(" ", strip=True) + " " + target).lower()
+        if urlparse(target).scheme not in {"http", "https"} or get_domain(target) != get_domain(url):
+            continue
+        if re.search(r"contact|enquiry|about|company.profile|manufacturing", label) and target not in links and target != url:
+            links.append(target)
+    links.sort(key=lambda x: 0 if re.search(r"contact|enquiry", x, re.I) else 1)
+    return [(link, *fetch_page(link)) for link in links[:3]]
 
 MANUFACTURING_TERMS = [
     "manufacturer", "manufacturing", "manufacture", "producer", "production",
@@ -438,6 +485,7 @@ COUNTRY_MAP = {
 }
 
 def supplier_queries(product, country_label, objective):
+    product = product_aliases(product)[0]
     country = COUNTRY_MAP.get(country_label, "")
     c = f" {country}" if country else ""
 
@@ -465,24 +513,17 @@ def supplier_queries(product, country_label, objective):
     return list(dict.fromkeys(q))
 
 def supplier_manufacturer_status(product, title, snippet, body, url):
-    text = f"{title} {snippet} {body}".lower()
-    product_words = [w.lower() for w in re.split(r"[\s,/()+\-]+", product) if len(w) >= 3]
-    product_hit = sum(1 for w in product_words if w in text)
-    maker_hit = any(x in text for x in MANUFACTURING_TERMS)
+    # Search titles/snippets are never evidence. Require fetched page content,
+    # a product page and an explicit company manufacturing claim.
+    text = body.lower()
+    if is_blacklisted(url) or editorial_result(title, url) or not text:
+        return "unclear", 0
+    product_hit = any(re.search(r"\b" + re.escape(alias) + r"\b", text) for alias in product_aliases(product))
+    product_page = any(alias in (title + " " + urlparse(url).path.replace("-", " ").replace("_", " ")).lower() for alias in product_aliases(product))
+    maker_hit = bool(re.search(r"\bwe\s+(?:manufacture|produce)\b|\bour\s+(?:factory|factories|manufacturing|production facilities)\b|\b(?:company|group)\s+manufactures\b", text))
     trader_hit = any(x in text for x in TRADER_HINTS)
-
-    if is_blacklisted(url):
-        return "unclear", 0
-    # Keyword matches cannot establish ownership of a factory or an official site.
-    # Never label automated search candidates as independently confirmed.
-    if trader_hit:
-        return "unclear", 0
-    if maker_hit and product_hit >= max(1, min(2, len(product_words))):
+    if product_hit and product_page and maker_hit and not trader_hit:
         return "likely", 20
-    if maker_hit and product_hit >= 1:
-        return "likely", 20
-    if product_hit >= 1:
-        return "unclear", 5
     return "unclear", 0
 
 def turkey_presence_check(company, product):
@@ -570,54 +611,83 @@ Serkan Yazıcıoğlu
 AS İleri Gıda / AS Food Global Limited"""
 
 def supplier_scan(product, country_label, objective, max_companies, deep_scan, turkey_check):
+    started_at = time.monotonic()
     queries = supplier_queries(product, country_label, objective)
     seen_domains = set()
     rows = []
+    aliases = product_aliases(product)
+    if any(a in {"dextrose", "dextrose monohydrate", "monohydrate dextrose"} for a in aliases):
+        for name, country, product_url, factory_url, evidence in VERIFIED_DEXTROSE:
+            if country_label not in {"Dünya geneli", country}:
+                continue
+            seen_domains.add(get_domain(product_url))
+            rows.append({
+                "Fit Score": 45, "Firma": name, "Hedef Pazar": country_label,
+                "Üretici Ülkesi": country, "Website": "https://" + get_domain(product_url),
+                "Manufacturer Status": "confirmed", "Üretim Kanıtı": evidence,
+                "Üretim Kaynak URL": factory_url, "Kaynak URL": product_url,
+                "Kayıt Türü": "Resmî kaynaklardan araştırılmış başlangıç kaydı · 06.10.2026",
+                "Türkiye Varlığı": "Kontrol edilmedi; temsilcilik durumu bilinmiyor.",
+                "Satış / Export E-mail": "", "Telefon": "", "İletişim URL": "",
+                "Arama Özeti": "Ürün: Dextrose Monohydrate. Bu kayıt canlı arama sonucu değildir.",
+                "Taslak Konu": "Dextrose Monohydrate inquiry – Türkiye",
+                "Taslak E-mail": make_intro_email("Dextrose Monohydrate", name, objective, st.session_state.get("sender_email", "importstarch@outlook.com")),
+            })
     progress = st.progress(0)
     status = st.empty()
 
     all_candidates = []
     for i, q in enumerate(queries, start=1):
+        if time.monotonic() - started_at > 60:
+            break
         status.write(f"Aranıyor: **{product}** · `{q}`")
         results = live_search(q, max(6, min(12, max_companies)))
         for item in results:
             url = item.get("href", "")
             d = get_domain(url)
-            if not url or not d or d in seen_domains or is_blacklisted(url):
+            if not url or not d or d in seen_domains or is_blacklisted(url) or editorial_result(item.get("title", ""), url):
                 continue
-            seen_domains.add(d)
             all_candidates.append(item)
         progress.progress(i / max(len(queries), 1))
 
     # Analyze only a manageable number of unique official-looking domains.
     for idx, item in enumerate(all_candidates[: max_companies * 3]):
+        if time.monotonic() - started_at > 120:
+            st.warning("Canlı tarama süre sınırına ulaştı. Toplanan sonuçlar gösteriliyor; tüm adaylar incelenemedi.")
+            break
         if len(rows) >= max_companies:
             break
 
         url = item.get("href", "")
+        if get_domain(url) in seen_domains:
+            continue
         title = clean(item.get("title", ""))
         snippet = clean(item.get("body", ""))
         body = email_blob = phone = ""
 
         if deep_scan:
             body, email_blob, phone = fetch_page(url)
-            time.sleep(0.04)
+        pages = official_supplier_pages(url) if body else []
+        supporting_body = body + " " + " ".join(p[1] for p in pages)
+        email_blob += ";" + ";".join(p[2] for p in pages)
 
-        status_value, base_score = supplier_manufacturer_status(product, title, snippet, body, url)
+        status_value, base_score = supplier_manufacturer_status(product, title, snippet, supporting_body, url)
 
         # Exclude traders and candidates without a product/manufacturing signal.
         if status_value == "unclear":
             continue
 
-        company = company_guess(title, url)
+        # A domain label is honest when the legal company name is not verified.
+        company = get_domain(url)
+        seen_domains.add(get_domain(url))
         sales_email = choose_sales_email(email_blob)
         turkey_presence = turkey_presence_check(company, product) if turkey_check else ""
         text = f"{title} {snippet} {body}"
         score = supplier_score(status_value, sales_email, turkey_presence, text, objective)
 
         evidence = evidence_context(
-            body or snippet,
-            [product] + MANUFACTURING_TERMS,
+            supporting_body,
+            ["we manufacture", "we produce", "our factory", "our factories", "our manufacturing", "our production facilities", "company manufactures", "group manufactures"],
             width=260,
         )
 
@@ -629,6 +699,9 @@ def supplier_scan(product, country_label, objective, max_companies, deep_scan, t
             "Website": f"https://{get_domain(url)}" if get_domain(url) else url,
             "Manufacturer Status": status_value,
             "Üretim Kanıtı": evidence,
+            "Üretim Kaynak URL": next((p[0] for p in pages if any(t in p[1].lower() for t in ["we manufacture", "we produce", "our factory", "our manufacturing", "company manufactures"])), url),
+            "Kayıt Türü": "Canlı arama adayı · şirket adı ve üretim teyidi bekleniyor",
+            "İletişim URL": next((p[0] for p in pages if re.search(r"contact|enquiry", p[0], re.I)), ""),
             "Türkiye Varlığı": turkey_presence or ("Doğrulanamadı; temsilcisi olmadığı anlamına gelmez." if turkey_check else "Kontrol edilmedi"),
             "Satış / Export E-mail": sales_email,
             "Telefon": phone,
@@ -649,6 +722,12 @@ def supplier_scan(product, country_label, objective, max_companies, deep_scan, t
     df = pd.DataFrame(rows)
     if not df.empty:
         df = df.sort_values("Fit Score", ascending=False).reset_index(drop=True)
+    st.session_state["supplier_diagnostics"] = {
+        "Arama sorgusu": len(queries),
+        "İncelenecek bağlantı": len(all_candidates),
+        "Önceden araştırılmış kayıt": sum(r.get("Manufacturer Status") == "confirmed" for r in rows),
+        "Canlı üretici adayı": sum(r.get("Manufacturer Status") == "likely" for r in rows),
+    }
     return df
 
 # =========================================================
@@ -740,7 +819,7 @@ with main_tab1:
 # -------------------------
 with main_tab2:
     st.subheader("Yeni ürün, hammadde, üretici ve temsilcilik araştırması")
-    st.info("Ücretli yapay zekâ API'si kullanılmaz. Ücretsiz arama servisleri erişimi kısıtlayabilir. Sonuçlar üretici adaylarıdır; otomatik anahtar kelime eşleşmesi üretim doğrulaması değildir.")
+    st.info("Sürüm 3 · Ücretli API kullanılmaz. Tarihli başlangıç kayıtları ile canlı arama adayları ayrı etiketlenir. Ücretsiz arama servisleri erişimi kısıtlayabilir; canlı adaylar ayrıca teyit gerektirir.")
     st.write(
         "Ürün adını yazın. Sistem üretici odaklı arama yapar, pazar yerlerini ve açık tüccar sonuçlarını eler; "
         "mümkünse resmi üretim sayfası, export/sales iletişimi ve Türkiye varlığını bulur."
@@ -795,8 +874,12 @@ with main_tab2:
                 st.success(f"{len(st.session_state['supplier_results'])} üretici adayı bulundu.")
 
     supplier_df = st.session_state.get("supplier_results", pd.DataFrame())
+    if "supplier_diagnostics" in st.session_state:
+        st.write("Arama özeti", st.session_state["supplier_diagnostics"])
+        if st.session_state["supplier_diagnostics"]["Canlı üretici adayı"] == 0:
+            st.warning("Canlı aramadan uygun yeni üretici adayı doğrulanamadı. Varsa aşağıdaki tarihli başlangıç kayıtları gösteriliyor; bu durum canlı aramanın başarılı olduğu anlamına gelmez.")
     if not supplier_df.empty:
-        min_fit = st.slider("Minimum üretici uygunluk skoru", 0, 100, 40, key="supplier_min_fit")
+        min_fit = st.slider("Minimum üretici uygunluk skoru", 0, 100, 0, key="supplier_min_fit")
         supplier_view = supplier_df[supplier_df["Fit Score"] >= min_fit].copy()
 
         st.metric("Gösterilen üretici adayı", len(supplier_view))
@@ -807,6 +890,8 @@ with main_tab2:
             column_config={
                 "Kaynak URL": st.column_config.LinkColumn("Kaynak", display_text="Aç"),
                 "Website": st.column_config.LinkColumn("Website", display_text="Site"),
+                "Üretim Kaynak URL": st.column_config.LinkColumn("Üretim kaynağı", display_text="Aç"),
+                "İletişim URL": st.column_config.LinkColumn("İletişim", display_text="Aç"),
                 "Fit Score": st.column_config.ProgressColumn("Fit Score", min_value=0, max_value=100),
             },
         )
