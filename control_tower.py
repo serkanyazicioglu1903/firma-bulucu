@@ -141,12 +141,43 @@ def init_db():
             note TEXT DEFAULT '',
             FOREIGN KEY(opportunity_id) REFERENCES opportunities(id)
         );
+
+        CREATE TABLE IF NOT EXISTS product_catalog (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            category TEXT DEFAULT '',
+            supplier TEXT DEFAULT '',
+            supplier_country TEXT DEFAULT '',
+            target_sectors TEXT DEFAULT '',
+            applications TEXT DEFAULT '',
+            default_currency TEXT DEFAULT 'EUR',
+            default_opportunity_value REAL DEFAULT 100000,
+            active INTEGER DEFAULT 1,
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS customer_product_status (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            status TEXT DEFAULT 'Potansiyel',
+            current_supplier TEXT DEFAULT '',
+            annual_volume_tons REAL DEFAULT 0,
+            notes TEXT DEFAULT '',
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(customer_id, product_id),
+            FOREIGN KEY(customer_id) REFERENCES customers(id),
+            FOREIGN KEY(product_id) REFERENCES product_catalog(id)
+        );
         """)
 
         ensure_column(conn, "opportunities", "last_contact_date", "TEXT DEFAULT ''")
         ensure_column(conn, "opportunities", "expected_close_date", "TEXT DEFAULT ''")
         ensure_column(conn, "opportunities", "lost_reason", "TEXT DEFAULT ''")
         ensure_column(conn, "opportunities", "updated_at", "TEXT DEFAULT ''")
+        ensure_column(conn, "customers", "product_profile", "TEXT DEFAULT ''")
+        ensure_column(conn, "customers", "priority_tier", "TEXT DEFAULT 'B'")
         conn.commit()
 
 
@@ -199,6 +230,338 @@ def seed_once():
         VALUES (?,?,?,?,?,'Açık',?)""",
         ("Pantur 1250 için çözümü netleştir", "Ülker / Pladis", "Serkan",
          "Kritik", str(date.today() + timedelta(days=2)), "")
+    )
+
+
+def seed_product_catalog():
+    products = [
+        (
+            "Pantur 1250",
+            "Release Agent / Tava Yağı",
+            "Sonneveld",
+            "Hollanda",
+            "bisküvi;fırıncılık;bakery;bread;cake;wafer;unlu mamul",
+            "Tava ve kalıp ayırıcı; endüstriyel fırıncılık",
+            180000,
+        ),
+        (
+            "Mokaero 22 Topping Base",
+            "Topping Base",
+            "Mokate",
+            "Polonya",
+            "fırıncılık;bakery;pasta;cake;pastacılık;confectionery;şekerleme",
+            "Topping, whipping ve pastacılık uygulamaları",
+            120000,
+        ),
+        (
+            "Fat Powder FI FP 80 PR 01",
+            "Fat Powder",
+            "Mokate",
+            "Polonya",
+            "çikolata;confectionery;şekerleme;fırıncılık;bakery;süt;dairy;toz içecek;beverage",
+            "Yağ tozu; dolgu, içecek ve kuru karışım uygulamaları",
+            250000,
+        ),
+        (
+            "Methocel MCE-100 TS / NE-4000",
+            "Cellulose / Hydrocolloid",
+            "SE Tylose",
+            "Almanya",
+            "et;meat;vegan;plant based;sos;sauce;fırıncılık;bakery;hazır gıda",
+            "Bağlama, tekstür, stabilizasyon ve su tutma",
+            150000,
+        ),
+        (
+            "Oat Fibre",
+            "Fibre",
+            "Grainmore",
+            "Avrupa",
+            "et;meat;fırıncılık;bakery;vegan;plant based;snack;sağlıklı gıda",
+            "Lif zenginleştirme, su tutma ve tekstür",
+            100000,
+        ),
+        (
+            "Egg White Powder",
+            "Egg Products",
+            "Naturovos",
+            "Avrupa",
+            "fırıncılık;bakery;cake;pasta;confectionery;şekerleme;protein;hazır gıda",
+            "Köpürme, bağlama, protein ve pastacılık",
+            220000,
+        ),
+        (
+            "Vital Wheat Gluten",
+            "Wheat Protein",
+            "Fidelinka",
+            "Avrupa",
+            "fırıncılık;bakery;bread;ekmek;unlu mamul;vegan;plant based;meat",
+            "Hamur güçlendirme ve protein",
+            300000,
+        ),
+        (
+            "GMS Food Grade",
+            "Emulsifier",
+            "Solvay",
+            "Hollanda",
+            "fırıncılık;bakery;cake;dairy;süt;ice cream;dondurma;confectionery;şekerleme",
+            "Emülsifikasyon, yapı ve stabilizasyon",
+            180000,
+        ),
+        (
+            "Cocoa Mass",
+            "Cocoa",
+            "",
+            "",
+            "çikolata;chocolate;confectionery;şekerleme;bisküvi;bakery;ice cream;dondurma",
+            "Çikolata, kaplama, dolgu ve kakao bazlı uygulamalar",
+            400000,
+        ),
+        (
+            "Deodorized Cocoa Butter",
+            "Cocoa",
+            "",
+            "",
+            "çikolata;chocolate;confectionery;şekerleme;bisküvi;bakery;ice cream;dondurma",
+            "Çikolata, kaplama ve yağ fazı uygulamaları",
+            400000,
+        ),
+        (
+            "Dextrose Monohydrate",
+            "Sweetener / Carbohydrate",
+            "",
+            "",
+            "şekerleme;confectionery;beverage;içecek;bakery;fırıncılık;meat;et;dairy;süt;ice cream",
+            "Tatlandırma, fermentasyon, tekstür ve kuru karışımlar",
+            250000,
+        ),
+    ]
+
+    for name, category, supplier, supplier_country, target_sectors, applications, default_value in products:
+        exists = int(query_df(
+            "SELECT COUNT(*) n FROM product_catalog WHERE lower(name)=lower(?)",
+            (name,)
+        ).iloc[0]["n"])
+        if exists:
+            continue
+        execute(
+            """INSERT INTO product_catalog
+            (name,category,supplier,supplier_country,target_sectors,applications,
+             default_currency,default_opportunity_value,active)
+            VALUES (?,?,?,?,?,?, 'EUR', ?, 1)""",
+            (
+                name, category, supplier, supplier_country,
+                target_sectors, applications, float(default_value)
+            )
+        )
+
+
+def normalized_text(value):
+    return str(value or "").lower().replace("ı", "i").replace("İ", "i")
+
+
+def recommendation_rows(customer_id=None, product_id=None):
+    customers = query_df("""
+        SELECT id,name,country,sector,status,owner,annual_potential,currency,
+               notes,product_profile,priority_tier,source
+        FROM customers
+        WHERE COALESCE(status,'') != 'Satın Alma Adayı'
+          AND COALESCE(source,'') != 'Üretici Bulucu'
+    """)
+    products = query_df("""
+        SELECT id,name,category,supplier,target_sectors,applications,
+               default_currency,default_opportunity_value
+        FROM product_catalog
+        WHERE active=1
+    """)
+
+    if customer_id is not None:
+        customers = customers[customers["id"] == int(customer_id)]
+    if product_id is not None:
+        products = products[products["id"] == int(product_id)]
+
+    existing = query_df("""
+        SELECT customer_id, lower(product) AS product_key, stage
+        FROM opportunities
+        WHERE stage != 'Kaybedildi'
+    """)
+    existing_keys = {
+        (int(r["customer_id"]), normalized_text(r["product_key"]))
+        for _, r in existing.iterrows()
+    }
+
+    status_df = query_df("""
+        SELECT customer_id, product_id, status, current_supplier, annual_volume_tons, notes
+        FROM customer_product_status
+    """)
+    status_map = {
+        (int(r["customer_id"]), int(r["product_id"])): r
+        for _, r in status_df.iterrows()
+    }
+
+    rows = []
+    for _, c in customers.iterrows():
+        customer_text = normalized_text(
+            f"{c['sector']} {c['notes']} {c['product_profile']}"
+        )
+        if not customer_text.strip():
+            continue
+
+        for _, p in products.iterrows():
+            if (int(c["id"]), normalized_text(p["name"])) in existing_keys:
+                continue
+
+            status_row = status_map.get((int(c["id"]), int(p["id"])))
+            known_status = str(status_row["status"]) if status_row is not None else ""
+            if known_status in {"Mevcut", "Uygun Değil"}:
+                continue
+
+            keywords = [
+                normalized_text(x).strip()
+                for x in str(p["target_sectors"] or "").split(";")
+                if str(x).strip()
+            ]
+            matched = [k for k in keywords if k and k in customer_text]
+            if not matched:
+                continue
+
+            score = min(70, 35 + 12 * len(set(matched)))
+            reasons = [f"Sektör eşleşmesi: {', '.join(list(dict.fromkeys(matched))[:4])}"]
+
+            if str(c["status"]) == "Aktif":
+                score += 10
+                reasons.append("aktif müşteri")
+            tier = str(c["priority_tier"] or "B").upper()
+            if tier == "A":
+                score += 10
+                reasons.append("A öncelik")
+            elif tier == "B":
+                score += 5
+
+            potential = float(c["annual_potential"] or 0)
+            if potential >= 500000:
+                score += 10
+                reasons.append("yüksek müşteri potansiyeli")
+            elif potential >= 100000:
+                score += 5
+
+            if known_status == "Rakipte":
+                score += 15
+                reasons.append("ürün rakip tedarikçide")
+            elif known_status == "Potansiyel":
+                score += 5
+
+            score = min(100, int(score))
+            rows.append({
+                "customer_id": int(c["id"]),
+                "product_id": int(p["id"]),
+                "Müşteri": c["name"],
+                "Ürün": p["name"],
+                "Kategori": p["category"],
+                "Tedarikçi": p["supplier"],
+                "Fit Score": score,
+                "Neden": "; ".join(reasons),
+                "Durum": known_status or "Yeni öneri",
+                "Sorumlu": c["owner"],
+                "Önerilen Fırsat Değeri": float(p["default_opportunity_value"] or 0),
+                "Para": p["default_currency"] or "EUR",
+                "Uygulama": p["applications"],
+            })
+
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(
+        ["Fit Score", "Önerilen Fırsat Değeri"], ascending=[False, False]
+    ).reset_index(drop=True)
+
+
+def create_opportunity_from_recommendation(customer_id, product_id, value, owner):
+    product = query_df(
+        "SELECT * FROM product_catalog WHERE id=?", (int(product_id),)
+    )
+    customer = query_df(
+        "SELECT * FROM customers WHERE id=?", (int(customer_id),)
+    )
+    if product.empty or customer.empty:
+        return False, "Müşteri veya ürün bulunamadı."
+
+    product_row = product.iloc[0]
+    customer_row = customer.iloc[0]
+    duplicate = int(query_df(
+        """SELECT COUNT(*) n FROM opportunities
+           WHERE customer_id=? AND lower(product)=lower(?)
+             AND stage != 'Kaybedildi'""",
+        (int(customer_id), product_row["name"])
+    ).iloc[0]["n"])
+    if duplicate:
+        return False, "Bu müşteri ve ürün için zaten açık/kazanılmış fırsat var."
+
+    due = date.today() + timedelta(days=3)
+    close = date.today() + timedelta(days=45)
+    execute(
+        """INSERT INTO opportunities
+        (customer_id,product,stage,value,currency,probability,next_action,
+         due_date,owner,notes,expected_close_date,updated_at)
+        VALUES (?,?, 'Lead', ?, ?, 10, ?, ?, ?, ?, ?, ?)""",
+        (
+            int(customer_id),
+            product_row["name"],
+            float(value),
+            product_row["default_currency"] or "EUR",
+            f"{product_row['name']} için ilk temas / ihtiyaç doğrulaması",
+            str(due),
+            owner or customer_row["owner"] or "",
+            "AS Control Tower Ürün × Müşteri motorundan oluşturuldu.",
+            str(close),
+            datetime.now().isoformat(timespec="seconds"),
+        )
+    )
+    opp_id = int(query_df(
+        "SELECT id FROM opportunities ORDER BY id DESC LIMIT 1"
+    ).iloc[0]["id"])
+    execute(
+        """INSERT INTO opportunity_stage_history
+        (opportunity_id,old_stage,new_stage,owner,note)
+        VALUES (?, '', 'Lead', ?, ?)""",
+        (
+            opp_id,
+            owner or customer_row["owner"] or "",
+            "Ürün × Müşteri önerisinden fırsata çevrildi"
+        )
+    )
+    execute(
+        """INSERT INTO tasks
+        (title,related_to,owner,priority,due_date,status,notes)
+        VALUES (?,?,?,?,?,'Açık',?)""",
+        (
+            f"{product_row['name']} için ilk temas",
+            customer_row["name"],
+            owner or customer_row["owner"] or "",
+            "Yüksek",
+            str(due),
+            f"Cross-sell fırsatı #{opp_id}"
+        )
+    )
+    return True, f"Fırsat #{opp_id} oluşturuldu."
+
+
+def save_customer_product_status(customer_id, product_id, status, current_supplier,
+                                 annual_volume_tons, notes):
+    execute(
+        """INSERT INTO customer_product_status
+        (customer_id,product_id,status,current_supplier,annual_volume_tons,notes,updated_at)
+        VALUES (?,?,?,?,?,?,?)
+        ON CONFLICT(customer_id,product_id) DO UPDATE SET
+            status=excluded.status,
+            current_supplier=excluded.current_supplier,
+            annual_volume_tons=excluded.annual_volume_tons,
+            notes=excluded.notes,
+            updated_at=excluded.updated_at
+        """,
+        (
+            int(customer_id), int(product_id), status, current_supplier,
+            float(annual_volume_tons), notes,
+            datetime.now().isoformat(timespec="seconds")
+        )
     )
 
 
@@ -340,14 +703,16 @@ def update_opportunity_stage(opportunity_id, new_stage, probability, next_action
 def render_control_tower():
     init_db()
     seed_once()
+    seed_product_catalog()
 
     st.subheader("🧭 AS CONTROL TOWER")
     st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
 
-    dashboard, customers_tab, pipeline_tab, followup_tab, tasks_tab, ceo_tab = st.tabs(
+    dashboard, customers_tab, intelligence_tab, pipeline_tab, followup_tab, tasks_tab, ceo_tab = st.tabs(
         [
             "📊 Yönetici Paneli",
             "👥 CRM / Müşteri 360",
+            "🧠 Ürün × Müşteri",
             "💰 Satış Pipeline",
             "📞 Takip Merkezi",
             "✅ Görevler",
@@ -409,6 +774,24 @@ def render_control_tower():
             LIMIT 12
         """, (str(date.today()),))
         st.dataframe(due, use_container_width=True, hide_index=True)
+
+        st.markdown("#### En güçlü yeni cross-sell önerileri")
+        dashboard_recs = recommendation_rows()
+        if dashboard_recs.empty:
+            st.info("Ürün-müşteri eşleşmesi için müşteri sektör bilgilerini ve ürün kataloğunu doldurun.")
+        else:
+            st.dataframe(
+                dashboard_recs[
+                    ["Müşteri", "Ürün", "Fit Score", "Neden", "Sorumlu"]
+                ].head(8),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Fit Score": st.column_config.ProgressColumn(
+                        "Fit Score", min_value=0, max_value=100
+                    )
+                },
+            )
 
         st.markdown("#### Arama sonuçlarını sisteme al")
         i1, i2 = st.columns(2)
@@ -588,14 +971,30 @@ def render_control_tower():
                             customer["currency"] if customer["currency"] in ["EUR", "USD", "GBP", "TRY"] else "EUR"
                         )
                     )
+                    profile = st.text_area(
+                        "Üretim / ürün profili",
+                        value=customer["product_profile"] or "",
+                        placeholder="Örn: bisküvi, gofret, çikolata, kek, dolgu kreması..."
+                    )
+                    tiers = ["A", "B", "C"]
+                    current_tier = customer["priority_tier"] if customer["priority_tier"] in tiers else "B"
+                    priority_tier = st.selectbox(
+                        "Müşteri önceliği",
+                        tiers,
+                        index=tiers.index(current_tier)
+                    )
                     notes = st.text_area("Not", value=customer["notes"] or "")
                     if st.form_submit_button("Müşteri kartını güncelle"):
                         execute(
                             """UPDATE customers
                                SET country=?,sector=?,status=?,owner=?,
-                                   annual_potential=?,currency=?,notes=?
+                                   annual_potential=?,currency=?,product_profile=?,
+                                   priority_tier=?,notes=?
                                WHERE id=?""",
-                            (country, sector, status, owner, potential, currency, notes, customer_id)
+                            (
+                                country, sector, status, owner, potential, currency,
+                                profile, priority_tier, notes, customer_id
+                            )
                         )
                         st.success("Müşteri kartı güncellendi.")
                         st.rerun()
@@ -636,6 +1035,322 @@ def render_control_tower():
                         )
                     st.success("CRM kaydı eklendi.")
                     st.rerun()
+
+    with intelligence_tab:
+        st.markdown("### 🧠 Ürün × Müşteri Satış Zekâsı")
+        st.caption(
+            "Müşteri sektörünü, üretim profilini, ürün kataloğunu ve mevcut fırsatları "
+            "birleştirerek yeni cross-sell fırsatları üretir."
+        )
+
+        intel1, intel2, intel3, intel4 = st.tabs(
+            [
+                "🎯 Müşteriye ne satarız?",
+                "📦 Bu ürünü kime satarız?",
+                "🔥 En güçlü öneriler",
+                "🧾 Ürün kataloğu",
+            ]
+        )
+
+        customers_intel = query_df("""
+            SELECT id,name,sector,status,owner,product_profile,priority_tier
+            FROM customers
+            WHERE COALESCE(status,'') != 'Satın Alma Adayı'
+              AND COALESCE(source,'') != 'Üretici Bulucu'
+            ORDER BY name
+        """)
+        products_intel = query_df("""
+            SELECT id,name,category,supplier,target_sectors,applications,
+                   default_currency,default_opportunity_value
+            FROM product_catalog
+            WHERE active=1
+            ORDER BY name
+        """)
+
+        with intel1:
+            if customers_intel.empty:
+                st.info("Önce CRM'e müşteri ekleyin.")
+            else:
+                customer_name = st.selectbox(
+                    "Müşteri seç",
+                    customers_intel["name"].tolist(),
+                    key="intel_customer_select"
+                )
+                cid = int(
+                    customers_intel.loc[
+                        customers_intel["name"] == customer_name, "id"
+                    ].iloc[0]
+                )
+                cust = customers_intel[
+                    customers_intel["id"] == cid
+                ].iloc[0]
+                st.caption(
+                    f"Sektör: {cust['sector'] or '-'} · "
+                    f"Profil: {cust['product_profile'] or '-'} · "
+                    f"Öncelik: {cust['priority_tier'] or 'B'}"
+                )
+
+                recs = recommendation_rows(customer_id=cid)
+                if recs.empty:
+                    st.info(
+                        "Yeni öneri bulunamadı. Müşteri üretim profilini zenginleştirin "
+                        "veya mevcut ürün durumlarını kontrol edin."
+                    )
+                else:
+                    st.dataframe(
+                        recs[
+                            ["Ürün","Kategori","Fit Score","Neden","Durum",
+                             "Önerilen Fırsat Değeri","Para","Uygulama"]
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Fit Score": st.column_config.ProgressColumn(
+                                "Fit Score", min_value=0, max_value=100
+                            )
+                        },
+                    )
+                    selected_idx = st.selectbox(
+                        "Fırsata çevrilecek öneri",
+                        list(range(len(recs))),
+                        format_func=lambda i: (
+                            f"{recs.iloc[i]['Ürün']} · skor {recs.iloc[i]['Fit Score']}"
+                        ),
+                        key="intel_customer_rec"
+                    )
+                    selected = recs.iloc[selected_idx]
+                    r1, r2 = st.columns(2)
+                    value = r1.number_input(
+                        "Fırsat değeri",
+                        min_value=0.0,
+                        value=float(selected["Önerilen Fırsat Değeri"]),
+                        step=10000.0,
+                        key="intel_customer_value"
+                    )
+                    owner = r2.text_input(
+                        "Sorumlu",
+                        value=str(selected["Sorumlu"] or ""),
+                        key="intel_customer_owner"
+                    )
+                    if st.button(
+                        "Bu öneriyi satış fırsatına çevir",
+                        type="primary",
+                        use_container_width=True,
+                        key="intel_customer_create"
+                    ):
+                        ok, msg = create_opportunity_from_recommendation(
+                            int(selected["customer_id"]),
+                            int(selected["product_id"]),
+                            value,
+                            owner
+                        )
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.warning(msg)
+
+                st.divider()
+                st.markdown("##### Bu müşteride ürün durumunu öğret")
+                if not products_intel.empty:
+                    p_name = st.selectbox(
+                        "Ürün",
+                        products_intel["name"].tolist(),
+                        key="intel_status_product"
+                    )
+                    pid = int(
+                        products_intel.loc[
+                            products_intel["name"] == p_name, "id"
+                        ].iloc[0]
+                    )
+                    x1, x2 = st.columns(2)
+                    status = x1.selectbox(
+                        "Durum",
+                        ["Potansiyel", "Mevcut", "Rakipte", "Uygun Değil"],
+                        key="intel_status_value"
+                    )
+                    current_supplier = x2.text_input(
+                        "Mevcut / rakip tedarikçi",
+                        key="intel_status_supplier"
+                    )
+                    annual_volume = st.number_input(
+                        "Tahmini yıllık hacim (ton)",
+                        min_value=0.0,
+                        step=10.0,
+                        key="intel_status_volume"
+                    )
+                    status_notes = st.text_input(
+                        "Not",
+                        key="intel_status_notes"
+                    )
+                    if st.button(
+                        "Ürün durumunu kaydet",
+                        use_container_width=True,
+                        key="intel_status_save"
+                    ):
+                        save_customer_product_status(
+                            cid, pid, status, current_supplier,
+                            annual_volume, status_notes
+                        )
+                        st.success("Müşteri-ürün bilgisi kaydedildi.")
+                        st.rerun()
+
+        with intel2:
+            if products_intel.empty:
+                st.info("Ürün kataloğu boş.")
+            else:
+                product_name = st.selectbox(
+                    "Ürün seç",
+                    products_intel["name"].tolist(),
+                    key="intel_product_select"
+                )
+                pid = int(
+                    products_intel.loc[
+                        products_intel["name"] == product_name, "id"
+                    ].iloc[0]
+                )
+                product_row = products_intel[
+                    products_intel["id"] == pid
+                ].iloc[0]
+                st.caption(
+                    f"{product_row['category']} · {product_row['applications']} · "
+                    f"Hedef sektörler: {product_row['target_sectors']}"
+                )
+                recs = recommendation_rows(product_id=pid)
+                if recs.empty:
+                    st.info("Bu ürün için yeni müşteri eşleşmesi bulunamadı.")
+                else:
+                    st.dataframe(
+                        recs[
+                            ["Müşteri","Fit Score","Neden","Durum","Sorumlu",
+                             "Önerilen Fırsat Değeri","Para"]
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Fit Score": st.column_config.ProgressColumn(
+                                "Fit Score", min_value=0, max_value=100
+                            )
+                        },
+                    )
+                    selected_idx = st.selectbox(
+                        "Fırsata çevrilecek müşteri",
+                        list(range(len(recs))),
+                        format_func=lambda i: (
+                            f"{recs.iloc[i]['Müşteri']} · skor {recs.iloc[i]['Fit Score']}"
+                        ),
+                        key="intel_product_rec"
+                    )
+                    selected = recs.iloc[selected_idx]
+                    y1, y2 = st.columns(2)
+                    value = y1.number_input(
+                        "Fırsat değeri",
+                        min_value=0.0,
+                        value=float(selected["Önerilen Fırsat Değeri"]),
+                        step=10000.0,
+                        key="intel_product_value"
+                    )
+                    owner = y2.text_input(
+                        "Sorumlu",
+                        value=str(selected["Sorumlu"] or ""),
+                        key="intel_product_owner"
+                    )
+                    if st.button(
+                        "Bu müşteride fırsat oluştur",
+                        type="primary",
+                        use_container_width=True,
+                        key="intel_product_create"
+                    ):
+                        ok, msg = create_opportunity_from_recommendation(
+                            int(selected["customer_id"]),
+                            int(selected["product_id"]),
+                            value,
+                            owner
+                        )
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.warning(msg)
+
+        with intel3:
+            all_recs = recommendation_rows()
+            if all_recs.empty:
+                st.info("Henüz güçlü ürün-müşteri eşleşmesi oluşmadı.")
+            else:
+                min_score = st.slider(
+                    "Minimum Fit Score",
+                    0, 100, 60,
+                    key="intel_min_score"
+                )
+                view = all_recs[all_recs["Fit Score"] >= min_score].copy()
+                st.metric("Yeni öneri", len(view))
+                st.dataframe(
+                    view[
+                        ["Müşteri","Ürün","Kategori","Fit Score","Neden",
+                         "Durum","Sorumlu","Önerilen Fırsat Değeri","Para"]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Fit Score": st.column_config.ProgressColumn(
+                            "Fit Score", min_value=0, max_value=100
+                        )
+                    },
+                )
+
+        with intel4:
+            st.dataframe(
+                products_intel,
+                use_container_width=True,
+                hide_index=True
+            )
+            with st.expander("Yeni ürün ekle"):
+                with st.form("intel_new_product", clear_on_submit=True):
+                    name = st.text_input("Ürün adı *")
+                    p1, p2 = st.columns(2)
+                    category = p1.text_input("Kategori")
+                    supplier = p2.text_input("Tedarikçi")
+                    supplier_country = st.text_input("Tedarikçi ülkesi")
+                    target_sectors = st.text_area(
+                        "Hedef sektör anahtarları",
+                        placeholder="bisküvi;çikolata;bakery;dairy;meat"
+                    )
+                    applications = st.text_area("Uygulamalar / kullanım alanları")
+                    p3, p4 = st.columns(2)
+                    currency = p3.selectbox(
+                        "Para",
+                        ["EUR","USD","GBP","TRY"]
+                    )
+                    default_value = p4.number_input(
+                        "Varsayılan fırsat değeri",
+                        min_value=0.0,
+                        value=100000.0,
+                        step=10000.0
+                    )
+                    notes = st.text_area("Not")
+                    if st.form_submit_button("Ürünü kataloğa ekle", type="primary") and name.strip():
+                        exists = int(query_df(
+                            "SELECT COUNT(*) n FROM product_catalog WHERE lower(name)=lower(?)",
+                            (name.strip(),)
+                        ).iloc[0]["n"])
+                        if exists:
+                            st.warning("Bu ürün zaten katalogda.")
+                        else:
+                            execute(
+                                """INSERT INTO product_catalog
+                                (name,category,supplier,supplier_country,target_sectors,
+                                 applications,default_currency,default_opportunity_value,
+                                 active,notes)
+                                VALUES (?,?,?,?,?,?,?,?,1,?)""",
+                                (
+                                    name.strip(), category, supplier, supplier_country,
+                                    target_sectors, applications, currency,
+                                    float(default_value), notes
+                                )
+                            )
+                            st.success("Ürün kataloğa eklendi.")
+                            st.rerun()
 
     with pipeline_tab:
         pipeline = query_df("""
@@ -960,6 +1675,24 @@ def render_control_tower():
             LIMIT 10
         """)
         st.dataframe(top, use_container_width=True, hide_index=True)
+
+        st.markdown("#### Henüz açılmamış en güçlü ürün fırsatları")
+        ceo_recs = recommendation_rows()
+        if ceo_recs.empty:
+            st.info("Yeni cross-sell önerisi yok.")
+        else:
+            st.dataframe(
+                ceo_recs[
+                    ["Müşteri","Ürün","Fit Score","Neden","Sorumlu"]
+                ].head(10),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Fit Score": st.column_config.ProgressColumn(
+                        "Fit Score", min_value=0, max_value=100
+                    )
+                },
+            )
 
         st.markdown("#### Yönetici uyarısı")
         if overdue or stale_count or critical:
