@@ -1680,6 +1680,36 @@ def render_control_tower():
     seed_product_catalog()
     seed_warehouses()
 
+    st.markdown(
+        """
+        <style>
+        /* Keep Streamlit tab navigation usable on iPad / phone instead of
+           pushing the first/last sections off-screen. */
+        div[data-baseweb="tab-list"] {
+            gap: 0.35rem !important;
+            flex-wrap: wrap !important;
+            overflow-x: visible !important;
+        }
+        button[data-baseweb="tab"] {
+            height: auto !important;
+            min-height: 2.25rem !important;
+            padding: 0.35rem 0.55rem !important;
+            white-space: nowrap !important;
+        }
+        @media (max-width: 1100px) {
+            button[data-baseweb="tab"] {
+                font-size: 0.82rem !important;
+            }
+            .block-container {
+                padding-left: 1rem !important;
+                padding-right: 1rem !important;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.subheader("🧭 AS CONTROL TOWER")
     st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
 
