@@ -10,6 +10,13 @@ import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 
+try:
+    from ddgs import DDGS
+except Exception:
+    DDGS = None
+
+from control_tower import render_control_tower
+
 st.set_page_config(page_title="AS İleri Firma & Ürün Bulucu", page_icon="🏭", layout="wide")
 
 # =========================================================
@@ -180,9 +187,32 @@ def search_ddg_html(query, max_results=8):
         pass
     return out
 
+def search_ddgs_library(query, max_results=8):
+    """Use the installed ddgs package as the primary free-search provider."""
+    if DDGS is None:
+        return []
+    out = []
+    try:
+        for item in DDGS().text(query, max_results=max_results):
+            href = clean(item.get("href") or item.get("url") or "")
+            if not href:
+                continue
+            out.append({
+                "title": clean(item.get("title", "")),
+                "href": href,
+                "body": clean(item.get("body") or item.get("snippet") or ""),
+                "_provider": "DDGS",
+            })
+    except Exception:
+        return []
+    return out
+
+
 def live_search(query, max_results=8):
     merged, seen = [], set()
-    for fn in (search_bing_rss, search_ddg_html):
+    # The project already installs ddgs; use it first, then keep the HTML/RSS
+    # providers as fallbacks when a search provider rate-limits or blocks.
+    for fn in (search_ddgs_library, search_bing_rss, search_ddg_html):
         try:
             results = fn(query, max_results)
         except Exception:
@@ -671,17 +701,27 @@ def supplier_queries(product, country_label, objective):
     return list(dict.fromkeys(q))
 
 def supplier_manufacturer_status(product, title, snippet, body, url):
-    # Search titles/snippets are never evidence. Require fetched page content,
-    # a product page and an explicit company manufacturing claim.
-    text = body.lower()
+    """Balanced pre-screen: require product evidence plus a real production signal.
+
+    The previous rule accepted only a handful of exact English phrases such as
+    "we manufacture" and therefore discarded many genuine manufacturers.
+    """
+    text = clean(body).lower()
+    title_path = clean(title + " " + urlparse(url).path.replace("-", " ").replace("_", " ")).lower()
     if is_blacklisted(url) or editorial_result(title, url) or not text:
         return "unclear", 0
-    product_hit = any(re.search(r"\b" + re.escape(alias) + r"\b", text) for alias in product_aliases(product))
-    product_page = any(alias in (title + " " + urlparse(url).path.replace("-", " ").replace("_", " ")).lower() for alias in product_aliases(product))
-    maker_hit = bool(re.search(r"\bwe\s+(?:manufacture|produce)\b|\bour\s+(?:factory|factories|manufacturing|production facilities)\b|\b(?:company|group)\s+manufactures\b", text))
-    trader_hit = any(x in text for x in TRADER_HINTS)
-    if product_hit and product_page and maker_hit and not trader_hit:
-        return "likely", 20
+
+    aliases = product_aliases(product)
+    product_hit = any(alias in text or alias in title_path for alias in aliases)
+    maker_hit = any(term in text for term in MANUFACTURING_TERMS)
+    strong_factory_hit = bool(re.search(
+        r"\b(factory|factories|plant|plants|production site|manufacturing site|manufacturing facility|production facility)\b",
+        text,
+    ))
+    trader_only = any(x in text for x in ["trading company", "broker", "agent only", "reseller only"])
+
+    if product_hit and (maker_hit or strong_factory_hit) and not trader_only:
+        return "likely", 25
     return "unclear", 0
 
 def turkey_presence_check(company, product):
@@ -895,9 +935,10 @@ def supplier_scan(product, country_label, objective, max_companies, deep_scan, t
 st.title("🏭 AS İleri – Firma & Ürün Bulucu")
 st.caption("Şirket satın alma + yeni ürün / hammadde / üretici / distribütörlük araştırması tek uygulamada")
 
-main_tab1, main_tab2 = st.tabs([
+main_tab1, main_tab2, main_tab3 = st.tabs([
     "🏢 Firma Satın Alma / Halefiyet",
     "🧪 Satın Alma / Üretici Bulucu",
+    "🧭 AS Control Tower",
 ])
 
 # -------------------------
@@ -1170,6 +1211,12 @@ with main_tab2:
             st.caption("Bu bir taslaktır. Program e-posta göndermez. Sonuçları saklamak için CSV veya JSON indirin; oturum verileri kalıcı kayıt değildir.")
         else:
             st.info("Seçtiğiniz minimum skoru geçen firma yok. Daha düşük bir skor seçebilirsiniz.")
+
+# -------------------------
+# TAB 3: CONTROL TOWER
+# -------------------------
+with main_tab3:
+    render_control_tower()
 
 st.markdown("---")
 st.caption(
