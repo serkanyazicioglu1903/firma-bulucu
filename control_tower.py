@@ -211,6 +211,96 @@ def init_db():
             FOREIGN KEY(customer_id) REFERENCES customers(id),
             FOREIGN KEY(opportunity_id) REFERENCES opportunities(id)
         );
+
+        CREATE TABLE IF NOT EXISTS warehouses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            warehouse_type TEXT DEFAULT 'Normal Depo',
+            city TEXT DEFAULT '',
+            active INTEGER DEFAULT 1,
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS purchase_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            po_number TEXT NOT NULL UNIQUE,
+            supplier TEXT NOT NULL,
+            product_id INTEGER,
+            product_name TEXT NOT NULL,
+            quantity_kg REAL DEFAULT 0,
+            unit_price REAL DEFAULT 0,
+            currency TEXT DEFAULT 'EUR',
+            incoterm TEXT DEFAULT '',
+            payment_terms TEXT DEFAULT '',
+            order_date TEXT DEFAULT '',
+            requested_load_date TEXT DEFAULT '',
+            confirmed_load_date TEXT DEFAULT '',
+            destination_warehouse_id INTEGER,
+            status TEXT DEFAULT 'Sipariş Verildi',
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(product_id) REFERENCES product_catalog(id),
+            FOREIGN KEY(destination_warehouse_id) REFERENCES warehouses(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS shipments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            purchase_order_id INTEGER NOT NULL,
+            shipment_ref TEXT DEFAULT '',
+            quantity_kg REAL DEFAULT 0,
+            transport_mode TEXT DEFAULT 'Tır',
+            carrier TEXT DEFAULT '',
+            container_vehicle TEXT DEFAULT '',
+            etd TEXT DEFAULT '',
+            eta TEXT DEFAULT '',
+            customs_date TEXT DEFAULT '',
+            delivery_date TEXT DEFAULT '',
+            status TEXT DEFAULT 'Planlandı',
+            destination_warehouse_id INTEGER,
+            lot_number TEXT DEFAULT '',
+            expiry_date TEXT DEFAULT '',
+            received_to_stock INTEGER DEFAULT 0,
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(purchase_order_id) REFERENCES purchase_orders(id),
+            FOREIGN KEY(destination_warehouse_id) REFERENCES warehouses(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS inventory_lots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER,
+            product_name TEXT NOT NULL,
+            warehouse_id INTEGER NOT NULL,
+            lot_number TEXT DEFAULT '',
+            expiry_date TEXT DEFAULT '',
+            quantity_received_kg REAL DEFAULT 0,
+            quantity_available_kg REAL DEFAULT 0,
+            quantity_reserved_kg REAL DEFAULT 0,
+            unit_cost REAL DEFAULT 0,
+            currency TEXT DEFAULT 'EUR',
+            purchase_order_id INTEGER,
+            shipment_id INTEGER,
+            received_date TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(product_id) REFERENCES product_catalog(id),
+            FOREIGN KEY(warehouse_id) REFERENCES warehouses(id),
+            FOREIGN KEY(purchase_order_id) REFERENCES purchase_orders(id),
+            FOREIGN KEY(shipment_id) REFERENCES shipments(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS inventory_policy (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER NOT NULL UNIQUE,
+            monthly_usage_kg REAL DEFAULT 0,
+            safety_stock_days INTEGER DEFAULT 30,
+            lead_time_days INTEGER DEFAULT 45,
+            reorder_review_days INTEGER DEFAULT 7,
+            notes TEXT DEFAULT '',
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(product_id) REFERENCES product_catalog(id)
+        );
         """)
 
         ensure_column(conn, "opportunities", "last_contact_date", "TEXT DEFAULT ''")
@@ -741,6 +831,177 @@ def update_opportunity_stage(opportunity_id, new_stage, probability, next_action
         )
 
 
+def seed_warehouses():
+    defaults = [
+        ("Merkez Depo", "Normal Depo"),
+        ("Antrepo", "Antrepo / Bonded"),
+    ]
+    for name, warehouse_type in defaults:
+        exists = int(query_df(
+            "SELECT COUNT(*) n FROM warehouses WHERE lower(name)=lower(?)",
+            (name,)
+        ).iloc[0]["n"])
+        if not exists:
+            execute(
+                """INSERT INTO warehouses (name,warehouse_type,active,notes)
+                   VALUES (?,?,1,?)""",
+                (name, warehouse_type, "Sistem başlangıç kaydı; gerçek depo adıyla düzenlenebilir.")
+            )
+
+
+def stock_snapshot():
+    products = query_df("""
+        SELECT id,name,supplier
+        FROM product_catalog
+        WHERE active=1
+        ORDER BY name
+    """)
+    if products.empty:
+        return pd.DataFrame()
+
+    lots = query_df("""
+        SELECT product_id,
+               SUM(quantity_available_kg) AS available_kg,
+               SUM(quantity_reserved_kg) AS reserved_kg
+        FROM inventory_lots
+        GROUP BY product_id
+    """)
+    inbound = query_df("""
+        SELECT po.product_id,
+               SUM(CASE
+                     WHEN s.received_to_stock=0
+                      AND s.status NOT IN ('İptal','Teslim Edildi')
+                     THEN s.quantity_kg ELSE 0 END) AS inbound_kg
+        FROM shipments s
+        JOIN purchase_orders po ON po.id=s.purchase_order_id
+        GROUP BY po.product_id
+    """)
+    po_open = query_df("""
+        SELECT product_id,
+               SUM(CASE
+                     WHEN status NOT IN ('Tamamlandı','İptal')
+                     THEN quantity_kg ELSE 0 END) AS open_po_kg
+        FROM purchase_orders
+        GROUP BY product_id
+    """)
+    policies = query_df("""
+        SELECT product_id,monthly_usage_kg,safety_stock_days,lead_time_days,reorder_review_days
+        FROM inventory_policy
+    """)
+
+    df = products.copy()
+    for src in (lots, inbound, po_open, policies):
+        if not src.empty:
+            df = df.merge(src, left_on="id", right_on="product_id", how="left")
+            if "product_id" in df.columns:
+                df = df.drop(columns=["product_id"])
+
+    for col in ["available_kg","reserved_kg","inbound_kg","open_po_kg","monthly_usage_kg"]:
+        if col not in df.columns:
+            df[col] = 0.0
+        df[col] = df[col].fillna(0.0)
+
+    for col, default in [("safety_stock_days",30),("lead_time_days",45),("reorder_review_days",7)]:
+        if col not in df.columns:
+            df[col] = default
+        df[col] = df[col].fillna(default)
+
+    df["net_available_kg"] = (df["available_kg"] - df["reserved_kg"]).clip(lower=0)
+    df["daily_usage_kg"] = df["monthly_usage_kg"] / 30.0
+    df["stock_days"] = df.apply(
+        lambda r: round(r["net_available_kg"] / r["daily_usage_kg"], 1)
+        if r["daily_usage_kg"] > 0 else None,
+        axis=1
+    )
+    df["projected_stock_kg"] = df["net_available_kg"] + df["inbound_kg"]
+    df["reorder_point_kg"] = df["daily_usage_kg"] * (
+        df["lead_time_days"] + df["safety_stock_days"] + df["reorder_review_days"]
+    )
+    df["suggested_order_kg"] = (
+        df["reorder_point_kg"] - df["projected_stock_kg"]
+    ).clip(lower=0)
+    df["status"] = df.apply(
+        lambda r:
+            "TÜKENECEK / SİPARİŞ VER"
+            if r["monthly_usage_kg"] > 0 and r["projected_stock_kg"] < r["reorder_point_kg"]
+            else (
+                "KRİTİK STOK"
+                if r["monthly_usage_kg"] > 0 and r["stock_days"] is not None
+                and r["stock_days"] < r["safety_stock_days"]
+                else "OK"
+            ),
+        axis=1
+    )
+    return df
+
+
+def receive_shipment_to_stock(shipment_id):
+    shipment = query_df("""
+        SELECT s.*, po.product_id, po.product_name, po.unit_price, po.currency,
+               po.destination_warehouse_id AS po_warehouse_id
+        FROM shipments s
+        JOIN purchase_orders po ON po.id=s.purchase_order_id
+        WHERE s.id=?
+    """, (int(shipment_id),))
+    if shipment.empty:
+        return False, "Sevkiyat bulunamadı."
+
+    row = shipment.iloc[0]
+    if int(row["received_to_stock"] or 0) == 1:
+        return False, "Bu sevkiyat daha önce stoğa alınmış."
+
+    warehouse_id = row["destination_warehouse_id"] or row["po_warehouse_id"]
+    if not warehouse_id:
+        return False, "Depo seçilmeden stok girişi yapılamaz."
+
+    received_date = row["delivery_date"] or str(date.today())
+    execute(
+        """INSERT INTO inventory_lots
+        (product_id,product_name,warehouse_id,lot_number,expiry_date,
+         quantity_received_kg,quantity_available_kg,quantity_reserved_kg,
+         unit_cost,currency,purchase_order_id,shipment_id,received_date,notes)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            int(row["product_id"]) if row["product_id"] else None,
+            row["product_name"],
+            int(warehouse_id),
+            row["lot_number"] or "",
+            row["expiry_date"] or "",
+            float(row["quantity_kg"] or 0),
+            float(row["quantity_kg"] or 0),
+            0.0,
+            float(row["unit_price"] or 0),
+            row["currency"] or "EUR",
+            int(row["purchase_order_id"]),
+            int(shipment_id),
+            received_date,
+            "Sevkiyattan otomatik stok girişi"
+        )
+    )
+    execute(
+        """UPDATE shipments
+           SET received_to_stock=1,
+               status='Teslim Edildi',
+               delivery_date=CASE WHEN delivery_date='' THEN ? ELSE delivery_date END
+           WHERE id=?""",
+        (str(date.today()), int(shipment_id))
+    )
+
+    remaining = int(query_df("""
+        SELECT COUNT(*) n
+        FROM shipments
+        WHERE purchase_order_id=?
+          AND received_to_stock=0
+          AND status!='İptal'
+    """, (int(row["purchase_order_id"]),)).iloc[0]["n"])
+    if remaining == 0:
+        execute(
+            "UPDATE purchase_orders SET status='Tamamlandı' WHERE id=?",
+            (int(row["purchase_order_id"]),)
+        )
+    return True, "Sevkiyat stoğa alındı."
+
+
 def calculate_quote(
     quantity_kg,
     buy_price_per_kg,
@@ -918,16 +1179,18 @@ def render_control_tower():
     init_db()
     seed_once()
     seed_product_catalog()
+    seed_warehouses()
 
     st.subheader("🧭 AS CONTROL TOWER")
     st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
 
-    dashboard, customers_tab, intelligence_tab, pricing_tab, pipeline_tab, followup_tab, tasks_tab, ceo_tab = st.tabs(
+    dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, pipeline_tab, followup_tab, tasks_tab, ceo_tab = st.tabs(
         [
             "📊 Yönetici Paneli",
             "👥 CRM / Müşteri 360",
             "🧠 Ürün × Müşteri",
             "🧮 Teklif & Kârlılık",
+            "🚚 Satın Alma & Stok",
             "💰 Satış Pipeline",
             "📞 Takip Merkezi",
             "✅ Görevler",
@@ -960,6 +1223,16 @@ def render_control_tower():
         m3.metric("Ağırlıklı pipeline", money(weighted))
         m4.metric("Kazanılan", money(won))
         m5.metric("Geciken takip", overdue_followups)
+
+        stock_df_dashboard = stock_snapshot()
+        if not stock_df_dashboard.empty:
+            critical_stock = int(
+                (stock_df_dashboard["status"] != "OK").sum()
+            )
+            inbound_total = float(stock_df_dashboard["inbound_kg"].sum())
+            st.caption(
+                f"Stok uyarısı: {critical_stock} ürün · Yolda: {inbound_total/1000:,.1f} ton"
+            )
 
         st.markdown("#### Satış hunisi")
         funnel = query_df("""
@@ -1925,6 +2198,306 @@ def render_control_tower():
                 hide_index=True
             )
 
+    with procurement_tab:
+        st.markdown("### 🚚 Satın Alma + PO + Sevkiyat + Stok")
+        st.caption(
+            "Siparişten depoya kadar mal akışını izler. Stok gününü ve yeniden sipariş "
+            "ihtiyacını aylık tüketim + güvenlik stoğu + tedarik süresine göre hesaplar."
+        )
+
+        po_tab, ship_tab, stock_tab, reorder_tab, warehouse_tab = st.tabs(
+            ["📄 Satın Alma Siparişleri", "🚛 Sevkiyatlar", "🏬 Stok", "⚠️ Yeniden Sipariş", "🏢 Depolar"]
+        )
+
+        with po_tab:
+            po_df = query_df("""
+                SELECT po.id,po.po_number AS PO,po.supplier AS tedarikçi,
+                       po.product_name AS ürün,po.quantity_kg/1000.0 AS ton,
+                       po.unit_price AS birim_fiyat,po.currency AS para,
+                       po.incoterm,po.payment_terms AS ödeme,
+                       po.order_date AS sipariş_tarihi,
+                       po.requested_load_date AS istenen_yükleme,
+                       po.confirmed_load_date AS teyitli_yükleme,
+                       w.name AS depo,po.status AS durum
+                FROM purchase_orders po
+                LEFT JOIN warehouses w ON w.id=po.destination_warehouse_id
+                ORDER BY po.id DESC
+            """)
+            st.dataframe(po_df,use_container_width=True,hide_index=True)
+
+            with st.expander("Yeni PO oluştur", expanded=po_df.empty):
+                products_po=query_df("""
+                    SELECT id,name,supplier,default_currency
+                    FROM product_catalog WHERE active=1 ORDER BY name
+                """)
+                warehouses_po=query_df("""
+                    SELECT id,name FROM warehouses WHERE active=1 ORDER BY name
+                """)
+                with st.form("proc_new_po",clear_on_submit=True):
+                    po_number=st.text_input("PO numarası *",placeholder="Örn: 20260004")
+                    p_name=st.selectbox("Ürün",products_po["name"].tolist())
+                    prow=products_po[products_po["name"]==p_name].iloc[0]
+                    supplier=st.text_input("Tedarikçi *",value=str(prow["supplier"] or ""))
+                    z1,z2,z3=st.columns(3)
+                    qty_kg=z1.number_input("Miktar (kg)",min_value=1.0,value=24000.0,step=1000.0)
+                    unit_price=z2.number_input("Alış fiyatı / kg",min_value=0.0,value=0.0,step=0.01,format="%.4f")
+                    currency=z3.selectbox("Para",["EUR","USD","GBP","TRY"],index=["EUR","USD","GBP","TRY"].index(prow["default_currency"] if prow["default_currency"] in ["EUR","USD","GBP","TRY"] else "EUR"))
+                    z4,z5=st.columns(2)
+                    incoterm=z4.text_input("Incoterm",placeholder="EXW / FOB / CIF / DDP")
+                    payment_terms=z5.text_input("Ödeme şartı",placeholder="20% prepay + 80% 30 days")
+                    z6,z7,z8=st.columns(3)
+                    order_date=z6.date_input("Sipariş tarihi",value=date.today())
+                    requested_load=z7.date_input("İstenen yükleme",value=date.today()+timedelta(days=14))
+                    confirmed_load=z8.date_input("Teyitli yükleme",value=date.today()+timedelta(days=14))
+                    wh_name=st.selectbox("Hedef depo",warehouses_po["name"].tolist())
+                    warehouse_id=int(warehouses_po.loc[warehouses_po["name"]==wh_name,"id"].iloc[0])
+                    status=st.selectbox("Durum",["Sipariş Verildi","Teyit Bekliyor","Teyitli","Üretimde","Hazır","Kısmi Sevk","Tamamlandı","İptal"])
+                    notes=st.text_area("Not")
+                    if st.form_submit_button("PO kaydet",type="primary"):
+                        if not po_number.strip() or not supplier.strip():
+                            st.error("PO numarası ve tedarikçi zorunlu.")
+                        else:
+                            duplicate=int(query_df("SELECT COUNT(*) n FROM purchase_orders WHERE po_number=?",(po_number.strip(),)).iloc[0]["n"])
+                            if duplicate:
+                                st.error("Bu PO numarası zaten var.")
+                            else:
+                                execute("""INSERT INTO purchase_orders
+                                    (po_number,supplier,product_id,product_name,quantity_kg,unit_price,currency,
+                                     incoterm,payment_terms,order_date,requested_load_date,confirmed_load_date,
+                                     destination_warehouse_id,status,notes)
+                                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                    (po_number.strip(),supplier.strip(),int(prow["id"]),p_name,float(qty_kg),
+                                     float(unit_price),currency,incoterm,payment_terms,str(order_date),
+                                     str(requested_load),str(confirmed_load),warehouse_id,status,notes))
+                                st.success("PO oluşturuldu.")
+                                st.rerun()
+
+        with ship_tab:
+            shipments_df=query_df("""
+                SELECT s.id,po.po_number AS PO,po.supplier AS tedarikçi,po.product_name AS ürün,
+                       s.quantity_kg/1000.0 AS ton,s.shipment_ref AS referans,
+                       s.transport_mode AS taşıma,s.container_vehicle AS araç_konteyner,
+                       s.etd,s.eta,s.customs_date AS gümrük,s.delivery_date AS teslim,
+                       w.name AS depo,s.lot_number AS lot,s.expiry_date AS SKT,
+                       s.status AS durum,
+                       CASE WHEN s.received_to_stock=1 THEN 'Evet' ELSE '' END AS stoğa_alındı
+                FROM shipments s
+                JOIN purchase_orders po ON po.id=s.purchase_order_id
+                LEFT JOIN warehouses w ON w.id=s.destination_warehouse_id
+                ORDER BY s.id DESC
+            """)
+            st.dataframe(shipments_df,use_container_width=True,hide_index=True)
+
+            with st.expander("Yeni sevkiyat oluştur"):
+                pos=query_df("""
+                    SELECT id,po_number,supplier,product_name,quantity_kg,destination_warehouse_id
+                    FROM purchase_orders
+                    WHERE status NOT IN ('Tamamlandı','İptal')
+                    ORDER BY id DESC
+                """)
+                warehouses_s=query_df("SELECT id,name FROM warehouses WHERE active=1 ORDER BY name")
+                if pos.empty:
+                    st.info("Açık PO yok.")
+                else:
+                    with st.form("proc_new_shipment",clear_on_submit=True):
+                        po_label=st.selectbox("PO",pos.apply(lambda r:f"{r['po_number']} · {r['supplier']} · {r['product_name']}",axis=1).tolist())
+                        po_index=pos.apply(lambda r:f"{r['po_number']} · {r['supplier']} · {r['product_name']}",axis=1).tolist().index(po_label)
+                        po_row=pos.iloc[po_index]
+                        y1,y2,y3=st.columns(3)
+                        ship_qty=y1.number_input("Sevk miktarı (kg)",min_value=1.0,value=float(po_row["quantity_kg"]),step=1000.0)
+                        transport=y2.selectbox("Taşıma",["Tır","Konteyner","Hava","Parsiyel","Diğer"])
+                        shipment_ref=y3.text_input("Sevkiyat / booking ref")
+                        y4,y5=st.columns(2)
+                        carrier=y4.text_input("Nakliyeci")
+                        vehicle=y5.text_input("Araç / konteyner no")
+                        y6,y7=st.columns(2)
+                        etd=y6.date_input("ETD / çıkış",value=date.today()+timedelta(days=7))
+                        eta=y7.date_input("ETA / varış",value=date.today()+timedelta(days=14))
+                        wh_names=warehouses_s["name"].tolist()
+                        default_wh=0
+                        if po_row["destination_warehouse_id"]:
+                            ids=warehouses_s["id"].tolist()
+                            if int(po_row["destination_warehouse_id"]) in ids:
+                                default_wh=ids.index(int(po_row["destination_warehouse_id"]))
+                        wh_name=st.selectbox("Hedef depo",wh_names,index=default_wh)
+                        wh_id=int(warehouses_s.loc[warehouses_s["name"]==wh_name,"id"].iloc[0])
+                        lot=st.text_input("Lot no")
+                        expiry=st.date_input("SKT",value=date.today()+timedelta(days=365))
+                        status=st.selectbox("Durum",["Planlandı","Yükleme Bekliyor","Yüklendi","Yolda","Limanda / Sınırda","Gümrükte","Dağıtımda","Teslim Edildi","İptal"])
+                        notes=st.text_area("Not")
+                        if st.form_submit_button("Sevkiyat kaydet",type="primary"):
+                            execute("""INSERT INTO shipments
+                                (purchase_order_id,shipment_ref,quantity_kg,transport_mode,carrier,
+                                 container_vehicle,etd,eta,status,destination_warehouse_id,
+                                 lot_number,expiry_date,notes)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                (int(po_row["id"]),shipment_ref,float(ship_qty),transport,carrier,
+                                 vehicle,str(etd),str(eta),status,wh_id,lot,str(expiry),notes))
+                            execute("UPDATE purchase_orders SET status='Kısmi Sevk' WHERE id=?",(int(po_row["id"]),))
+                            st.success("Sevkiyat oluşturuldu.")
+                            st.rerun()
+
+            if not shipments_df.empty:
+                st.markdown("##### Sevkiyat durumunu güncelle / stoğa al")
+                ship_id=st.selectbox(
+                    "Sevkiyat",
+                    shipments_df["id"].tolist(),
+                    format_func=lambda x:f"#{x} · {shipments_df.loc[shipments_df['id']==x,'PO'].iloc[0]} · {shipments_df.loc[shipments_df['id']==x,'ürün'].iloc[0]}",
+                    key="proc_ship_update"
+                )
+                raw=query_df("SELECT * FROM shipments WHERE id=?",(int(ship_id),)).iloc[0]
+                u1,u2,u3=st.columns(3)
+                ship_statuses=["Planlandı","Yükleme Bekliyor","Yüklendi","Yolda","Limanda / Sınırda","Gümrükte","Dağıtımda","Teslim Edildi","İptal"]
+                current_status=raw["status"] if raw["status"] in ship_statuses else "Planlandı"
+                new_status=u1.selectbox("Yeni durum",ship_statuses,index=ship_statuses.index(current_status))
+                customs_date=u2.date_input("Gümrük tarihi",value=date.today(),key="proc_customs_date")
+                delivery_date=u3.date_input("Teslim tarihi",value=date.today(),key="proc_delivery_date")
+                c1,c2=st.columns(2)
+                if c1.button("Sevkiyatı güncelle",use_container_width=True):
+                    execute("""UPDATE shipments SET status=?,
+                               customs_date=CASE WHEN ?='Gümrükte' THEN ? ELSE customs_date END,
+                               delivery_date=CASE WHEN ?='Teslim Edildi' THEN ? ELSE delivery_date END
+                               WHERE id=?""",
+                            (new_status,new_status,str(customs_date),new_status,str(delivery_date),int(ship_id)))
+                    st.success("Sevkiyat güncellendi.")
+                    st.rerun()
+                if c2.button("Teslim al ve stoğa giriş yap",type="primary",use_container_width=True):
+                    ok,msg=receive_shipment_to_stock(ship_id)
+                    (st.success if ok else st.warning)(msg)
+                    if ok:
+                        st.rerun()
+
+        with stock_tab:
+            stock_by_lot=query_df("""
+                SELECT il.id,il.product_name AS ürün,w.name AS depo,
+                       il.lot_number AS lot,il.expiry_date AS SKT,
+                       il.quantity_received_kg/1000.0 AS giriş_ton,
+                       il.quantity_available_kg/1000.0 AS mevcut_ton,
+                       il.quantity_reserved_kg/1000.0 AS rezerve_ton,
+                       il.unit_cost AS birim_maliyet,il.currency AS para,
+                       il.received_date AS giriş_tarihi,po.po_number AS PO
+                FROM inventory_lots il
+                JOIN warehouses w ON w.id=il.warehouse_id
+                LEFT JOIN purchase_orders po ON po.id=il.purchase_order_id
+                ORDER BY il.received_date DESC,il.id DESC
+            """)
+            st.dataframe(stock_by_lot,use_container_width=True,hide_index=True)
+
+            summary=stock_snapshot()
+            st.markdown("##### Ürün bazında stok özeti")
+            if summary.empty:
+                st.info("Henüz stok verisi yok.")
+            else:
+                stock_view=summary.rename(columns={
+                    "name":"ürün","supplier":"tedarikçi","net_available_kg":"net_stok_kg",
+                    "inbound_kg":"yolda_kg","monthly_usage_kg":"aylık_tüketim_kg",
+                    "stock_days":"stok_gün","suggested_order_kg":"önerilen_sipariş_kg",
+                    "status":"durum"
+                })
+                st.dataframe(
+                    stock_view[["ürün","tedarikçi","net_stok_kg","yolda_kg","aylık_tüketim_kg",
+                                "stok_gün","safety_stock_days","lead_time_days",
+                                "önerilen_sipariş_kg","durum"]],
+                    use_container_width=True,hide_index=True
+                )
+
+            st.markdown("##### Manuel stok düzeltmesi / rezervasyon")
+            if not stock_by_lot.empty:
+                lot_id=st.selectbox(
+                    "Stok lotu",
+                    stock_by_lot["id"].tolist(),
+                    format_func=lambda x:f"#{x} · {stock_by_lot.loc[stock_by_lot['id']==x,'ürün'].iloc[0]} · {stock_by_lot.loc[stock_by_lot['id']==x,'depo'].iloc[0]}",
+                    key="proc_lot_select"
+                )
+                lotrow=query_df("SELECT * FROM inventory_lots WHERE id=?",(int(lot_id),)).iloc[0]
+                l1,l2=st.columns(2)
+                available=l1.number_input("Mevcut miktar (kg)",min_value=0.0,value=float(lotrow["quantity_available_kg"] or 0),step=100.0)
+                reserved=l2.number_input("Rezerve miktar (kg)",min_value=0.0,value=float(lotrow["quantity_reserved_kg"] or 0),step=100.0)
+                if st.button("Stok miktarını güncelle"):
+                    execute("UPDATE inventory_lots SET quantity_available_kg=?,quantity_reserved_kg=? WHERE id=?",
+                            (float(available),float(reserved),int(lot_id)))
+                    st.success("Stok güncellendi.")
+                    st.rerun()
+
+        with reorder_tab:
+            summary=stock_snapshot()
+            if summary.empty:
+                st.info("Ürün kataloğu veya stok politikası yok.")
+            else:
+                alerts=summary[summary["status"]!="OK"].copy()
+                st.metric("Sipariş / stok uyarısı",len(alerts))
+                if alerts.empty:
+                    st.success("Tanımlı tüketim politikalarına göre kritik ürün görünmüyor.")
+                else:
+                    view=alerts.rename(columns={
+                        "name":"ürün","supplier":"tedarikçi","net_available_kg":"net_stok_kg",
+                        "inbound_kg":"yolda_kg","monthly_usage_kg":"aylık_tüketim_kg",
+                        "stock_days":"stok_gün","reorder_point_kg":"sipariş_noktası_kg",
+                        "suggested_order_kg":"önerilen_sipariş_kg","status":"durum"
+                    })
+                    st.dataframe(
+                        view[["ürün","tedarikçi","net_stok_kg","yolda_kg","aylık_tüketim_kg",
+                              "stok_gün","lead_time_days","safety_stock_days",
+                              "sipariş_noktası_kg","önerilen_sipariş_kg","durum"]],
+                        use_container_width=True,hide_index=True
+                    )
+
+                st.markdown("##### Ürün stok politikası")
+                products_pol=query_df("SELECT id,name FROM product_catalog WHERE active=1 ORDER BY name")
+                pol_name=st.selectbox("Ürün",products_pol["name"].tolist(),key="proc_policy_product")
+                pid=int(products_pol.loc[products_pol["name"]==pol_name,"id"].iloc[0])
+                current=query_df("SELECT * FROM inventory_policy WHERE product_id=?",(pid,))
+                if current.empty:
+                    monthly=0.0; safety=30; lead=45; review=7; pnotes=""
+                else:
+                    cr=current.iloc[0]
+                    monthly=float(cr["monthly_usage_kg"] or 0); safety=int(cr["safety_stock_days"] or 30)
+                    lead=int(cr["lead_time_days"] or 45); review=int(cr["reorder_review_days"] or 7); pnotes=str(cr["notes"] or "")
+                p1,p2,p3,p4=st.columns(4)
+                monthly_new=p1.number_input("Aylık tüketim (kg)",min_value=0.0,value=monthly,step=1000.0,key="proc_policy_monthly")
+                safety_new=p2.number_input("Güvenlik stoğu (gün)",min_value=0,value=safety,step=5,key="proc_policy_safety")
+                lead_new=p3.number_input("Tedarik süresi (gün)",min_value=0,value=lead,step=5,key="proc_policy_lead")
+                review_new=p4.number_input("Sipariş gözden geçirme (gün)",min_value=0,value=review,step=1,key="proc_policy_review")
+                pnotes_new=st.text_input("Politika notu",value=pnotes,key="proc_policy_notes")
+                if st.button("Stok politikasını kaydet",type="primary"):
+                    execute("""INSERT INTO inventory_policy
+                        (product_id,monthly_usage_kg,safety_stock_days,lead_time_days,reorder_review_days,notes,updated_at)
+                        VALUES (?,?,?,?,?,?,?)
+                        ON CONFLICT(product_id) DO UPDATE SET
+                          monthly_usage_kg=excluded.monthly_usage_kg,
+                          safety_stock_days=excluded.safety_stock_days,
+                          lead_time_days=excluded.lead_time_days,
+                          reorder_review_days=excluded.reorder_review_days,
+                          notes=excluded.notes,
+                          updated_at=excluded.updated_at""",
+                        (pid,float(monthly_new),int(safety_new),int(lead_new),int(review_new),
+                         pnotes_new,datetime.now().isoformat(timespec="seconds")))
+                    st.success("Stok politikası kaydedildi.")
+                    st.rerun()
+
+        with warehouse_tab:
+            wh_df=query_df("""
+                SELECT id,name AS depo,warehouse_type AS tip,city AS şehir,
+                       CASE WHEN active=1 THEN 'Aktif' ELSE 'Pasif' END AS durum,notes AS notlar
+                FROM warehouses ORDER BY name
+            """)
+            st.dataframe(wh_df,use_container_width=True,hide_index=True)
+            with st.form("proc_new_warehouse",clear_on_submit=True):
+                w1,w2=st.columns(2)
+                wname=w1.text_input("Depo adı *")
+                wtype=w2.selectbox("Tip",["Normal Depo","Antrepo / Bonded","Müşteri Konsinye","Diğer"])
+                city=st.text_input("Şehir")
+                notes=st.text_area("Not")
+                if st.form_submit_button("Depo ekle") and wname.strip():
+                    exists=int(query_df("SELECT COUNT(*) n FROM warehouses WHERE lower(name)=lower(?)",(wname.strip(),)).iloc[0]["n"])
+                    if exists:
+                        st.warning("Bu depo zaten var.")
+                    else:
+                        execute("INSERT INTO warehouses (name,warehouse_type,city,active,notes) VALUES (?,?,?,1,?)",
+                                (wname.strip(),wtype,city,notes))
+                        st.success("Depo eklendi.")
+                        st.rerun()
+
     with pipeline_tab:
         pipeline = query_df("""
             SELECT o.id, c.name AS müşteri, o.product AS ürün, o.stage AS aşama,
@@ -2248,6 +2821,40 @@ def render_control_tower():
             LIMIT 10
         """)
         st.dataframe(top, use_container_width=True, hide_index=True)
+
+        st.markdown("#### Satın alma / stok uyarıları")
+        ceo_stock=stock_snapshot()
+        if ceo_stock.empty:
+            st.info("Henüz stok politikası / stok verisi yok.")
+        else:
+            ceo_alerts=ceo_stock[ceo_stock["status"]!="OK"].copy()
+            if ceo_alerts.empty:
+                st.success("Kritik stok / yeniden sipariş uyarısı yok.")
+            else:
+                ceo_alerts=ceo_alerts.rename(columns={
+                    "name":"ürün","net_available_kg":"net_stok_kg","inbound_kg":"yolda_kg",
+                    "stock_days":"stok_gün","suggested_order_kg":"önerilen_sipariş_kg","status":"durum"
+                })
+                st.dataframe(
+                    ceo_alerts[["ürün","net_stok_kg","yolda_kg","stok_gün",
+                                "önerilen_sipariş_kg","durum"]].head(10),
+                    use_container_width=True,hide_index=True
+                )
+
+        st.markdown("#### Yaklaşan sevkiyatlar")
+        ceo_ship=query_df("""
+            SELECT po.product_name AS ürün,po.supplier AS tedarikçi,
+                   s.quantity_kg/1000.0 AS ton,s.eta,
+                   s.status AS durum,w.name AS depo
+            FROM shipments s
+            JOIN purchase_orders po ON po.id=s.purchase_order_id
+            LEFT JOIN warehouses w ON w.id=s.destination_warehouse_id
+            WHERE s.received_to_stock=0 AND s.status!='İptal'
+            ORDER BY CASE WHEN s.eta='' THEN 1 ELSE 0 END,s.eta ASC
+            LIMIT 8
+        """)
+        if not ceo_ship.empty:
+            st.dataframe(ceo_ship,use_container_width=True,hide_index=True)
 
         st.markdown("#### Teklif kârlılığı")
         recent_quotes = query_df("""
