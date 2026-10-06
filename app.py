@@ -96,6 +96,8 @@ def search_bing_rss(query, max_results=8):
     return out
 
 def ddg_final_url(href):
+    if href.startswith("//"):
+        href = "https:" + href
     try:
         if "duckduckgo.com/l/?" in href:
             q = parse_qs(urlparse(href).query)
@@ -174,6 +176,9 @@ def choose_sales_email(email_blob):
     scored = []
     for e in emails:
         low = e.lower()
+        local_part = low.split("@", 1)[0]
+        if any(k in local_part for k in ["purchase", "procurement", "buying", "career", "privacy", "noreply", "no-reply"]) or local_part in {"hr", "jobs", "legal"}:
+            continue
         score = 0
         if any(k in low for k in ["export", "sales", "commercial", "business", "international", "global"]):
             score += 10
@@ -182,6 +187,8 @@ def choose_sales_email(email_blob):
         if any(k in low for k in ["purchase", "procurement", "buying", "hr", "career", "privacy"]):
             score -= 8
         scored.append((score, e))
+    if not scored:
+        return ""
     scored.sort(reverse=True)
     return scored[0][1]
 
@@ -466,8 +473,12 @@ def supplier_manufacturer_status(product, title, snippet, body, url):
 
     if is_blacklisted(url):
         return "unclear", 0
-    if maker_hit and product_hit >= max(1, min(2, len(product_words))) and not trader_hit:
-        return "confirmed", 30
+    # Keyword matches cannot establish ownership of a factory or an official site.
+    # Never label automated search candidates as independently confirmed.
+    if trader_hit:
+        return "unclear", 0
+    if maker_hit and product_hit >= max(1, min(2, len(product_words))):
+        return "likely", 20
     if maker_hit and product_hit >= 1:
         return "likely", 20
     if product_hit >= 1:
@@ -487,7 +498,7 @@ def turkey_presence_check(company, product):
             title = clean(r.get("title", ""))
             text = f"{title} {snippet}".lower()
             if "turkey" in text or "türkiye" in text or "turkish" in text:
-                hits.append(f"{title} — {snippet[:180]}")
+                hits.append(f"Doğrulanması gereken arama bulgusu: {title} — {snippet[:180]} | {r.get('href', '')}")
                 break
         if hits:
             break
@@ -504,8 +515,6 @@ def supplier_score(status, email, turkey_presence, text, objective):
 
     if email:
         score += 15
-    if turkey_presence:
-        score += 10
 
     low = text.lower()
     if any(x in low for x in ["export", "international sales", "global sales", "business development"]):
@@ -596,8 +605,8 @@ def supplier_scan(product, country_label, objective, max_companies, deep_scan, t
 
         status_value, base_score = supplier_manufacturer_status(product, title, snippet, body, url)
 
-        # Strict mode: do not list obvious non-manufacturers.
-        if status_value == "unclear" and not any(x in f"{title} {snippet}".lower() for x in MANUFACTURING_TERMS):
+        # Exclude traders and candidates without a product/manufacturing signal.
+        if status_value == "unclear":
             continue
 
         company = company_guess(title, url)
@@ -615,11 +624,12 @@ def supplier_scan(product, country_label, objective, max_companies, deep_scan, t
         rows.append({
             "Fit Score": score,
             "Firma": company,
-            "Ülke / Pazar": country_label,
+            "Hedef Pazar": country_label,
+            "Üretici Ülkesi": "",
             "Website": f"https://{get_domain(url)}" if get_domain(url) else url,
             "Manufacturer Status": status_value,
             "Üretim Kanıtı": evidence,
-            "Türkiye Varlığı": turkey_presence,
+            "Türkiye Varlığı": turkey_presence or ("Doğrulanamadı; temsilcisi olmadığı anlamına gelmez." if turkey_check else "Kontrol edilmedi"),
             "Satış / Export E-mail": sales_email,
             "Telefon": phone,
             "Kaynak URL": url,
@@ -650,7 +660,7 @@ st.caption("Şirket satın alma + yeni ürün / hammadde / üretici / distribüt
 
 main_tab1, main_tab2 = st.tabs([
     "🏢 Firma Satın Alma / Halefiyet",
-    "🧪 Ürün & Hammadde / Üretici Bulucu",
+    "🧪 Satın Alma / Üretici Bulucu",
 ])
 
 # -------------------------
@@ -730,6 +740,7 @@ with main_tab1:
 # -------------------------
 with main_tab2:
     st.subheader("Yeni ürün, hammadde, üretici ve temsilcilik araştırması")
+    st.info("Ücretli yapay zekâ API'si kullanılmaz. Ücretsiz arama servisleri erişimi kısıtlayabilir. Sonuçlar üretici adaylarıdır; otomatik anahtar kelime eşleşmesi üretim doğrulaması değildir.")
     st.write(
         "Ürün adını yazın. Sistem üretici odaklı arama yapar, pazar yerlerini ve açık tüccar sonuçlarını eler; "
         "mümkünse resmi üretim sayfası, export/sales iletişimi ve Türkiye varlığını bulur."
@@ -779,7 +790,7 @@ with main_tab2:
                 turkey_check,
             )
             if st.session_state["supplier_results"].empty:
-                st.warning("Üretici sinyalini doğrulayabildiğim sonuç çıkmadı. Ürün adını İngilizce veya daha teknik isimle tekrar deneyin.")
+                st.warning("Listelenecek üretici adayı bulunamadı. Bu, üretici olmadığı anlamına gelmez: arama servisine erişim, sayfa okuma veya filtreler nedeniyle sonuç alınamamış olabilir. Ürün adını İngilizce veya teknik adıyla deneyin.")
             else:
                 st.success(f"{len(st.session_state['supplier_results'])} üretici adayı bulundu.")
 
@@ -820,10 +831,15 @@ with main_tab2:
 
         st.markdown("### ✉️ Firma bazında hazır teklif / temsilcilik e-postası")
         firms = supplier_view["Firma"].tolist()
-        selected_firm = st.selectbox("Firma seç", firms, key="supplier_mail_firm")
-        selected_row = supplier_view[supplier_view["Firma"] == selected_firm].iloc[0]
-        st.text_input("Konu", value=selected_row["Taslak Konu"], key="supplier_subject")
-        st.text_area("E-posta", value=selected_row["Taslak E-mail"], height=430, key="supplier_email_body")
+        if firms:
+            selected_index = st.selectbox("Firma seç", list(range(len(supplier_view))), format_func=lambda i: supplier_view.iloc[i]["Firma"], key="supplier_mail_index")
+            selected_row = supplier_view.iloc[selected_index]
+            draft_key = f"{selected_row['Kaynak URL']}:{selected_row['Taslak Konu']}"
+            st.text_input("Konu", value=selected_row["Taslak Konu"], key=f"subject:{draft_key}")
+            st.text_area("E-posta", value=selected_row["Taslak E-mail"], height=430, key=f"body:{draft_key}")
+            st.caption("Bu bir taslaktır. Program e-posta göndermez. Sonuçları saklamak için CSV veya JSON indirin; oturum verileri kalıcı kayıt değildir.")
+        else:
+            st.info("Seçtiğiniz minimum skoru geçen firma yok. Daha düşük bir skor seçebilirsiniz.")
 
 st.markdown("---")
 st.caption(
