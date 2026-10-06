@@ -1861,6 +1861,18 @@ def render_control_tower():
                         customer_id, opp_id, product_name.strip(), inputs, calc
                     )
                     if opp_id:
+                        old_stage_row = query_df(
+                            "SELECT stage, owner FROM opportunities WHERE id=?",
+                            (int(opp_id),)
+                        )
+                        old_stage = (
+                            str(old_stage_row.iloc[0]["stage"])
+                            if not old_stage_row.empty else ""
+                        )
+                        opp_owner = (
+                            str(old_stage_row.iloc[0]["owner"] or "")
+                            if not old_stage_row.empty else customer_owner
+                        )
                         execute(
                             """UPDATE opportunities
                                SET stage='Teklif', probability=?,
@@ -1874,6 +1886,18 @@ def render_control_tower():
                                 int(opp_id),
                             )
                         )
+                        if old_stage != "Teklif":
+                            execute(
+                                """INSERT INTO opportunity_stage_history
+                                (opportunity_id,old_stage,new_stage,owner,note)
+                                VALUES (?,?,'Teklif',?,?)""",
+                                (
+                                    int(opp_id),
+                                    old_stage,
+                                    opp_owner,
+                                    "Teklif & Kârlılık motorundan teklif kaydedildi"
+                                )
+                            )
                     st.success("Teklif hesabı kaydedildi.")
                     st.rerun()
 
