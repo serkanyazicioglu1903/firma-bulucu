@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches:
+      - main
       - as-control-tower-v1
 
 jobs:
