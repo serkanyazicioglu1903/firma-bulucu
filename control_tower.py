@@ -385,6 +385,110 @@ def init_db():
             notes TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS quality_cases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            case_no TEXT NOT NULL UNIQUE,
+            opened_date TEXT NOT NULL,
+            customer_id INTEGER,
+            supplier TEXT DEFAULT '',
+            product_id INTEGER,
+            product_name TEXT NOT NULL,
+            inventory_lot_id INTEGER,
+            purchase_order_id INTEGER,
+            shipment_id INTEGER,
+            complaint_type TEXT DEFAULT 'Kalite',
+            severity TEXT DEFAULT 'Orta',
+            status TEXT DEFAULT 'Açık',
+            affected_quantity_kg REAL DEFAULT 0,
+            estimated_loss REAL DEFAULT 0,
+            currency TEXT DEFAULT 'EUR',
+            customer_claim_amount REAL DEFAULT 0,
+            description TEXT NOT NULL,
+            immediate_action TEXT DEFAULT '',
+            root_cause TEXT DEFAULT '',
+            supplier_response TEXT DEFAULT '',
+            final_resolution TEXT DEFAULT '',
+            owner TEXT DEFAULT '',
+            target_close_date TEXT DEFAULT '',
+            closed_date TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(customer_id) REFERENCES customers(id),
+            FOREIGN KEY(product_id) REFERENCES product_catalog(id),
+            FOREIGN KEY(inventory_lot_id) REFERENCES inventory_lots(id),
+            FOREIGN KEY(purchase_order_id) REFERENCES purchase_orders(id),
+            FOREIGN KEY(shipment_id) REFERENCES shipments(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS quality_actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            quality_case_id INTEGER NOT NULL,
+            action_type TEXT DEFAULT 'Takip',
+            action_text TEXT NOT NULL,
+            owner TEXT DEFAULT '',
+            due_date TEXT DEFAULT '',
+            status TEXT DEFAULT 'Açık',
+            evidence_ref TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT DEFAULT '',
+            FOREIGN KEY(quality_case_id) REFERENCES quality_cases(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS quality_recoveries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            quality_case_id INTEGER NOT NULL,
+            recovery_type TEXT NOT NULL,
+            amount REAL DEFAULT 0,
+            currency TEXT DEFAULT 'EUR',
+            quantity_kg REAL DEFAULT 0,
+            reference TEXT DEFAULT '',
+            recovery_date TEXT DEFAULT '',
+            status TEXT DEFAULT 'Bekleniyor',
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(quality_case_id) REFERENCES quality_cases(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS compliance_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_type TEXT NOT NULL,
+            owner_name TEXT NOT NULL,
+            product_id INTEGER,
+            supplier TEXT DEFAULT '',
+            document_type TEXT NOT NULL,
+            market_country TEXT DEFAULT '',
+            authority TEXT DEFAULT '',
+            document_no TEXT DEFAULT '',
+            issue_date TEXT DEFAULT '',
+            expiry_date TEXT DEFAULT '',
+            renewal_lead_days INTEGER DEFAULT 60,
+            status TEXT DEFAULT 'Geçerli',
+            document_ref TEXT DEFAULT '',
+            responsible TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(product_id) REFERENCES product_catalog(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS regulatory_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER,
+            product_name TEXT NOT NULL,
+            market_country TEXT NOT NULL,
+            requirement_type TEXT NOT NULL,
+            authority TEXT DEFAULT '',
+            requirement TEXT NOT NULL,
+            status TEXT DEFAULT 'Araştırılıyor',
+            next_action TEXT DEFAULT '',
+            due_date TEXT DEFAULT '',
+            responsible TEXT DEFAULT '',
+            source_ref TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(product_id) REFERENCES product_catalog(id)
+        );
         """)
 
         ensure_column(conn, "opportunities", "last_contact_date", "TEXT DEFAULT ''")
@@ -395,6 +499,8 @@ def init_db():
         ensure_column(conn, "customers", "priority_tier", "TEXT DEFAULT 'B'")
         ensure_column(conn, "customers", "credit_limit", "REAL DEFAULT 0")
         ensure_column(conn, "customers", "default_payment_days", "INTEGER DEFAULT 90")
+        ensure_column(conn, "inventory_lots", "quality_status", "TEXT DEFAULT 'Released'")
+        ensure_column(conn, "inventory_lots", "quality_case_id", "INTEGER")
         conn.commit()
 
 
@@ -1295,6 +1401,102 @@ def record_payable_payment(payable_id, amount, transaction_date,
     return True, "Ödeme kaydedildi."
 
 
+def quality_case_summary():
+    df=query_df("""
+        SELECT q.id,q.case_no,q.opened_date,c.name AS customer,q.supplier,
+               q.product_name,q.complaint_type,q.severity,q.status,
+               q.affected_quantity_kg,q.estimated_loss,q.currency,
+               q.customer_claim_amount,q.owner,q.target_close_date,
+               q.inventory_lot_id,q.description,q.immediate_action,
+               q.root_cause,q.supplier_response,q.final_resolution
+        FROM quality_cases q
+        LEFT JOIN customers c ON c.id=q.customer_id
+        ORDER BY CASE q.status
+          WHEN 'Açık' THEN 1 WHEN 'Tedarikçi Bekleniyor' THEN 2
+          WHEN 'Müşteri Bekleniyor' THEN 3 WHEN 'İncelemede' THEN 4
+          WHEN 'Çözümde' THEN 5 ELSE 6 END,
+          CASE q.severity WHEN 'Kritik' THEN 1 WHEN 'Yüksek' THEN 2
+          WHEN 'Orta' THEN 3 ELSE 4 END,
+          q.opened_date ASC,q.id DESC
+    """)
+    if df.empty:
+        return df
+    today=pd.Timestamp(date.today())
+    target=pd.to_datetime(df["target_close_date"],errors="coerce")
+    df["gecikme_gün"]=((today-target).dt.days.fillna(0)).clip(lower=0).astype(int)
+    return df
+
+
+def quality_recovery_total(case_id, currency=None):
+    df=query_df("""
+        SELECT amount,currency,status
+        FROM quality_recoveries
+        WHERE quality_case_id=? AND status='Tamamlandı'
+    """,(int(case_id),))
+    if df.empty:
+        return 0.0
+    if currency:
+        df=df[df["currency"]==currency].copy()
+    return float(df["amount"].sum()) if not df.empty else 0.0
+
+
+def certificate_alerts():
+    df=query_df("""
+        SELECT id,owner_type,owner_name,product_id,supplier,document_type,
+               market_country,authority,document_no,issue_date,expiry_date,
+               renewal_lead_days,status,document_ref,responsible,notes
+        FROM compliance_documents
+        ORDER BY expiry_date ASC,id ASC
+    """)
+    if df.empty:
+        return df
+    today=pd.Timestamp(date.today())
+    exp=pd.to_datetime(df["expiry_date"],errors="coerce")
+    df["kalan_gün"]=(exp-today).dt.days
+    def alert(row):
+        if pd.isna(row["kalan_gün"]):
+            return "TARİH YOK"
+        days=int(row["kalan_gün"])
+        lead=int(row["renewal_lead_days"] or 60)
+        if days < 0:
+            return "SÜRESİ GEÇTİ"
+        if days <= 30:
+            return "KRİTİK"
+        if days <= lead:
+            return "YENİLEME BAŞLAT"
+        return "OK"
+    df["uyarı"]=df.apply(alert,axis=1)
+    return df
+
+
+def regulatory_alerts():
+    df=query_df("""
+        SELECT r.id,r.product_name AS ürün,r.market_country AS ülke,
+               r.requirement_type AS tip,r.authority AS otorite,
+               r.requirement AS gereklilik,r.status AS durum,
+               r.next_action AS sonraki_aksiyon,r.due_date AS son_tarih,
+               r.responsible AS sorumlu,r.source_ref AS kaynak,r.notes AS notlar
+        FROM regulatory_items r
+        ORDER BY CASE r.status
+          WHEN 'Bloke' THEN 1 WHEN 'Eksik' THEN 2 WHEN 'Araştırılıyor' THEN 3
+          WHEN 'Başvuruldu' THEN 4 ELSE 5 END,
+          r.due_date ASC,r.id DESC
+    """)
+    if df.empty:
+        return df
+    today=pd.Timestamp(date.today())
+    due=pd.to_datetime(df["son_tarih"],errors="coerce")
+    df["gecikme_gün"]=((today-due).dt.days.fillna(0)).clip(lower=0).astype(int)
+    return df
+
+
+def set_lot_quality_status(lot_id,status,case_id=None):
+    execute(
+        "UPDATE inventory_lots SET quality_status=?,quality_case_id=? WHERE id=?",
+        (status,int(case_id) if case_id else None,int(lot_id))
+    )
+
+
 def calculate_quote(
     quantity_kg,
     buy_price_per_kg,
@@ -1477,7 +1679,7 @@ def render_control_tower():
     st.subheader("🧭 AS CONTROL TOWER")
     st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
 
-    dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, pipeline_tab, followup_tab, tasks_tab, ceo_tab = st.tabs(
+    dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, quality_tab, pipeline_tab, followup_tab, tasks_tab, ceo_tab = st.tabs(
         [
             "📊 Yönetici Paneli",
             "👥 CRM / Müşteri 360",
@@ -1485,6 +1687,7 @@ def render_control_tower():
             "🧮 Teklif & Kârlılık",
             "🚚 Satın Alma & Stok",
             "💶 Finans & Nakit",
+            "🧪 Kalite & Regülasyon",
             "💰 Satış Pipeline",
             "📞 Takip Merkezi",
             "✅ Görevler",
@@ -1543,6 +1746,15 @@ def render_control_tower():
             inbound_total = float(stock_df_dashboard["inbound_kg"].sum())
             st.caption(
                 f"Stok uyarısı: {critical_stock} ürün · Yolda: {inbound_total/1000:,.1f} ton"
+            )
+
+        qdash=quality_case_summary()
+        certdash=certificate_alerts()
+        open_quality=0 if qdash.empty else int((~qdash["status"].isin(["Kapandı","İptal"])).sum())
+        critical_cert=0 if certdash.empty else int(certdash["uyarı"].isin(["SÜRESİ GEÇTİ","KRİTİK"]).sum())
+        if open_quality or critical_cert:
+            st.caption(
+                f"Kalite/claim açık dosya: {open_quality} · Kritik/süresi geçmiş belge: {critical_cert}"
             )
 
         st.markdown("#### Satış hunisi")
@@ -3229,6 +3441,387 @@ def render_control_tower():
             """)
             st.dataframe(tx,use_container_width=True,hide_index=True)
 
+    with quality_tab:
+        st.markdown("### 🧪 Kalite + Claim + Sertifika + Regülasyon Merkezi")
+        st.caption(
+            "Şikâyeti lota bağlar, HOLD/RELEASE yönetir, tedarikçi ve müşteri aksiyonlarını "
+            "izler, zararı ve geri kazanımı takip eder; sertifika/regülasyon son tarihlerini uyarır."
+        )
+
+        cases_tab, case_detail_tab, cert_tab, reg_tab = st.tabs(
+            ["🚨 Kalite / Claim Dosyaları","🧰 Dosya Aksiyonları","📜 Sertifikalar","🌍 Regülasyon"]
+        )
+
+        with cases_tab:
+            qcases=quality_case_summary()
+            if qcases.empty:
+                st.info("Açık kalite/claim dosyası yok.")
+            else:
+                qview=qcases.rename(columns={
+                    "case_no":"dosya_no","opened_date":"açılış","customer":"müşteri",
+                    "supplier":"tedarikçi","product_name":"ürün","complaint_type":"tip",
+                    "severity":"önem","status":"durum","affected_quantity_kg":"etkilenen_kg",
+                    "estimated_loss":"tahmini_zarar","customer_claim_amount":"müşteri_claim",
+                    "owner":"sorumlu","target_close_date":"hedef_kapanış"
+                })
+                st.dataframe(
+                    qview[["id","dosya_no","açılış","müşteri","tedarikçi","ürün","tip",
+                           "önem","durum","etkilenen_kg","tahmini_zarar","currency",
+                           "müşteri_claim","sorumlu","hedef_kapanış","gecikme_gün"]],
+                    use_container_width=True,hide_index=True
+                )
+
+            with st.expander("Yeni kalite / claim dosyası aç",expanded=qcases.empty):
+                customers_q=query_df("SELECT id,name FROM customers ORDER BY name")
+                products_q=query_df("SELECT id,name,supplier FROM product_catalog WHERE active=1 ORDER BY name")
+                lots_q=query_df("""
+                    SELECT il.id,il.product_id,il.product_name,w.name AS warehouse,
+                           il.lot_number,il.expiry_date,il.quantity_available_kg,
+                           il.quality_status,il.purchase_order_id,il.shipment_id
+                    FROM inventory_lots il
+                    JOIN warehouses w ON w.id=il.warehouse_id
+                    ORDER BY il.id DESC
+                """)
+                pos_q=query_df("SELECT id,po_number,supplier,product_id,product_name FROM purchase_orders ORDER BY id DESC")
+                ships_q=query_df("SELECT id,purchase_order_id,shipment_ref,lot_number FROM shipments ORDER BY id DESC")
+
+                with st.form("quality_new_case",clear_on_submit=True):
+                    c1,c2,c3=st.columns(3)
+                    case_no=c1.text_input("Dosya no *",placeholder="Q-2026-001")
+                    opened=c2.date_input("Açılış tarihi",value=date.today())
+                    severity=c3.selectbox("Önem",["Kritik","Yüksek","Orta","Düşük"])
+                    customer_map={"— Müşteri yok / iç kalite —":None}
+                    for _,r in customers_q.iterrows():
+                        customer_map[r["name"]]=int(r["id"])
+                    customer_label=st.selectbox("Müşteri",list(customer_map.keys()))
+                    product_name=st.selectbox("Ürün",products_q["name"].tolist())
+                    prod=products_q[products_q["name"]==product_name].iloc[0]
+                    supplier=st.text_input("Tedarikçi",value=str(prod["supplier"] or ""))
+                    product_id=int(prod["id"])
+
+                    lot_map={"— Lota bağlama —":None}
+                    product_lots=lots_q[lots_q["product_id"]==product_id] if not lots_q.empty else pd.DataFrame()
+                    if not product_lots.empty:
+                        for _,lr in product_lots.iterrows():
+                            label=f"#{int(lr['id'])} · {lr['warehouse']} · Lot {lr['lot_number'] or '-'} · {lr['quantity_available_kg']/1000:.2f} t"
+                            lot_map[label]=int(lr["id"])
+                    lot_label=st.selectbox("Stok lotu",list(lot_map.keys()))
+                    lot_id=lot_map[lot_label]
+
+                    po_map={"— PO bağlama —":None}
+                    product_pos=pos_q[pos_q["product_id"]==product_id] if not pos_q.empty else pd.DataFrame()
+                    if not product_pos.empty:
+                        for _,pr in product_pos.iterrows():
+                            po_map[f"{pr['po_number']} · {pr['supplier']}"]=int(pr["id"])
+                    po_label=st.selectbox("PO",list(po_map.keys()))
+                    po_id=po_map[po_label]
+
+                    shipment_map={"— Sevkiyat bağlama —":None}
+                    if po_id and not ships_q.empty:
+                        related_ships=ships_q[ships_q["purchase_order_id"]==po_id]
+                        for _,sr in related_ships.iterrows():
+                            shipment_map[f"#{int(sr['id'])} · {sr['shipment_ref'] or '-'} · Lot {sr['lot_number'] or '-'}"]=int(sr["id"])
+                    shipment_label=st.selectbox("Sevkiyat",list(shipment_map.keys()))
+                    shipment_id=shipment_map[shipment_label]
+
+                    c4,c5,c6=st.columns(3)
+                    complaint_type=c4.selectbox("Dosya tipi",["Kalite","Müşteri Claim","Tedarikçi Claim","Regülasyon","Ambalaj","Lojistik","Diğer"])
+                    affected=c5.number_input("Etkilenen miktar (kg)",min_value=0.0,value=0.0,step=100.0)
+                    currency=c6.selectbox("Para",["EUR","USD","GBP","TRY"],key="quality_case_currency")
+                    c7,c8=st.columns(2)
+                    estimated_loss=c7.number_input("Tahmini zarar",min_value=0.0,value=0.0,step=1000.0)
+                    customer_claim=c8.number_input("Müşteri claim tutarı",min_value=0.0,value=0.0,step=1000.0)
+                    description=st.text_area("Problem / şikâyet açıklaması *")
+                    immediate=st.text_area("İlk aksiyon",placeholder="Stoku HOLD et, müşterideki lotları say, numune al...")
+                    c9,c10=st.columns(2)
+                    owner=c9.text_input("Sorumlu")
+                    target_close=c10.date_input("Hedef kapanış",value=date.today()+timedelta(days=14))
+                    hold_lot=st.checkbox("Seçili lotu HOLD'a al",value=bool(lot_id))
+
+                    if st.form_submit_button("Kalite dosyasını aç",type="primary"):
+                        if not case_no.strip() or not description.strip():
+                            st.error("Dosya no ve problem açıklaması zorunlu.")
+                        else:
+                            duplicate=int(query_df("SELECT COUNT(*) n FROM quality_cases WHERE case_no=?",(case_no.strip(),)).iloc[0]["n"])
+                            if duplicate:
+                                st.error("Bu dosya numarası zaten var.")
+                            else:
+                                execute("""INSERT INTO quality_cases
+                                    (case_no,opened_date,customer_id,supplier,product_id,product_name,
+                                     inventory_lot_id,purchase_order_id,shipment_id,complaint_type,
+                                     severity,status,affected_quantity_kg,estimated_loss,currency,
+                                     customer_claim_amount,description,immediate_action,owner,target_close_date)
+                                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                    (case_no.strip(),str(opened),customer_map[customer_label],
+                                     supplier,product_id,product_name,lot_id,po_id,shipment_id,
+                                     complaint_type,severity,"Açık",float(affected),float(estimated_loss),
+                                     currency,float(customer_claim),description.strip(),immediate,
+                                     owner,str(target_close)))
+                                new_case=int(query_df("SELECT id FROM quality_cases ORDER BY id DESC LIMIT 1").iloc[0]["id"])
+                                if lot_id and hold_lot:
+                                    set_lot_quality_status(lot_id,"HOLD",new_case)
+                                if immediate.strip():
+                                    execute("""INSERT INTO quality_actions
+                                        (quality_case_id,action_type,action_text,owner,due_date,status,notes)
+                                        VALUES (?,?,?,?,?,'Açık',?)""",
+                                        (new_case,"İlk Aksiyon",immediate.strip(),owner,str(date.today()+timedelta(days=1)),"Dosya açılışından"))
+                                    execute("""INSERT INTO tasks
+                                        (title,related_to,owner,priority,due_date,status,notes)
+                                        VALUES (?,?,?,?,?,'Açık',?)""",
+                                        (immediate.strip(),case_no.strip(),owner,
+                                         "Kritik" if severity=="Kritik" else "Yüksek",
+                                         str(date.today()+timedelta(days=1)),
+                                         f"Kalite dosyası #{new_case}"))
+                                st.success("Kalite / claim dosyası açıldı.")
+                                st.rerun()
+
+        with case_detail_tab:
+            cases=query_df("""
+                SELECT id,case_no,product_name,status,severity
+                FROM quality_cases
+                ORDER BY id DESC
+            """)
+            if cases.empty:
+                st.info("Önce kalite dosyası açın.")
+            else:
+                case_id=st.selectbox(
+                    "Dosya",
+                    cases["id"].tolist(),
+                    format_func=lambda x:f"{cases.loc[cases['id']==x,'case_no'].iloc[0]} · {cases.loc[cases['id']==x,'product_name'].iloc[0]} · {cases.loc[cases['id']==x,'status'].iloc[0]}",
+                    key="quality_case_select"
+                )
+                qc=query_df("""
+                    SELECT q.*,c.name AS customer
+                    FROM quality_cases q
+                    LEFT JOIN customers c ON c.id=q.customer_id
+                    WHERE q.id=?
+                """,(int(case_id),)).iloc[0]
+                recovered=quality_recovery_total(case_id,qc["currency"])
+                open_exposure=max(float(qc["estimated_loss"] or 0)-recovered,0)
+                d1,d2,d3,d4=st.columns(4)
+                d1.metric("Önem",qc["severity"])
+                d2.metric("Etkilenen",f"{float(qc['affected_quantity_kg'] or 0)/1000:,.2f} ton")
+                d3.metric("Tahmini zarar",f"{float(qc['estimated_loss'] or 0):,.0f} {qc['currency']}")
+                d4.metric("Açık zarar riski",f"{open_exposure:,.0f} {qc['currency']}")
+                st.write(f"**Müşteri:** {qc['customer'] or '-'} · **Tedarikçi:** {qc['supplier'] or '-'} · **Ürün:** {qc['product_name']}")
+                st.info(qc["description"])
+                if qc["inventory_lot_id"]:
+                    lot_status=query_df("SELECT quality_status,lot_number FROM inventory_lots WHERE id=?",(int(qc["inventory_lot_id"]),))
+                    if not lot_status.empty:
+                        st.warning(f"Lot {lot_status.iloc[0]['lot_number'] or '-'} kalite durumu: {lot_status.iloc[0]['quality_status']}")
+
+                detail1,detail2,detail3=st.tabs(["Aksiyonlar","Claim Geri Kazanım","Dosya Sonucu"])
+                with detail1:
+                    actions=query_df("""
+                        SELECT id,action_type AS tip,action_text AS aksiyon,owner AS sorumlu,
+                               due_date AS son_tarih,status AS durum,evidence_ref AS kanıt,
+                               notes AS notlar,created_at AS oluşturma
+                        FROM quality_actions WHERE quality_case_id=?
+                        ORDER BY CASE status WHEN 'Açık' THEN 1 WHEN 'Devam' THEN 2 ELSE 3 END,due_date ASC,id DESC
+                    """,(int(case_id),))
+                    st.dataframe(actions,use_container_width=True,hide_index=True)
+                    with st.form("quality_add_action",clear_on_submit=True):
+                        a1,a2=st.columns(2)
+                        action_type=a1.selectbox("Aksiyon tipi",["Teknik İnceleme","Müşteri","Tedarikçi","Numune/Analiz","Lojistik","Finansal","Regülasyon","Takip"])
+                        owner=a2.text_input("Sorumlu",value=str(qc["owner"] or ""))
+                        action_text=st.text_area("Aksiyon *")
+                        a3,a4=st.columns(2)
+                        due=a3.date_input("Son tarih",value=date.today()+timedelta(days=3))
+                        evidence=a4.text_input("Belge / link / referans")
+                        notes=st.text_input("Not")
+                        create_task=st.checkbox("Görev listesine de ekle",value=True,key="quality_action_task")
+                        if st.form_submit_button("Aksiyon ekle",type="primary") and action_text.strip():
+                            execute("""INSERT INTO quality_actions
+                                (quality_case_id,action_type,action_text,owner,due_date,status,evidence_ref,notes)
+                                VALUES (?,?,?,?,?,'Açık',?,?)""",
+                                (int(case_id),action_type,action_text.strip(),owner,str(due),evidence,notes))
+                            if create_task:
+                                execute("""INSERT INTO tasks
+                                    (title,related_to,owner,priority,due_date,status,notes)
+                                    VALUES (?,?,?,?,?,'Açık',?)""",
+                                    (action_text.strip(),qc["case_no"],owner,
+                                     "Kritik" if qc["severity"]=="Kritik" else "Yüksek",
+                                     str(due),f"Kalite/claim dosyası #{case_id}"))
+                            st.success("Aksiyon eklendi.")
+                            st.rerun()
+
+                    if not actions.empty:
+                        action_id=st.selectbox("Durumu güncellenecek aksiyon",actions["id"].tolist(),key="quality_action_update")
+                        new_status=st.selectbox("Aksiyon durumu",["Açık","Devam","Bekliyor","Tamamlandı"],key="quality_action_status")
+                        if st.button("Aksiyon durumunu kaydet",key="quality_action_save"):
+                            execute("""UPDATE quality_actions
+                                SET status=?,completed_at=CASE WHEN ?='Tamamlandı' THEN ? ELSE completed_at END
+                                WHERE id=?""",
+                                (new_status,new_status,datetime.now().isoformat(timespec="seconds"),int(action_id)))
+                            st.success("Aksiyon güncellendi.")
+                            st.rerun()
+
+                with detail2:
+                    recoveries=query_df("""
+                        SELECT id,recovery_type AS tip,amount AS tutar,currency AS para,
+                               quantity_kg AS miktar_kg,reference AS referans,
+                               recovery_date AS tarih,status AS durum,notes AS notlar
+                        FROM quality_recoveries WHERE quality_case_id=?
+                        ORDER BY id DESC
+                    """,(int(case_id),))
+                    st.dataframe(recoveries,use_container_width=True,hide_index=True)
+                    with st.form("quality_recovery_form",clear_on_submit=True):
+                        r1,r2,r3=st.columns(3)
+                        recovery_type=r1.selectbox("Geri kazanım",["Credit Note","Replacement","İskonto","Chargeback","Return","Transport/Handling","Diğer"])
+                        amount=r2.number_input("Tutar",min_value=0.0,value=0.0,step=1000.0)
+                        currency=r3.selectbox("Para",["EUR","USD","GBP","TRY"],index=["EUR","USD","GBP","TRY"].index(qc["currency"] if qc["currency"] in ["EUR","USD","GBP","TRY"] else "EUR"),key="quality_recovery_currency")
+                        r4,r5=st.columns(2)
+                        quantity=r4.number_input("Miktar (kg)",min_value=0.0,value=0.0,step=100.0)
+                        recovery_date=r5.date_input("Tarih",value=date.today())
+                        reference=st.text_input("Credit note / replacement / referans")
+                        status=st.selectbox("Durum",["Bekleniyor","Onaylandı","Tamamlandı","Red"],key="quality_recovery_status")
+                        notes=st.text_area("Not",key="quality_recovery_notes")
+                        if st.form_submit_button("Geri kazanımı kaydet",type="primary"):
+                            execute("""INSERT INTO quality_recoveries
+                                (quality_case_id,recovery_type,amount,currency,quantity_kg,
+                                 reference,recovery_date,status,notes)
+                                VALUES (?,?,?,?,?,?,?,?,?)""",
+                                (int(case_id),recovery_type,float(amount),currency,float(quantity),
+                                 reference,str(recovery_date),status,notes))
+                            st.success("Claim geri kazanımı kaydedildi.")
+                            st.rerun()
+
+                with detail3:
+                    statuses=["Açık","İncelemede","Tedarikçi Bekleniyor","Müşteri Bekleniyor","Çözümde","Kapandı","İptal"]
+                    current=qc["status"] if qc["status"] in statuses else "Açık"
+                    with st.form("quality_close_form"):
+                        status=st.selectbox("Dosya durumu",statuses,index=statuses.index(current))
+                        root_cause=st.text_area("Kök neden",value=str(qc["root_cause"] or ""))
+                        supplier_response=st.text_area("Tedarikçi cevabı",value=str(qc["supplier_response"] or ""))
+                        final_resolution=st.text_area("Nihai çözüm",value=str(qc["final_resolution"] or ""))
+                        release_lot=st.checkbox("Dosya kapanırsa bağlı lotu RELEASE et",value=False)
+                        if st.form_submit_button("Dosyayı güncelle",type="primary"):
+                            closed=str(date.today()) if status=="Kapandı" else str(qc["closed_date"] or "")
+                            execute("""UPDATE quality_cases
+                                SET status=?,root_cause=?,supplier_response=?,final_resolution=?,closed_date=?
+                                WHERE id=?""",
+                                (status,root_cause,supplier_response,final_resolution,closed,int(case_id)))
+                            if release_lot and qc["inventory_lot_id"] and status=="Kapandı":
+                                set_lot_quality_status(int(qc["inventory_lot_id"]),"Released",None)
+                            st.success("Kalite dosyası güncellendi.")
+                            st.rerun()
+
+        with cert_tab:
+            certs=certificate_alerts()
+            if certs.empty:
+                st.info("Sertifika / belge kaydı yok.")
+            else:
+                st.dataframe(
+                    certs[["id","owner_type","owner_name","document_type","market_country",
+                           "authority","document_no","issue_date","expiry_date",
+                           "renewal_lead_days","responsible","kalan_gün","uyarı","document_ref"]],
+                    use_container_width=True,hide_index=True
+                )
+            with st.expander("Yeni sertifika / belge ekle",expanded=certs.empty):
+                products_c=query_df("SELECT id,name,supplier FROM product_catalog WHERE active=1 ORDER BY name")
+                with st.form("quality_new_cert",clear_on_submit=True):
+                    owner_type=st.selectbox("Belge sahibi",["Şirket","Ürün","Tedarikçi","Müşteri"])
+                    owner_name=st.text_input("Sahip adı *",placeholder="AS İleri / ürün adı / tedarikçi")
+                    product_map={"— Ürün bağlama —":None}
+                    for _,p in products_c.iterrows():
+                        product_map[p["name"]]=int(p["id"])
+                    product_label=st.selectbox("Ürün",list(product_map.keys()))
+                    supplier=st.text_input("Tedarikçi")
+                    document_type=st.selectbox(
+                        "Belge tipi",
+                        ["Veterinary Health Certificate","Health Certificate","Halal","Kosher","RSPO",
+                         "FSSC 22000","BRCGS","ISO 22000","CoA","TDS","SDS","Allergen",
+                         "GMO Statement","Origin Certificate","Import Permit","Registration","Diğer"]
+                    )
+                    c1,c2=st.columns(2)
+                    market_country=c1.text_input("Geçerli pazar / ülke")
+                    authority=c2.text_input("Otorite / belge kuruluşu")
+                    c3,c4,c5=st.columns(3)
+                    doc_no=c3.text_input("Belge no")
+                    issue_date=c4.date_input("Düzenleme",value=date.today())
+                    expiry_date=c5.date_input("Bitiş",value=date.today()+timedelta(days=365))
+                    c6,c7=st.columns(2)
+                    lead=c6.number_input("Yenileme uyarısı (gün)",min_value=0,value=60,step=10)
+                    responsible=c7.text_input("Sorumlu")
+                    document_ref=st.text_input("Drive / URL / dosya referansı")
+                    notes=st.text_area("Not")
+                    if st.form_submit_button("Belgeyi kaydet",type="primary"):
+                        if not owner_name.strip():
+                            st.error("Belge sahibi adı zorunlu.")
+                        else:
+                            execute("""INSERT INTO compliance_documents
+                                (owner_type,owner_name,product_id,supplier,document_type,
+                                 market_country,authority,document_no,issue_date,expiry_date,
+                                 renewal_lead_days,status,document_ref,responsible,notes)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?,'Geçerli',?,?,?)""",
+                                (owner_type,owner_name.strip(),product_map[product_label],supplier,
+                                 document_type,market_country,authority,doc_no,str(issue_date),
+                                 str(expiry_date),int(lead),document_ref,responsible,notes))
+                            st.success("Belge kaydedildi.")
+                            st.rerun()
+
+        with reg_tab:
+            regs=regulatory_alerts()
+            if regs.empty:
+                st.info("Regülasyon / izin kaydı yok.")
+            else:
+                st.dataframe(regs,use_container_width=True,hide_index=True)
+            with st.expander("Yeni regülasyon / izin konusu aç",expanded=regs.empty):
+                products_r=query_df("SELECT id,name FROM product_catalog WHERE active=1 ORDER BY name")
+                with st.form("quality_new_reg",clear_on_submit=True):
+                    pname=st.selectbox("Ürün",products_r["name"].tolist())
+                    pid=int(products_r.loc[products_r["name"]==pname,"id"].iloc[0])
+                    r1,r2=st.columns(2)
+                    country=r1.text_input("Hedef ülke / pazar *")
+                    requirement_type=r2.selectbox("Konu",["İthalat İzni","Veteriner Sertifikası","Sağlık Sertifikası","Etiket","Kayıt/Onay","Gümrük","Halal/Kosher","Bileşen Uygunluğu","Diğer"])
+                    authority=st.text_input("Yetkili kurum")
+                    requirement=st.text_area("Gereklilik / problem *")
+                    r3,r4=st.columns(2)
+                    status=r3.selectbox("Durum",["Araştırılıyor","Eksik","Bloke","Başvuruldu","Onaylandı","Uygun Değil","Kapandı"])
+                    due=r4.date_input("Son tarih",value=date.today()+timedelta(days=14))
+                    next_action=st.text_input("Sonraki aksiyon")
+                    responsible=st.text_input("Sorumlu",key="reg_responsible")
+                    source_ref=st.text_input("Resmî kaynak / dosya linki")
+                    notes=st.text_area("Not",key="reg_notes")
+                    if st.form_submit_button("Regülasyon konusunu kaydet",type="primary"):
+                        if not country.strip() or not requirement.strip():
+                            st.error("Ülke ve gereklilik zorunlu.")
+                        else:
+                            execute("""INSERT INTO regulatory_items
+                                (product_id,product_name,market_country,requirement_type,authority,
+                                 requirement,status,next_action,due_date,responsible,source_ref,notes,updated_at)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                (pid,pname,country.strip(),requirement_type,authority,requirement.strip(),
+                                 status,next_action,str(due),responsible,source_ref,notes,
+                                 datetime.now().isoformat(timespec="seconds")))
+                            if next_action.strip():
+                                execute("""INSERT INTO tasks
+                                    (title,related_to,owner,priority,due_date,status,notes)
+                                    VALUES (?,?,?,?,?,'Açık',?)""",
+                                    (next_action.strip(),f"{pname} / {country}",responsible,
+                                     "Kritik" if status=="Bloke" else "Yüksek",str(due),
+                                     "Regülasyon merkezinden oluşturuldu"))
+                            st.success("Regülasyon kaydı oluşturuldu.")
+                            st.rerun()
+
+            if not regs.empty:
+                reg_id=st.selectbox(
+                    "Güncellenecek regülasyon kaydı",
+                    regs["id"].tolist(),
+                    format_func=lambda x:f"#{x} · {regs.loc[regs['id']==x,'ürün'].iloc[0]} · {regs.loc[regs['id']==x,'ülke'].iloc[0]}",
+                    key="reg_update_select"
+                )
+                reg_status=st.selectbox("Yeni durum",["Araştırılıyor","Eksik","Bloke","Başvuruldu","Onaylandı","Uygun Değil","Kapandı"],key="reg_update_status")
+                reg_action=st.text_input("Yeni sonraki aksiyon",key="reg_update_action")
+                reg_due=st.date_input("Yeni son tarih",value=date.today()+timedelta(days=7),key="reg_update_due")
+                if st.button("Regülasyon kaydını güncelle",key="reg_update_button"):
+                    execute("""UPDATE regulatory_items
+                        SET status=?,next_action=?,due_date=?,updated_at=?
+                        WHERE id=?""",
+                        (reg_status,reg_action,str(reg_due),datetime.now().isoformat(timespec="seconds"),int(reg_id)))
+                    st.success("Regülasyon kaydı güncellendi.")
+                    st.rerun()
+
     with pipeline_tab:
         pipeline = query_df("""
             SELECT o.id, c.name AS müşteri, o.product AS ürün, o.stage AS aşama,
@@ -3552,6 +4145,37 @@ def render_control_tower():
             LIMIT 10
         """)
         st.dataframe(top, use_container_width=True, hide_index=True)
+
+        st.markdown("#### Kalite / claim / belge uyarıları")
+        ceo_q=quality_case_summary()
+        if not ceo_q.empty:
+            ceo_q_open=ceo_q[~ceo_q["status"].isin(["Kapandı","İptal"])].copy()
+            if not ceo_q_open.empty:
+                st.dataframe(
+                    ceo_q_open[["case_no","customer","product_name","severity","status",
+                                "affected_quantity_kg","estimated_loss","currency",
+                                "owner","target_close_date","gecikme_gün"]].head(10),
+                    use_container_width=True,hide_index=True
+                )
+        ceo_cert=certificate_alerts()
+        if not ceo_cert.empty:
+            cert_risk=ceo_cert[ceo_cert["uyarı"]!="OK"].copy()
+            if not cert_risk.empty:
+                st.markdown("##### Süresi yaklaşan / geçen belgeler")
+                st.dataframe(
+                    cert_risk[["owner_name","document_type","market_country","expiry_date",
+                               "kalan_gün","uyarı","responsible"]].head(10),
+                    use_container_width=True,hide_index=True
+                )
+        ceo_reg=regulatory_alerts()
+        if not ceo_reg.empty:
+            reg_risk=ceo_reg[ceo_reg["durum"].isin(["Bloke","Eksik","Araştırılıyor"])].copy()
+            if not reg_risk.empty:
+                st.markdown("##### Açık regülasyon konuları")
+                st.dataframe(
+                    reg_risk[["ürün","ülke","tip","durum","sonraki_aksiyon","son_tarih","sorumlu","gecikme_gün"]].head(10),
+                    use_container_width=True,hide_index=True
+                )
 
         st.markdown("#### Finans / tahsilat uyarıları")
         ceo_rec=outstanding_receivables()
