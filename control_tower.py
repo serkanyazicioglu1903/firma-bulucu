@@ -870,7 +870,7 @@ def stock_snapshot():
         SELECT po.product_id,
                SUM(CASE
                      WHEN s.received_to_stock=0
-                      AND s.status NOT IN ('İptal','Teslim Edildi')
+                      AND s.status!='İptal'
                      THEN s.quantity_kg ELSE 0 END) AS inbound_kg
         FROM shipments s
         JOIN purchase_orders po ON po.id=s.purchase_order_id
@@ -987,17 +987,21 @@ def receive_shipment_to_stock(shipment_id):
         (str(date.today()), int(shipment_id))
     )
 
-    remaining = int(query_df("""
-        SELECT COUNT(*) n
-        FROM shipments
-        WHERE purchase_order_id=?
-          AND received_to_stock=0
-          AND status!='İptal'
-    """, (int(row["purchase_order_id"]),)).iloc[0]["n"])
-    if remaining == 0:
+    po_summary = query_df("""
+        SELECT po.quantity_kg AS ordered_kg,
+               COALESCE(SUM(CASE WHEN s.received_to_stock=1 THEN s.quantity_kg ELSE 0 END),0) AS received_kg
+        FROM purchase_orders po
+        LEFT JOIN shipments s ON s.purchase_order_id=po.id AND s.status!='İptal'
+        WHERE po.id=?
+        GROUP BY po.id,po.quantity_kg
+    """, (int(row["purchase_order_id"]),))
+    if not po_summary.empty:
+        ordered_kg = float(po_summary.iloc[0]["ordered_kg"] or 0)
+        received_kg = float(po_summary.iloc[0]["received_kg"] or 0)
+        po_status = "Tamamlandı" if received_kg + 0.001 >= ordered_kg else "Kısmi Sevk"
         execute(
-            "UPDATE purchase_orders SET status='Tamamlandı' WHERE id=?",
-            (int(row["purchase_order_id"]),)
+            "UPDATE purchase_orders SET status=? WHERE id=?",
+            (po_status, int(row["purchase_order_id"]))
         )
     return True, "Sevkiyat stoğa alındı."
 
