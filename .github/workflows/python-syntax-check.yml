@@ -1,0 +1,40 @@
+name: Python app checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - as-control-tower-v1
+
+jobs:
+  app-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile Python files
+        run: python -m py_compile app.py control_tower.py
+
+      - name: Streamlit startup smoke test
+        run: |
+          python - <<'PY'
+          from streamlit.testing.v1 import AppTest
+
+          app = AppTest.from_file("app.py", default_timeout=60)
+          app.run()
+
+          if app.exception:
+              raise AssertionError(f"Streamlit startup exception: {app.exception}")
+
+          print("Streamlit app loaded successfully.")
+          print("Top-level tabs:", [t.label for t in app.tabs])
+          PY
