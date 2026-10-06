@@ -311,6 +311,32 @@ ACQ_SECTORS = {
     "Toll / contract manufacturing": ["toll manufacturing contract manufacturing"],
 }
 
+ACQ_SECTOR_KEYWORDS = {
+    "Gıda hammaddesi / Food ingredients": [
+        "lebensmittel", "lebensmittelzutaten", "lebensmittelrohstoffe", "nahrungsmittel",
+        "food ingredient", "rohstoff", "stärke", "protein", "gewürz", "backmittel",
+        "sirup", "sirupe", "mischungen",
+    ],
+    "Gıda katkı maddeleri": [
+        "lebensmittelzusatz", "zusatzstoff", "food additive", "additiv", "konservierung",
+    ],
+    "Aroma / renk": ["aroma", "aromen", "flavour", "flavor", "farbstoff", "colour", "color"],
+    "Emülgatör / stabilizer / hydrocolloid": [
+        "emulgator", "stabilisator", "hydrokolloid", "hydrocolloid", "textur",
+    ],
+    "Premix / powder blending": [
+        "premix", "pulvermisch", "powder blend", "dry blend", "mischanlage", "mischungen",
+    ],
+    "Specialty chemicals": [
+        "spezialchem", "specialty chemical", "chemikalien", "chemische rohstoffe",
+        "compound", "formulierung",
+    ],
+    "Pigment / coating / dye": ["pigment", "farbstoff", "beschichtung", "coating", "dye"],
+    "Detergent / cleaning chemicals": ["reinigungschem", "reinigungsmittel", "detergent", "cleaning chemical"],
+    "Lubricant / industrial oils": ["schmierstoff", "induströl", "lubricant", "industrial oil"],
+    "Toll / contract manufacturing": ["lohnherstellung", "lohnmisch", "contract manufacturing", "toll manufacturing"],
+}
+
 ACQ_SALE_TERMS = [
     "business for sale", "company for sale", "offers invited", "asking price",
     "retirement", "retiring", "succession", "owner retiring",
@@ -377,6 +403,76 @@ def acq_preferred(url, country):
     d = get_domain(url)
     return any(d == x or d.endswith("." + x) for x in ACQ_COUNTRIES[country]["domains"])
 
+def acq_sector_match(text, sectors):
+    low = clean(text).lower()
+    best_sector, best_hits = "", 0
+    for sector in sectors:
+        hits = sum(1 for keyword in ACQ_SECTOR_KEYWORDS.get(sector, []) if keyword in low)
+        if hits > best_hits:
+            best_sector, best_hits = sector, hits
+    return best_sector, best_hits
+
+def scan_dub_direct(sectors, max_pages=5):
+    """Read DUB's public listing cards directly; no search-engine API is used."""
+    rows = []
+    base = "https://www.dub.de/de/unternehmen-kaufen/"
+    for page in range(1, max_pages + 1):
+        response = safe_get(base, params={"page": page, "sort": "newest", "view": "grid"}, timeout=15)
+        if response is None or response.status_code >= 400:
+            break
+        try:
+            soup = BeautifulSoup(response.text, "html.parser")
+            cards = soup.select("[data-listing-card]")
+        except Exception:
+            cards = []
+        if not cards:
+            break
+        for card in cards:
+            link = card.select_one("a[data-listing-detail-link]") or card.select_one("a[href*='/expose/']")
+            title_node = card.select_one(".bs-card__title")
+            desc_node = card.select_one(".bs-card__desc")
+            if not link or not title_node:
+                continue
+            title = clean(title_node.get_text(" ", strip=True))
+            description = clean(desc_node.get_text(" ", strip=True) if desc_node else "")
+            combined = f"{title} {description}"
+            if any(term in combined.lower() for term in ACQ_EXCLUSION_TERMS):
+                continue
+            sector, hits = acq_sector_match(combined, sectors)
+            if not sector or hits == 0:
+                continue
+            stats = {}
+            for stat in card.select(".bs-card__stat"):
+                key = stat.select_one("dt")
+                value = stat.select_one("dd")
+                if key and value:
+                    stats[clean(key.get_text(" ", strip=True)).lower()] = clean(value.get_text(" ", strip=True))
+            location_node = card.select_one(".bs-card__loc")
+            location = clean(location_node.get_text(" ", strip=True) if location_node else "")
+            url = urljoin(base, link.get("href", ""))
+            operation = any(term in combined.lower() for term in MANUFACTURING_TERMS + [
+                "produzent", "hersteller", "verarbeitung", "großhandel", "distribution", "distributor",
+            ])
+            score = min(96, 66 + hits * 6 + (10 if operation else 0))
+            rows.append({
+                "Skor": score,
+                "Ülke": "Almanya",
+                "Sektör": sector,
+                "Başlık": title,
+                "Kaynak": "dub.de · doğrudan tarama",
+                "Ciro": stats.get("umsatz", ""),
+                "EBITDA/Kâr": stats.get("ergebnis", ""),
+                "Fiyat": stats.get("kaufpreis", ""),
+                "Satış nedeni": extract_sale_reason(combined),
+                "Satış ilanı": "Evet",
+                "Üretici sinyali": "Evet" if operation else "Belirsiz",
+                "E-posta": "",
+                "Telefon": "",
+                "Özet": f"{location}. {description}"[:700],
+                "İlan / kaynak URL": url,
+            })
+    return rows
+
 def acq_build_queries(country, sector):
     c = ACQ_COUNTRIES[country]
     sector_terms = ACQ_SECTORS[sector]
@@ -439,6 +535,8 @@ def extract_sale_reason(text):
 def acq_scan(countries, sectors, per_query, deep_scan):
     started_at = time.monotonic()
     rows = [r.copy() for r in ACQ_STARTER if r["Ülke"] in countries and r["Sektör"] in sectors]
+    if "Almanya" in countries:
+        rows.extend(scan_dub_direct(sectors, max_pages=5))
     seen = {r["İlan / kaynak URL"] for r in rows}
     jobs = [(c, s, q) for c in countries for s in sectors for q in acq_build_queries(c, s)]
     progress = st.progress(0)
@@ -864,7 +962,7 @@ with main_tab1:
         with f2:
             only_sale = st.checkbox("Satış ilanı zorunlu", value=True, key="acq_sale")
         with f3:
-            only_maker = st.checkbox("Üretici sinyali zorunlu", value=True, key="acq_maker")
+            only_maker = st.checkbox("Üretim / operasyon sinyali zorunlu", value=False, key="acq_maker")
 
         view = acq_df[acq_df["Skor"] >= min_score].copy()
         if only_sale:
