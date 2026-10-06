@@ -1053,8 +1053,12 @@ def stock_snapshot():
 
     lots = query_df("""
         SELECT product_id,
-               SUM(quantity_available_kg) AS available_kg,
-               SUM(quantity_reserved_kg) AS reserved_kg
+               SUM(CASE WHEN COALESCE(quality_status,'Released')='Released'
+                        THEN quantity_available_kg ELSE 0 END) AS available_kg,
+               SUM(CASE WHEN COALESCE(quality_status,'Released')='Released'
+                        THEN quantity_reserved_kg ELSE 0 END) AS reserved_kg,
+               SUM(CASE WHEN COALESCE(quality_status,'Released')!='Released'
+                        THEN quantity_available_kg ELSE 0 END) AS quality_hold_kg
         FROM inventory_lots
         GROUP BY product_id
     """)
@@ -1088,7 +1092,7 @@ def stock_snapshot():
             if "product_id" in df.columns:
                 df = df.drop(columns=["product_id"])
 
-    for col in ["available_kg","reserved_kg","inbound_kg","open_po_kg","monthly_usage_kg"]:
+    for col in ["available_kg","reserved_kg","quality_hold_kg","inbound_kg","open_po_kg","monthly_usage_kg"]:
         if col not in df.columns:
             df[col] = 0.0
         df[col] = df[col].fillna(0.0)
@@ -2911,6 +2915,7 @@ def render_control_tower():
                        il.quantity_received_kg/1000.0 AS giriş_ton,
                        il.quantity_available_kg/1000.0 AS mevcut_ton,
                        il.quantity_reserved_kg/1000.0 AS rezerve_ton,
+                       il.quality_status AS kalite_durumu,
                        il.unit_cost AS birim_maliyet,il.currency AS para,
                        il.received_date AS giriş_tarihi,po.po_number AS PO
                 FROM inventory_lots il
@@ -2927,12 +2932,13 @@ def render_control_tower():
             else:
                 stock_view=summary.rename(columns={
                     "name":"ürün","supplier":"tedarikçi","net_available_kg":"net_stok_kg",
-                    "inbound_kg":"yolda_kg","monthly_usage_kg":"aylık_tüketim_kg",
+                    "inbound_kg":"yolda_kg","quality_hold_kg":"hold_kg",
+                    "monthly_usage_kg":"aylık_tüketim_kg",
                     "stock_days":"stok_gün","suggested_order_kg":"önerilen_sipariş_kg",
                     "status":"durum"
                 })
                 st.dataframe(
-                    stock_view[["ürün","tedarikçi","net_stok_kg","yolda_kg","aylık_tüketim_kg",
+                    stock_view[["ürün","tedarikçi","net_stok_kg","hold_kg","yolda_kg","aylık_tüketim_kg",
                                 "stok_gün","safety_stock_days","lead_time_days",
                                 "önerilen_sipariş_kg","durum"]],
                     use_container_width=True,hide_index=True
@@ -2968,12 +2974,13 @@ def render_control_tower():
                 else:
                     view=alerts.rename(columns={
                         "name":"ürün","supplier":"tedarikçi","net_available_kg":"net_stok_kg",
-                        "inbound_kg":"yolda_kg","monthly_usage_kg":"aylık_tüketim_kg",
+                        "inbound_kg":"yolda_kg","quality_hold_kg":"hold_kg",
+                        "monthly_usage_kg":"aylık_tüketim_kg",
                         "stock_days":"stok_gün","reorder_point_kg":"sipariş_noktası_kg",
                         "suggested_order_kg":"önerilen_sipariş_kg","status":"durum"
                     })
                     st.dataframe(
-                        view[["ürün","tedarikçi","net_stok_kg","yolda_kg","aylık_tüketim_kg",
+                        view[["ürün","tedarikçi","net_stok_kg","hold_kg","yolda_kg","aylık_tüketim_kg",
                               "stok_gün","lead_time_days","safety_stock_days",
                               "sipariş_noktası_kg","önerilen_sipariş_kg","durum"]],
                         use_container_width=True,hide_index=True
