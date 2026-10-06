@@ -2922,33 +2922,27 @@ def render_control_tower():
             st.markdown("#### Müşteri kredi riski")
             credit_risk=query_df("""
                 SELECT c.id,c.name AS müşteri,c.credit_limit AS kredi_limiti,
-                       c.currency AS limit_para,
+                       c.currency AS limit_para,r.base_currency AS risk_para,
                        COALESCE(SUM(CASE
-                         WHEN r.status!='İptal' THEN
-                           CASE WHEN r.amount-r.paid_amount>0 THEN
-                             (r.amount-r.paid_amount)*r.fx_to_base
-                           ELSE 0 END
+                         WHEN r.status!='İptal' AND r.amount-r.paid_amount>0
+                         THEN (r.amount-r.paid_amount)*r.fx_to_base
                          ELSE 0 END),0) AS açık_risk_yönetim,
                        MAX(CASE
                          WHEN r.due_date < date('now') AND r.amount-r.paid_amount>0
                          THEN CAST(julianday(date('now'))-julianday(r.due_date) AS INTEGER)
                          ELSE 0 END) AS maks_gecikme_gün
                 FROM customers c
-                LEFT JOIN receivables r ON r.customer_id=c.id
-                GROUP BY c.id,c.name,c.credit_limit,c.currency
-                HAVING COALESCE(SUM(CASE
-                         WHEN r.status!='İptal' THEN
-                           CASE WHEN r.amount-r.paid_amount>0 THEN
-                             (r.amount-r.paid_amount)*r.fx_to_base
-                           ELSE 0 END
-                         ELSE 0 END),0) > 0
+                JOIN receivables r ON r.customer_id=c.id
+                WHERE r.status!='İptal' AND r.amount-r.paid_amount>0
+                GROUP BY c.id,c.name,c.credit_limit,c.currency,r.base_currency
                 ORDER BY maks_gecikme_gün DESC,açık_risk_yönetim DESC
             """)
             if not credit_risk.empty:
                 credit_risk["limit_aşımı"] = credit_risk.apply(
                     lambda r: (
                         "EVET"
-                        if float(r["kredi_limiti"] or 0)>0
+                        if str(r["limit_para"])==str(r["risk_para"])
+                        and float(r["kredi_limiti"] or 0)>0
                         and float(r["açık_risk_yönetim"] or 0)>float(r["kredi_limiti"] or 0)
                         else ""
                     ),
@@ -2962,7 +2956,7 @@ def render_control_tower():
 
             ar1,ar2=st.tabs(["Yeni Alacak","Tahsilat Gir"])
             with ar1:
-                customers_ar=query_df("SELECT id,name,default_payment_days FROM customers ORDER BY name")
+                customers_ar=query_df("SELECT id,name,currency,default_payment_days FROM customers ORDER BY name")
                 opps_ar=query_df("""
                     SELECT o.id,o.customer_id,o.product,o.stage
                     FROM opportunities o
@@ -2983,8 +2977,17 @@ def render_control_tower():
                         due_date=r2.date_input("Vade",value=date.today()+timedelta(days=default_days))
                         amount=r3.number_input("Tutar",min_value=0.0,value=0.0,step=1000.0)
                         r4,r5,r6=st.columns(3)
-                        currency=r4.selectbox("Para",["EUR","USD","GBP","TRY"],key="fin_ar_currency")
-                        base_currency=r5.selectbox("Yönetim para",["EUR","USD","GBP","TRY"],key="fin_ar_base")
+                        cur_list=["EUR","USD","GBP","TRY"]
+                        currency=r4.selectbox(
+                            "Para",cur_list,
+                            index=cur_list.index(cr["currency"] if cr["currency"] in cur_list else "EUR"),
+                            key="fin_ar_currency"
+                        )
+                        base_currency=r5.selectbox(
+                            "Yönetim para",cur_list,
+                            index=cur_list.index(cr["currency"] if cr["currency"] in cur_list else "EUR"),
+                            key="fin_ar_base"
+                        )
                         fx=r6.number_input(f"1 {currency} = kaç yönetim para?",min_value=0.0001,value=1.0,step=0.01,format="%.4f")
                         customer_opps=opps_ar[opps_ar["customer_id"]==customer_id]
                         labels=["— Fırsata bağlama —"]; omap={"— Fırsata bağlama —":None}
@@ -3575,6 +3578,7 @@ def render_control_tower():
 
         ceo_credit=query_df("""
             SELECT c.name AS müşteri,c.credit_limit AS kredi_limiti,
+                   c.currency AS limit_para,
                    COALESCE(SUM(CASE
                      WHEN r.status!='İptal' AND r.base_currency='EUR'
                       AND r.amount-r.paid_amount>0
@@ -3595,7 +3599,8 @@ def render_control_tower():
             ceo_credit["limit_aşımı"] = ceo_credit.apply(
                 lambda r: (
                     "EVET"
-                    if float(r["kredi_limiti"] or 0)>0
+                    if str(r.get("limit_para","EUR"))=="EUR"
+                    and float(r["kredi_limiti"] or 0)>0
                     and float(r["açık_risk_eur"] or 0)>float(r["kredi_limiti"] or 0)
                     else ""
                 ),
