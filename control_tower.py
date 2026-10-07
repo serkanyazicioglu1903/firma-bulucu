@@ -2090,7 +2090,7 @@ def render_control_tower():
             order = {stage: i for i, stage in enumerate(STAGES)}
             funnel["_order"] = funnel["aşama"].map(order).fillna(999)
             funnel = funnel.sort_values("_order").drop(columns=["_order"])
-        st.dataframe(funnel, use_container_width=True, hide_index=True)
+        st.dataframe(funnel, width="stretch", hide_index=True)
 
         st.markdown("#### Bugün / gecikmiş satış takipleri")
         due = query_df("""
@@ -2104,7 +2104,7 @@ def render_control_tower():
             ORDER BY o.due_date ASC
             LIMIT 12
         """, (str(date.today()),))
-        st.dataframe(due, use_container_width=True, hide_index=True)
+        st.dataframe(due, width="stretch", hide_index=True)
 
         st.markdown("#### En güçlü yeni cross-sell önerileri")
         dashboard_recs = recommendation_rows()
@@ -2115,7 +2115,7 @@ def render_control_tower():
                 dashboard_recs[
                     ["Müşteri", "Ürün", "Fit Score", "Neden", "Sorumlu"]
                 ].head(8),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "Fit Score": st.column_config.ProgressColumn(
@@ -2127,11 +2127,11 @@ def render_control_tower():
         st.markdown("#### Arama sonuçlarını sisteme al")
         i1, i2 = st.columns(2)
         with i1:
-            if st.button("Son Üretici Bulucu sonuçlarını CRM'e aktar", use_container_width=True):
+            if st.button("Son Üretici Bulucu sonuçlarını CRM'e aktar", width="stretch"):
                 n = import_supplier_results()
                 st.success(f"{n} yeni kayıt CRM'e aktarıldı.")
         with i2:
-            if st.button("Son Satılık Firma sonuçlarını CRM'e aktar", use_container_width=True):
+            if st.button("Son Satılık Firma sonuçlarını CRM'e aktar", width="stretch"):
                 n = import_acquisition_results()
                 st.success(f"{n} yeni kayıt CRM'e aktarıldı.")
 
@@ -2178,7 +2178,7 @@ def render_control_tower():
                     WHERE customer_id=?
                     ORDER BY created_at DESC
                 """, (customer_id,))
-                st.dataframe(customer_opps, use_container_width=True, hide_index=True)
+                st.dataframe(customer_opps, width="stretch", hide_index=True)
 
             with ctab2:
                 activities = query_df("""
@@ -2191,7 +2191,7 @@ def render_control_tower():
                     WHERE a.customer_id=?
                     ORDER BY a.activity_date DESC, a.id DESC
                 """, (customer_id,))
-                st.dataframe(activities, use_container_width=True, hide_index=True)
+                st.dataframe(activities, width="stretch", hide_index=True)
 
                 st.markdown("##### Yeni görüşme / temas kaydı")
                 opp_choices = query_df(
@@ -2251,7 +2251,7 @@ def render_control_tower():
                     WHERE customer_id=?
                     ORDER BY is_primary DESC, name
                 """, (customer_id,))
-                st.dataframe(contacts, use_container_width=True, hide_index=True)
+                st.dataframe(contacts, width="stretch", hide_index=True)
 
                 with st.form("ct_contact_form", clear_on_submit=True):
                     name = st.text_input("Ad soyad *")
@@ -2477,7 +2477,7 @@ def render_control_tower():
                             ["Ürün","Kategori","Fit Score","Öneri Seviyesi","Neden","Durum",
                              "Önerilen Fırsat Değeri","Para","Uygulama"]
                         ],
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                         column_config={
                             "Fit Score": st.column_config.ProgressColumn(
@@ -2524,7 +2524,7 @@ def render_control_tower():
                     if st.button(
                         "Bu öneriyi satış fırsatına çevir",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                         key="intel_customer_create"
                     ):
                         ok, msg = create_opportunity_from_recommendation(
@@ -2574,7 +2574,7 @@ def render_control_tower():
                     )
                     if st.button(
                         "Ürün durumunu kaydet",
-                        use_container_width=True,
+                        width="stretch",
                         key="intel_status_save"
                     ):
                         save_customer_product_status(
@@ -2619,7 +2619,7 @@ def render_control_tower():
                         st.dataframe(
                             pd.DataFrame(recs.attrs["diagnostics"]),
                             hide_index=True,
-                            use_container_width=True
+                            width="stretch"
                         )
                 if recs.empty:
                     active_for_product = query_df(
@@ -2650,7 +2650,7 @@ def render_control_tower():
                         )
                         st.dataframe(
                             active_for_product,
-                            use_container_width=True,
+                            width="stretch",
                             hide_index=True
                         )
                     if not excluded_status.empty:
@@ -2659,7 +2659,7 @@ def render_control_tower():
                         )
                         st.dataframe(
                             excluded_status,
-                            use_container_width=True,
+                            width="stretch",
                             hide_index=True
                         )
                     if active_for_product.empty and excluded_status.empty:
@@ -2673,7 +2673,7 @@ def render_control_tower():
                             ["Müşteri","Fit Score","Öneri Seviyesi","Neden","Durum","Sorumlu",
                              "Önerilen Fırsat Değeri","Para"]
                         ],
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                         column_config={
                             "Fit Score": st.column_config.ProgressColumn(
@@ -2720,7 +2720,7 @@ def render_control_tower():
                     if st.button(
                         "Bu müşteride fırsat oluştur",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                         key="intel_product_create"
                     ):
                         ok, msg = create_opportunity_from_recommendation(
@@ -2752,7 +2752,7 @@ def render_control_tower():
                         ["Müşteri","Ürün","Kategori","Fit Score","Öneri Seviyesi","Neden",
                          "Durum","Sorumlu","Önerilen Fırsat Değeri","Para"]
                     ],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     column_config={
                         "Fit Score": st.column_config.ProgressColumn(
@@ -2764,7 +2764,7 @@ def render_control_tower():
         with intel4:
             st.dataframe(
                 products_intel,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
             with st.expander("Yeni ürün ekle"):
@@ -3051,7 +3051,7 @@ def render_control_tower():
                     {"Kalem":"Depo / handling / iç nakliye","Tutar":handling,"Para":base_currency},
                     {"Kalem":"Finansman","Tutar":calc["finance_cost_total"],"Para":base_currency},
                 ])
-                st.dataframe(breakdown, use_container_width=True, hide_index=True)
+                st.dataframe(breakdown, width="stretch", hide_index=True)
 
             st.markdown("##### Teklifi kaydet")
             e1, e2, e3 = st.columns(3)
@@ -3073,7 +3073,7 @@ def render_control_tower():
             if st.button(
                 "Hesabı / teklifi kaydet",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 key="quote_save"
             ):
                 if not product_name.strip():
@@ -3137,7 +3137,7 @@ def render_control_tower():
             """)
             st.dataframe(
                 quote_history,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
 
@@ -3166,7 +3166,7 @@ def render_control_tower():
                 LEFT JOIN warehouses w ON w.id=po.destination_warehouse_id
                 ORDER BY po.id DESC
             """)
-            st.dataframe(po_df,use_container_width=True,hide_index=True)
+            st.dataframe(po_df,width="stretch",hide_index=True)
 
             with st.expander("Yeni PO oluştur", expanded=po_df.empty):
                 products_po=query_df("""
@@ -3229,7 +3229,7 @@ def render_control_tower():
                 LEFT JOIN warehouses w ON w.id=s.destination_warehouse_id
                 ORDER BY s.id DESC
             """)
-            st.dataframe(shipments_df,use_container_width=True,hide_index=True)
+            st.dataframe(shipments_df,width="stretch",hide_index=True)
 
             with st.expander("Yeni sevkiyat oluştur"):
                 pos=query_df("""
@@ -3326,7 +3326,7 @@ def render_control_tower():
                 customs_date=u2.date_input("Gümrük tarihi",value=date.today(),key="proc_customs_date")
                 delivery_date=u3.date_input("Teslim tarihi",value=date.today(),key="proc_delivery_date")
                 c1,c2=st.columns(2)
-                if c1.button("Sevkiyatı güncelle",use_container_width=True):
+                if c1.button("Sevkiyatı güncelle",width="stretch"):
                     execute("""UPDATE shipments SET status=?,
                                customs_date=CASE WHEN ?='Gümrükte' THEN ? ELSE customs_date END,
                                delivery_date=CASE WHEN ?='Teslim Edildi' THEN ? ELSE delivery_date END
@@ -3334,7 +3334,7 @@ def render_control_tower():
                             (new_status,new_status,str(customs_date),new_status,str(delivery_date),int(ship_id)))
                     st.success("Sevkiyat güncellendi.")
                     st.rerun()
-                if c2.button("Teslim al ve stoğa giriş yap",type="primary",use_container_width=True):
+                if c2.button("Teslim al ve stoğa giriş yap",type="primary",width="stretch"):
                     ok,msg=receive_shipment_to_stock(ship_id)
                     (st.success if ok else st.warning)(msg)
                     if ok:
@@ -3356,7 +3356,7 @@ def render_control_tower():
                 LEFT JOIN purchase_orders po ON po.id=il.purchase_order_id
                 ORDER BY il.received_date DESC,il.id DESC
             """)
-            st.dataframe(stock_by_lot,use_container_width=True,hide_index=True)
+            st.dataframe(stock_by_lot,width="stretch",hide_index=True)
 
             summary=stock_snapshot()
             st.markdown("##### Ürün bazında stok özeti")
@@ -3374,7 +3374,7 @@ def render_control_tower():
                     stock_view[["ürün","tedarikçi","net_stok_kg","hold_kg","yolda_kg","aylık_tüketim_kg",
                                 "stok_gün","safety_stock_days","lead_time_days",
                                 "önerilen_sipariş_kg","durum"]],
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
 
             st.markdown("##### Manuel stok düzeltmesi / rezervasyon")
@@ -3436,7 +3436,7 @@ def render_control_tower():
                         view[["ürün","tedarikçi","net_stok_kg","hold_kg","yolda_kg","aylık_tüketim_kg",
                               "stok_gün","lead_time_days","safety_stock_days",
                               "sipariş_noktası_kg","önerilen_sipariş_kg","durum"]],
-                        use_container_width=True,hide_index=True
+                        width="stretch",hide_index=True
                     )
 
                 st.markdown("##### Ürün stok politikası")
@@ -3478,7 +3478,7 @@ def render_control_tower():
                        CASE WHEN active=1 THEN 'Aktif' ELSE 'Pasif' END AS durum,notes AS notlar
                 FROM warehouses ORDER BY name
             """)
-            st.dataframe(wh_df,use_container_width=True,hide_index=True)
+            st.dataframe(wh_df,width="stretch",hide_index=True)
             with st.form("proc_new_warehouse",clear_on_submit=True):
                 w1,w2=st.columns(2)
                 wname=w1.text_input("Depo adı *")
@@ -3542,7 +3542,7 @@ def render_control_tower():
 
             forecast=cash_forecast(base_currency_fin,(7,30,60,90))
             st.markdown("#### Nakit projeksiyonu")
-            st.dataframe(forecast,use_container_width=True,hide_index=True)
+            st.dataframe(forecast,width="stretch",hide_index=True)
 
             if not forecast.empty:
                 ninety=float(forecast.loc[forecast["Gün"]==90,"Tahmini Nakit"].iloc[0])
@@ -3571,7 +3571,7 @@ def render_control_tower():
                             ["id","customer","invoice_no","due_date","outstanding",
                              "currency","days_overdue","outstanding_base","risk"]
                         ],
-                        use_container_width=True,hide_index=True
+                        width="stretch",hide_index=True
                     )
 
         with ar_tab:
@@ -3588,7 +3588,7 @@ def render_control_tower():
                 st.dataframe(
                     ar_view[["id","müşteri","fatura","vade","kalan","currency",
                              "gecikme_gün","yönetim_tutarı","base_currency","risk"]],
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
 
             st.markdown("#### Müşteri kredi riski")
@@ -3622,7 +3622,7 @@ def render_control_tower():
                 )
                 st.dataframe(
                     credit_risk,
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True
                 )
 
@@ -3717,7 +3717,7 @@ def render_control_tower():
                     account_label=st.selectbox("Girdiği banka/kasa",list(account_map.keys()),key="fin_ar_account")
                     reference=st.text_input("Referans",key="fin_ar_reference")
                     notes=st.text_input("Tahsilat notu",key="fin_ar_collect_notes")
-                    if st.button("Tahsilatı kaydet",type="primary",use_container_width=True,key="fin_ar_collect_btn"):
+                    if st.button("Tahsilatı kaydet",type="primary",width="stretch",key="fin_ar_collect_btn"):
                         ok,msg=record_receivable_payment(
                             rid,collection,collection_date,account_map[account_label],reference,notes
                         )
@@ -3738,7 +3738,7 @@ def render_control_tower():
                 st.dataframe(
                     ap_view[["id","tedarikçi","fatura","vade","kalan","currency",
                              "gecikme_gün","yönetim_tutarı","base_currency","risk"]],
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
 
             ap1,ap2=st.tabs(["Yeni Borç","Ödeme Gir"])
@@ -3822,7 +3822,7 @@ def render_control_tower():
                     account_label=st.selectbox("Çıktığı banka/kasa",list(account_map.keys()),key="fin_ap_account")
                     reference=st.text_input("Referans",key="fin_ap_reference")
                     notes=st.text_input("Ödeme notu",key="fin_ap_pay_notes")
-                    if st.button("Ödemeyi kaydet",type="primary",use_container_width=True,key="fin_ap_pay_btn"):
+                    if st.button("Ödemeyi kaydet",type="primary",width="stretch",key="fin_ap_pay_btn"):
                         ok,msg=record_payable_payment(
                             pid,payment,payment_date,account_map[account_label],reference,notes
                         )
@@ -3837,7 +3837,7 @@ def render_control_tower():
                        balance*fx_to_base AS yönetim_değeri,notes AS notlar
                 FROM cash_accounts WHERE active=1 ORDER BY name
             """)
-            st.dataframe(account_df,use_container_width=True,hide_index=True)
+            st.dataframe(account_df,width="stretch",hide_index=True)
             with st.form("fin_new_account",clear_on_submit=True):
                 a1,a2=st.columns(2)
                 name=a1.text_input("Hesap adı *",placeholder="EUR Banka / GBP Banka / Kasa")
@@ -3886,7 +3886,7 @@ def render_control_tower():
                 FROM cash_events
                 ORDER BY event_date ASC,id ASC
             """)
-            st.dataframe(events,use_container_width=True,hide_index=True)
+            st.dataframe(events,width="stretch",hide_index=True)
             with st.form("fin_new_event",clear_on_submit=True):
                 e1,e2,e3=st.columns(3)
                 event_date=e1.date_input("Tarih",value=date.today()+timedelta(days=7))
@@ -3922,7 +3922,7 @@ def render_control_tower():
                 LEFT JOIN cash_accounts ca ON ca.id=ft.account_id
                 ORDER BY ft.transaction_date DESC,ft.id DESC
             """)
-            st.dataframe(tx,use_container_width=True,hide_index=True)
+            st.dataframe(tx,width="stretch",hide_index=True)
 
     with quality_tab:
         st.markdown("### 🧪 Kalite + Claim + Sertifika + Regülasyon Merkezi")
@@ -3951,7 +3951,7 @@ def render_control_tower():
                     qview[["id","dosya_no","açılış","müşteri","tedarikçi","ürün","tip",
                            "önem","durum","etkilenen_kg","tahmini_zarar","currency",
                            "müşteri_claim","sorumlu","hedef_kapanış","gecikme_gün"]],
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
 
             with st.expander("Yeni kalite / claim dosyası aç",expanded=qcases.empty):
@@ -4107,7 +4107,7 @@ def render_control_tower():
                         FROM quality_actions WHERE quality_case_id=?
                         ORDER BY CASE status WHEN 'Açık' THEN 1 WHEN 'Devam' THEN 2 ELSE 3 END,due_date ASC,id DESC
                     """,(int(case_id),))
-                    st.dataframe(actions,use_container_width=True,hide_index=True)
+                    st.dataframe(actions,width="stretch",hide_index=True)
                     with st.form("quality_add_action",clear_on_submit=True):
                         a1,a2=st.columns(2)
                         action_type=a1.selectbox("Aksiyon tipi",["Teknik İnceleme","Müşteri","Tedarikçi","Numune/Analiz","Lojistik","Finansal","Regülasyon","Takip"])
@@ -4152,7 +4152,7 @@ def render_control_tower():
                         FROM quality_recoveries WHERE quality_case_id=?
                         ORDER BY id DESC
                     """,(int(case_id),))
-                    st.dataframe(recoveries,use_container_width=True,hide_index=True)
+                    st.dataframe(recoveries,width="stretch",hide_index=True)
                     with st.form("quality_recovery_form",clear_on_submit=True):
                         r1,r2,r3=st.columns(3)
                         recovery_type=r1.selectbox("Geri kazanım",["Credit Note","Replacement","İskonto","Chargeback","Return","Transport/Handling","Diğer"])
@@ -4203,7 +4203,7 @@ def render_control_tower():
                     certs[["id","owner_type","owner_name","document_type","market_country",
                            "authority","document_no","issue_date","expiry_date",
                            "renewal_lead_days","responsible","kalan_gün","uyarı","document_ref"]],
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
             with st.expander("Yeni sertifika / belge ekle",expanded=certs.empty):
                 products_c=query_df("SELECT id,name,supplier FROM product_catalog WHERE active=1 ORDER BY name")
@@ -4253,7 +4253,7 @@ def render_control_tower():
             if regs.empty:
                 st.info("Regülasyon / izin kaydı yok.")
             else:
-                st.dataframe(regs,use_container_width=True,hide_index=True)
+                st.dataframe(regs,width="stretch",hide_index=True)
             with st.expander("Yeni regülasyon / izin konusu aç",expanded=regs.empty):
                 products_r=query_df("SELECT id,name FROM product_catalog WHERE active=1 ORDER BY name")
                 with st.form("quality_new_reg",clear_on_submit=True):
@@ -4332,7 +4332,7 @@ def render_control_tower():
                 ELSE 10 END,
                 o.value DESC
         """)
-        st.dataframe(pipeline, use_container_width=True, hide_index=True)
+        st.dataframe(pipeline, width="stretch", hide_index=True)
 
         ptab1, ptab2 = st.tabs(["Fırsatı Güncelle", "Yeni Fırsat"])
 
@@ -4429,7 +4429,7 @@ def render_control_tower():
                 """, (int(opp_id),))
                 if not history.empty:
                     st.markdown("##### Aşama geçmişi")
-                    st.dataframe(history, use_container_width=True, hide_index=True)
+                    st.dataframe(history, width="stretch", hide_index=True)
 
         with ptab2:
             customers = query_df("SELECT id, name FROM customers ORDER BY name")
@@ -4496,7 +4496,7 @@ def render_control_tower():
               AND o.due_date != '' AND o.due_date <= ?
             ORDER BY o.due_date ASC
         """, (str(date.today()), str(date.today())))
-        st.dataframe(followups, use_container_width=True, hide_index=True)
+        st.dataframe(followups, width="stretch", hide_index=True)
 
         st.markdown("#### 14+ gündür temas edilmeyen aktif fırsatlar")
         stale = query_df("""
@@ -4513,7 +4513,7 @@ def render_control_tower():
               )
             ORDER BY o.value DESC
         """, (str(date.today()),))
-        st.dataframe(stale, use_container_width=True, hide_index=True)
+        st.dataframe(stale, width="stretch", hide_index=True)
 
         st.markdown("#### Son satış aktiviteleri")
         recent = query_df("""
@@ -4526,7 +4526,7 @@ def render_control_tower():
             ORDER BY a.activity_date DESC, a.id DESC
             LIMIT 30
         """)
-        st.dataframe(recent, use_container_width=True, hide_index=True)
+        st.dataframe(recent, width="stretch", hide_index=True)
 
     with tasks_tab:
         task_df = query_df("""
@@ -4538,7 +4538,7 @@ def render_control_tower():
                 WHEN 'Orta' THEN 3 ELSE 4 END,
                 due_date ASC
         """)
-        st.dataframe(task_df, use_container_width=True, hide_index=True)
+        st.dataframe(task_df, width="stretch", hide_index=True)
 
         with st.expander("Yeni görev ekle"):
             with st.form("ct_task_form", clear_on_submit=True):
@@ -4621,7 +4621,7 @@ def render_control_tower():
             ORDER BY CASE priority WHEN 'Kritik' THEN 1 ELSE 2 END, due_date ASC
             LIMIT 10
         """)
-        st.dataframe(decisions, use_container_width=True, hide_index=True)
+        st.dataframe(decisions, width="stretch", hide_index=True)
 
         st.markdown("#### En büyük aktif satış fırsatları")
         top = query_df("""
@@ -4635,7 +4635,7 @@ def render_control_tower():
             ORDER BY o.value DESC
             LIMIT 10
         """)
-        st.dataframe(top, use_container_width=True, hide_index=True)
+        st.dataframe(top, width="stretch", hide_index=True)
 
         st.markdown("#### Kalite / claim / belge uyarıları")
         closed_hold = query_df("""
@@ -4659,7 +4659,7 @@ def render_control_tower():
                     "case_no":"dosya","product_name":"ürün","lot_number":"lot",
                     "quality_status":"lot_durumu","quality_hold_kg":"hold_kg"
                 }),
-                use_container_width=True,hide_index=True
+                width="stretch",hide_index=True
             )
 
         ceo_q=quality_case_summary()
@@ -4670,7 +4670,7 @@ def render_control_tower():
                     ceo_q_open[["case_no","customer","product_name","severity","status",
                                 "affected_quantity_kg","estimated_loss","currency",
                                 "owner","target_close_date","gecikme_gün"]].head(10),
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
         ceo_cert=certificate_alerts()
         if not ceo_cert.empty:
@@ -4680,7 +4680,7 @@ def render_control_tower():
                 st.dataframe(
                     cert_risk[["owner_name","document_type","market_country","expiry_date",
                                "kalan_gün","uyarı","responsible"]].head(10),
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
         ceo_reg=regulatory_alerts()
         if not ceo_reg.empty:
@@ -4689,7 +4689,7 @@ def render_control_tower():
                 st.markdown("##### Açık regülasyon konuları")
                 st.dataframe(
                     reg_risk[["ürün","ülke","tip","durum","sonraki_aksiyon","son_tarih","sorumlu","gecikme_gün"]].head(10),
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
 
         st.markdown("#### Finans / tahsilat uyarıları")
@@ -4710,7 +4710,7 @@ def render_control_tower():
         z3.metric("Gecikmiş alacak",f"{ceo_overdue:,.0f} EUR")
         z4.metric("Açık borç",f"{ceo_pay_total:,.0f} EUR")
         if not fc90.empty:
-            st.dataframe(fc90,use_container_width=True,hide_index=True)
+            st.dataframe(fc90,width="stretch",hide_index=True)
             min_cash=float(fc90["Tahmini Nakit"].min())
             if min_cash<0:
                 st.error(f"30/60/90 günlük projeksiyonda yaklaşık {abs(min_cash):,.0f} EUR nakit açığı riski var.")
@@ -4746,7 +4746,7 @@ def render_control_tower():
                 axis=1
             )
             st.markdown("##### Müşteri kredi riski")
-            st.dataframe(ceo_credit,use_container_width=True,hide_index=True)
+            st.dataframe(ceo_credit,width="stretch",hide_index=True)
 
         if not ceo_rec.empty:
             risky=ceo_rec[ceo_rec["days_overdue"]>0].copy()
@@ -4754,7 +4754,7 @@ def render_control_tower():
                 st.markdown("##### Gecikmiş tahsilatlar")
                 st.dataframe(
                     risky[["customer","invoice_no","due_date","outstanding","currency","days_overdue","risk"]].head(10),
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
 
         st.markdown("#### Satın alma / stok uyarıları")
@@ -4773,7 +4773,7 @@ def render_control_tower():
                 st.dataframe(
                     ceo_alerts[["ürün","net_stok_kg","yolda_kg","stok_gün",
                                 "önerilen_sipariş_kg","durum"]].head(10),
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
 
         st.markdown("#### Yaklaşan sevkiyatlar")
@@ -4789,7 +4789,7 @@ def render_control_tower():
             LIMIT 8
         """)
         if not ceo_ship.empty:
-            st.dataframe(ceo_ship,use_container_width=True,hide_index=True)
+            st.dataframe(ceo_ship,width="stretch",hide_index=True)
 
         st.markdown("#### Teklif kârlılığı")
         recent_quotes = query_df("""
@@ -4807,7 +4807,7 @@ def render_control_tower():
         if recent_quotes.empty:
             st.info("Henüz kayıtlı teklif hesabı yok.")
         else:
-            st.dataframe(recent_quotes, use_container_width=True, hide_index=True)
+            st.dataframe(recent_quotes, width="stretch", hide_index=True)
 
         st.markdown("#### Henüz açılmamış en güçlü ürün fırsatları")
         ceo_recs = recommendation_rows()
@@ -4818,7 +4818,7 @@ def render_control_tower():
                 ceo_recs[
                     ["Müşteri","Ürün","Fit Score","Neden","Sorumlu"]
                 ].head(10),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "Fit Score": st.column_config.ProgressColumn(
