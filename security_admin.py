@@ -1,8 +1,10 @@
 import hashlib
 import hmac
+import io
 import json
 import re
 import sqlite3
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -304,6 +306,80 @@ def date_stamp():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
+def export_all_tables_zip(db_path):
+    buffer=io.BytesIO()
+    with connect(db_path) as conn, zipfile.ZipFile(buffer,"w",zipfile.ZIP_DEFLATED) as z:
+        tables=[
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            ).fetchall()
+            if not row[0].startswith("sqlite_")
+        ]
+        for table in tables:
+            df=pd.read_sql_query('SELECT * FROM "' + table + '"',conn)
+            z.writestr(table + ".csv",df.to_csv(index=False))
+    return buffer.getvalue()
+
+
+def import_master_csv(db_path, table, uploaded_file):
+    df=pd.read_csv(uploaded_file)
+    if df.empty:
+        return 0
+
+    allowed={
+        "customers":{
+            "name","country","sector","status","owner","annual_potential","currency",
+            "contact_name","contact_email","phone","source","notes"
+        },
+        "product_catalog":{
+            "name","category","supplier","supplier_country","target_sectors",
+            "applications","default_currency","default_opportunity_value","active","notes"
+        },
+        "tasks":{
+            "title","related_to","owner","priority","due_date","status","notes"
+        },
+    }
+    if table not in allowed:
+        raise ValueError("Bu tablo toplu içe aktarma için açık değil.")
+
+    cols=[c for c in df.columns if c in allowed[table]]
+    if not cols:
+        raise ValueError("Uygun sütun bulunamadı.")
+
+    required={"customers":"name","product_catalog":"name","tasks":"title"}[table]
+    if required not in cols:
+        raise ValueError("Zorunlu sütun eksik: " + required)
+
+    added=0
+    with connect(db_path) as conn:
+        for _,row in df.iterrows():
+            values=[]
+            use_cols=[]
+            for col in cols:
+                value=row[col]
+                if pd.isna(value):
+                    value=None
+                values.append(value)
+                use_cols.append(col)
+            placeholders=",".join(["?"]*len(use_cols))
+            columns=",".join(use_cols)
+            if table in ("customers","product_catalog"):
+                key_value=str(row[required]).strip()
+                exists=conn.execute(
+                    "SELECT COUNT(*) FROM " + table + " WHERE lower(" + required + ")=lower(?)",
+                    (key_value,)
+                ).fetchone()[0]
+                if exists:
+                    continue
+            conn.execute(
+                "INSERT INTO " + table + " (" + columns + ") VALUES (" + placeholders + ")",
+                values
+            )
+            added+=1
+        conn.commit()
+    return added
+
+
 def render_system_admin(db_path):
     init_security_tables(db_path)
     st.markdown("### ⚙️ Sistem Yönetimi")
@@ -317,8 +393,8 @@ def render_system_admin(db_path):
         access_denied("system")
         return
 
-    health_tab, audit_tab, backup_tab, users_tab = st.tabs(
-        ["🩺 Sistem Sağlığı","🧾 Audit Log","💾 Yedekleme","👥 Rol Yapısı"]
+    health_tab, audit_tab, backup_tab, import_tab, users_tab = st.tabs(
+        ["🩺 Sistem Sağlığı","🧾 Audit Log","💾 Yedekleme","📥 Toplu Veri","👥 Rol Yapısı"]
     )
 
     with health_tab:
@@ -362,10 +438,43 @@ def render_system_admin(db_path):
                 use_container_width=True,
                 type="primary",
             )
+            st.download_button(
+                "Tüm tabloları CSV ZIP olarak indir",
+                data=export_all_tables_zip(db_path),
+                file_name="as_control_tower_csv_" + date_stamp() + ".zip",
+                mime="application/zip",
+                use_container_width=True,
+            )
             st.warning(
                 "Bu indirme manuel yedektir. Kalıcı otomatik bulut yedeği için "
                 "yönetilen PostgreSQL/Supabase bağlantısı ayrıca yapılmalıdır."
             )
+
+    with import_tab:
+        table=st.selectbox(
+            "İçe aktarım türü",
+            ["customers","product_catalog","tasks"],
+            format_func=lambda x:{
+                "customers":"Müşteriler",
+                "product_catalog":"Ürün Kataloğu",
+                "tasks":"Görevler"
+            }[x]
+        )
+        st.caption(
+            "Müşteriler: name zorunlu · Ürünler: name zorunlu · Görevler: title zorunlu."
+        )
+        upload=st.file_uploader("CSV dosyası",type=["csv"],key="system_bulk_import")
+        if upload is not None:
+            try:
+                preview=pd.read_csv(upload)
+                st.dataframe(preview.head(20),use_container_width=True,hide_index=True)
+                upload.seek(0)
+                if st.button("CSV'yi içe aktar",type="primary",key="system_import_button"):
+                    n=import_master_csv(db_path,table,upload)
+                    st.success(str(n) + " yeni kayıt içe aktarıldı.")
+                    st.rerun()
+            except Exception as exc:
+                st.error("CSV okunamadı: " + str(exc))
 
     with users_tab:
         users=load_users()
