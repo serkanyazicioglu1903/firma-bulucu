@@ -2160,6 +2160,20 @@ def render_control_tower():
                         value=int(customer["default_payment_days"] or 90),
                         step=5
                     )
+                    st.markdown("##### Ana iletişim")
+                    i1, i2 = st.columns(2)
+                    contact_name = i1.text_input(
+                        "Ana kontak",
+                        value=customer["contact_name"] or ""
+                    )
+                    contact_email = i2.text_input(
+                        "Genel / ana e-posta",
+                        value=customer["contact_email"] or ""
+                    )
+                    phone = st.text_input(
+                        "Telefon",
+                        value=customer["phone"] or ""
+                    )
                     profile = st.text_area(
                         "Üretim / ürün profili",
                         value=customer["product_profile"] or "",
@@ -2177,11 +2191,13 @@ def render_control_tower():
                         execute(
                             """UPDATE customers
                                SET country=?,sector=?,status=?,owner=?,
-                                   annual_potential=?,currency=?,product_profile=?,
+                                   annual_potential=?,currency=?,contact_name=?,
+                                   contact_email=?,phone=?,product_profile=?,
                                    priority_tier=?,credit_limit=?,default_payment_days=?,notes=?
                                WHERE id=?""",
                             (
                                 country, sector, status, owner, potential, currency,
+                                contact_name, contact_email.strip(), phone.strip(),
                                 profile, priority_tier, float(credit_limit),
                                 int(default_payment_days), notes, customer_id
                             )
