@@ -285,3 +285,57 @@ def test_certificate_alerts_and_ai_manager(tmp_path):
     assert df is not None
     brief = build_ceo_brief_text(db)
     assert "CEO ÖZETİ" in brief
+
+
+def test_cancelled_or_over_po_shipment_is_blocked(tmp_path):
+    setup_db(tmp_path)
+    pid = id_for("product_catalog", "Oat Fibre")
+    wid = id_for("warehouses", "Merkez Depo")
+
+    control_tower.execute(
+        """INSERT INTO purchase_orders
+        (po_number,supplier,product_id,product_name,quantity_kg,unit_price,currency,
+         destination_warehouse_id,status)
+        VALUES (?,?,?,?,?,?,?,?,?)""",
+        ("PO-TEST-OVER","Grainmore",pid,"Oat Fibre",1000,4.3,"EUR",wid,"Sipariş Verildi")
+    )
+    poid = int(control_tower.query_df(
+        "SELECT id FROM purchase_orders WHERE po_number='PO-TEST-OVER'"
+    ).iloc[0]["id"])
+
+    control_tower.execute(
+        """INSERT INTO shipments
+        (purchase_order_id,shipment_ref,quantity_kg,status,destination_warehouse_id)
+        VALUES (?,?,?,?,?)""",
+        (poid,"CANCELLED",200,"İptal",wid)
+    )
+    cancelled_id = int(control_tower.query_df(
+        "SELECT id FROM shipments WHERE shipment_ref='CANCELLED'"
+    ).iloc[0]["id"])
+    ok_cancelled, _ = control_tower.receive_shipment_to_stock(cancelled_id)
+    assert not ok_cancelled
+
+    control_tower.execute(
+        """INSERT INTO shipments
+        (purchase_order_id,shipment_ref,quantity_kg,status,destination_warehouse_id)
+        VALUES (?,?,?,?,?)""",
+        (poid,"FIRST",800,"Yolda",wid)
+    )
+    first_id = int(control_tower.query_df(
+        "SELECT id FROM shipments WHERE shipment_ref='FIRST'"
+    ).iloc[0]["id"])
+    ok_first, _ = control_tower.receive_shipment_to_stock(first_id)
+    assert ok_first
+
+    control_tower.execute(
+        """INSERT INTO shipments
+        (purchase_order_id,shipment_ref,quantity_kg,status,destination_warehouse_id)
+        VALUES (?,?,?,?,?)""",
+        (poid,"OVER",300,"Yolda",wid)
+    )
+    over_id = int(control_tower.query_df(
+        "SELECT id FROM shipments WHERE shipment_ref='OVER'"
+    ).iloc[0]["id"])
+    ok_over, msg_over = control_tower.receive_shipment_to_stock(over_id)
+    assert not ok_over
+    assert "aşar" in msg_over.lower()
