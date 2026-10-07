@@ -1896,7 +1896,7 @@ def render_control_tower():
             "SELECT COUNT(*) n FROM opportunities WHERE stage NOT IN ('Kazanıldı','Kaybedildi')"
         ).iloc[0]["n"])
         opp = query_df(
-            "SELECT value, probability FROM opportunities WHERE stage NOT IN ('Kaybedildi')"
+            "SELECT value, probability FROM opportunities WHERE stage NOT IN ('Kazanıldı','Kaybedildi')"
         )
         weighted = float((opp["value"] * opp["probability"] / 100).sum()) if not opp.empty else 0
         won = float(query_df(
