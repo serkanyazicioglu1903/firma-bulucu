@@ -422,3 +422,35 @@ def test_data_quality_diagnostics_flag_missing_profiles(tmp_path):
     title, df = answer_question(db, "Sistemde hangi kritik veriler eksik?")
     assert "eksik" in title.lower()
     assert df is not None and not df.empty
+
+
+def test_partial_quality_hold_reduces_only_held_quantity(tmp_path):
+    setup_db(tmp_path)
+    pid = id_for("product_catalog", "GMS Food Grade")
+    wid = id_for("warehouses", "Merkez Depo")
+    control_tower.execute(
+        """INSERT INTO inventory_lots
+        (product_id,product_name,warehouse_id,lot_number,
+         quantity_received_kg,quantity_available_kg,quantity_reserved_kg,quality_status)
+        VALUES (?,?,?,?,?,?,?,?)""",
+        (pid, "GMS Food Grade", wid, "GMS-1", 1000, 1000, 0, "Released")
+    )
+    lot_id = int(control_tower.query_df(
+        "SELECT id FROM inventory_lots WHERE lot_number='GMS-1'"
+    ).iloc[0]["id"])
+
+    ok, _ = control_tower.set_lot_quality_status(
+        lot_id, "HOLD", 123, hold_kg=300
+    )
+    assert ok
+    snap = control_tower.stock_snapshot()
+    row = snap[snap["id"] == pid].iloc[0]
+    assert float(row["quality_hold_kg"]) == 300
+    assert float(row["net_available_kg"]) == 700
+
+    ok2, _ = control_tower.set_lot_quality_status(lot_id, "Released", None)
+    assert ok2
+    snap2 = control_tower.stock_snapshot()
+    row2 = snap2[snap2["id"] == pid].iloc[0]
+    assert float(row2["quality_hold_kg"]) == 0
+    assert float(row2["net_available_kg"]) == 1000
