@@ -18,6 +18,12 @@ def test_product_customer_selector_does_not_keep_stale_customer():
 
     app_path = Path(__file__).resolve().parents[1] / "app.py"
     app = AppTest.from_file(app_path, default_timeout=60)
+    app.session_state["ct_user"] = {
+        "username": "ci-admin",
+        "display_name": "CI Admin",
+        "role": "ADMIN",
+    }
+    app.session_state["ct_session_id"] = "ci-session"
     app.run()
     assert not app.exception
 
