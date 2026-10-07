@@ -39,7 +39,8 @@ def dashboard_snapshot(db_path):
     weighted = float(scalar(
         db_path,
         """SELECT COALESCE(SUM(value*probability/100.0),0)
-           FROM opportunities WHERE stage!='Kaybedildi'"""
+           FROM opportunities
+           WHERE stage NOT IN ('Kazanıldı','Kaybedildi')"""
     ))
     overdue_tasks = int(scalar(
         db_path,
