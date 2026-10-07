@@ -4,7 +4,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import control_tower
-from security_admin import hash_password, verify_password
+import security_admin
+from security_admin import authorize_write, hash_password, verify_password
 
 
 def use_temp_db(tmp_path):
@@ -62,3 +63,23 @@ def test_stock_snapshot_runs(tmp_path):
     df = control_tower.stock_snapshot()
     assert "name" in df.columns
     assert "status" in df.columns
+
+
+def test_role_write_permissions(monkeypatch):
+    monkeypatch.setattr(security_admin, "current_role", lambda: "SALES")
+    assert authorize_write("INSERT INTO opportunities (product) VALUES (?)")
+    assert authorize_write("UPDATE customers SET status=? WHERE id=?")
+    assert not authorize_write("UPDATE cash_accounts SET balance=? WHERE id=?")
+    assert not authorize_write("INSERT INTO payables (supplier) VALUES (?)")
+
+    monkeypatch.setattr(security_admin, "current_role", lambda: "FINANCE")
+    assert authorize_write("UPDATE receivables SET paid_amount=? WHERE id=?")
+    assert authorize_write("INSERT INTO cash_events (description) VALUES (?)")
+    assert not authorize_write("UPDATE inventory_lots SET quantity_available_kg=? WHERE id=?")
+    assert not authorize_write("INSERT INTO quality_cases (case_no) VALUES (?)")
+
+    monkeypatch.setattr(security_admin, "current_role", lambda: "VIEWER")
+    assert not authorize_write("UPDATE customers SET status=? WHERE id=?")
+
+    monkeypatch.setattr(security_admin, "current_role", lambda: "ADMIN")
+    assert authorize_write("DELETE FROM customers WHERE id=?")
