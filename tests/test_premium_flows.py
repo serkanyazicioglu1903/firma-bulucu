@@ -515,3 +515,72 @@ def test_weighted_pipeline_excludes_won_deals(tmp_path):
     after = __import__("ai_manager").dashboard_snapshot(db)
     assert after["active_opps"] == 1
     assert round(float(after["weighted"]), 2) == 245000.00
+
+
+def test_quote_status_sync_draft_sent_and_acceptance(tmp_path):
+    setup_db(tmp_path)
+    opp_id = int(control_tower.query_df(
+        "SELECT id FROM opportunities WHERE product='Mokaero 22 Topping Base'"
+    ).iloc[0]["id"])
+
+    before = control_tower.query_df(
+        "SELECT stage FROM opportunities WHERE id=?", (opp_id,)
+    ).iloc[0]["stage"]
+    assert before == "Deneme"
+
+    ok_draft, _ = control_tower.sync_quote_to_opportunity(
+        opp_id, "Taslak", "Satış", "Pakmaya"
+    )
+    assert ok_draft
+    after_draft = control_tower.query_df(
+        "SELECT stage FROM opportunities WHERE id=?", (opp_id,)
+    ).iloc[0]["stage"]
+    assert after_draft == "Deneme"
+
+    ok_sent, _ = control_tower.sync_quote_to_opportunity(
+        opp_id, "Gönderildi", "Satış", "Pakmaya"
+    )
+    assert ok_sent
+    after_sent = control_tower.query_df(
+        "SELECT stage,next_action FROM opportunities WHERE id=?", (opp_id,)
+    ).iloc[0]
+    assert after_sent["stage"] == "Teklif"
+    assert after_sent["next_action"] == "Teklif takibi"
+
+    ok_accept, _ = control_tower.sync_quote_to_opportunity(
+        opp_id, "Kabul", "Satış", "Pakmaya"
+    )
+    assert ok_accept
+    after_accept = control_tower.query_df(
+        "SELECT stage,next_action FROM opportunities WHERE id=?", (opp_id,)
+    ).iloc[0]
+    assert after_accept["stage"] == "Sipariş"
+    assert after_accept["next_action"] == "Sipariş teyidi / sevkiyat planı"
+
+
+def test_revised_quote_does_not_regress_advanced_stage(tmp_path):
+    setup_db(tmp_path)
+    opp_id = int(control_tower.query_df(
+        "SELECT id FROM opportunities WHERE product='Mokaero 22 Topping Base'"
+    ).iloc[0]["id"])
+
+    control_tower.update_opportunity_stage(
+        opp_id,
+        "Pazarlık",
+        75,
+        "Son fiyat",
+        date.today()+timedelta(days=2),
+        "Satış",
+        date.today()+timedelta(days=20),
+        "",
+        "İleri aşama",
+    )
+
+    ok, _ = control_tower.sync_quote_to_opportunity(
+        opp_id, "Revizyon", "Satış", "Pakmaya"
+    )
+    assert ok
+    row = control_tower.query_df(
+        "SELECT stage FROM opportunities WHERE id=?", (opp_id,)
+    ).iloc[0]
+    assert row["stage"] == "Pazarlık"
