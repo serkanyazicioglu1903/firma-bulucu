@@ -3947,7 +3947,7 @@ def render_control_tower():
                         final_resolution=st.text_area("Nihai çözüm",value=str(qc["final_resolution"] or ""))
                         release_lot=st.checkbox("Dosya kapanırsa bağlı lotu RELEASE et",value=False)
                         if st.form_submit_button("Dosyayı güncelle",type="primary"):
-                            closed=str(date.today()) if status=="Kapandı" else str(qc["closed_date"] or "")
+                            closed=str(date.today()) if status=="Kapandı" else ""
                             execute("""UPDATE quality_cases
                                 SET status=?,root_cause=?,supplier_response=?,final_resolution=?,closed_date=?
                                 WHERE id=?""",
@@ -4401,6 +4401,27 @@ def render_control_tower():
         st.dataframe(top, use_container_width=True, hide_index=True)
 
         st.markdown("#### Kalite / claim / belge uyarıları")
+        closed_hold = query_df("""
+            SELECT q.case_no,q.product_name,il.lot_number,il.quality_status,
+                   il.quantity_available_kg
+            FROM quality_cases q
+            JOIN inventory_lots il ON il.id=q.inventory_lot_id
+            WHERE q.status='Kapandı'
+              AND COALESCE(il.quality_status,'Released')!='Released'
+            ORDER BY q.id DESC
+        """)
+        if not closed_hold.empty:
+            st.error(
+                f"{len(closed_hold)} kapalı kalite dosyasına bağlı lot hâlâ HOLD/Karantina durumda."
+            )
+            st.dataframe(
+                closed_hold.rename(columns={
+                    "case_no":"dosya","product_name":"ürün","lot_number":"lot",
+                    "quality_status":"lot_durumu","quantity_available_kg":"elde_kg"
+                }),
+                use_container_width=True,hide_index=True
+            )
+
         ceo_q=quality_case_summary()
         if not ceo_q.empty:
             ceo_q_open=ceo_q[~ceo_q["status"].isin(["Kapandı","İptal"])].copy()
