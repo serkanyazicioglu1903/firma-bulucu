@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - as-control-tower-v1
+      - step-10-11-production-hardening
       - step-9-ai-manager
 
 jobs:
@@ -24,19 +25,33 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile Python files
-        run: python -m py_compile app.py control_tower.py ai_manager.py
+        run: python -m py_compile app.py control_tower.py ai_manager.py security_admin.py management_reports.py role_portal.py migrate_sqlite_to_postgres.py
+
+      - name: Core tests
+        run: pytest -q tests/test_core.py
 
       - name: Streamlit startup smoke test
         run: |
+          mkdir -p .streamlit
+          cat > .streamlit/secrets.toml <<'EOF'
+          CONTROL_TOWER_PASSWORD = "ci-test-password"
+          EOF
+
           python - <<'PY'
           from streamlit.testing.v1 import AppTest
 
           app = AppTest.from_file("app.py", default_timeout=60)
+          app.session_state["ct_user"] = {
+              "username": "ci-admin",
+              "display_name": "CI Admin",
+              "role": "ADMIN",
+          }
+          app.session_state["ct_session_id"] = "ci-session"
           app.run()
 
           if app.exception:
               raise AssertionError(f"Streamlit startup exception: {app.exception}")
 
-          print("Streamlit app loaded successfully.")
+          print("Streamlit app loaded successfully with authenticated ADMIN session.")
           print("Top-level tabs:", [t.label for t in app.tabs])
           PY
