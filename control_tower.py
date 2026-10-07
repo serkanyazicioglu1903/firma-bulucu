@@ -5,6 +5,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from ai_manager import render_ai_manager
+
 DB_PATH = Path(__file__).with_name("as_control_tower.db")
 
 STAGES = [
@@ -1713,7 +1715,7 @@ def render_control_tower():
     st.subheader("🧭 AS CONTROL TOWER")
     st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
 
-    dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, quality_tab, pipeline_tab, followup_tab, tasks_tab, ceo_tab = st.tabs(
+    dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, quality_tab, pipeline_tab, followup_tab, tasks_tab, ai_tab, ceo_tab = st.tabs(
         [
             "📊 Yönetici Paneli",
             "👥 CRM / Müşteri 360",
@@ -1725,6 +1727,7 @@ def render_control_tower():
             "💰 Satış Pipeline",
             "📞 Takip Merkezi",
             "✅ Görevler",
+            "🤖 AI Yönetici",
             "🎯 Serkan Ekranı",
         ]
     )
@@ -4124,6 +4127,9 @@ def render_control_tower():
                 execute("UPDATE tasks SET status=? WHERE id=?", (new_status, int(task_id)))
                 st.success("Görev güncellendi.")
                 st.rerun()
+
+    with ai_tab:
+        render_ai_manager(DB_PATH)
 
     with ceo_tab:
         opp = query_df(
