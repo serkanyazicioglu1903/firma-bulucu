@@ -6,6 +6,15 @@ import pandas as pd
 import streamlit as st
 
 from ai_manager import render_ai_manager
+from management_reports import render_management_reports
+from security_admin import (
+    audit_sql_write,
+    can_access,
+    init_security_tables,
+    login_gate,
+    logout_button,
+    render_system_admin,
+)
 
 DB_PATH = Path(__file__).with_name("as_control_tower.db")
 
@@ -43,6 +52,7 @@ def execute(sql, params=()):
     with get_conn() as conn:
         conn.execute(sql, params)
         conn.commit()
+    audit_sql_write(DB_PATH, sql)
 
 
 def query_df(sql, params=()):
@@ -1678,6 +1688,10 @@ def save_quote(customer_id, opportunity_id, product_name, inputs, calc):
 
 def render_control_tower():
     init_db()
+    init_security_tables(DB_PATH)
+    if not login_gate():
+        return
+    logout_button()
     seed_once()
     seed_product_catalog()
     seed_warehouses()
@@ -1715,7 +1729,7 @@ def render_control_tower():
     st.subheader("🧭 AS CONTROL TOWER")
     st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
 
-    dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, quality_tab, pipeline_tab, followup_tab, tasks_tab, ai_tab, ceo_tab = st.tabs(
+    dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, quality_tab, pipeline_tab, followup_tab, tasks_tab, ai_tab, reports_tab, ceo_tab, system_tab = st.tabs(
         [
             "📊 Yönetici Paneli",
             "👥 CRM / Müşteri 360",
@@ -1728,7 +1742,9 @@ def render_control_tower():
             "📞 Takip Merkezi",
             "✅ Görevler",
             "🤖 AI Yönetici",
+            "📈 Raporlar",
             "🎯 Serkan Ekranı",
+            "⚙️ Sistem",
         ]
     )
 
@@ -4131,6 +4147,12 @@ def render_control_tower():
     with ai_tab:
         render_ai_manager(DB_PATH)
 
+    with reports_tab:
+        if can_access("reports") or can_access("dashboard"):
+            render_management_reports(DB_PATH)
+        else:
+            st.warning("Bu raporlar için yetkin yok.")
+
     with ceo_tab:
         opp = query_df(
             "SELECT value, probability FROM opportunities WHERE stage NOT IN ('Kaybedildi')"
@@ -4363,3 +4385,7 @@ def render_control_tower():
             )
         else:
             st.success("Şu anda kritik gecikmiş satış takibi görünmüyor.")
+
+
+    with system_tab:
+        render_system_admin(DB_PATH)
