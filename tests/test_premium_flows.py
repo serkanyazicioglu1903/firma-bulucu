@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import control_tower
-from ai_manager import answer_question, build_ceo_brief_text, data_quality_issues
+from ai_manager import answer_question, build_ceo_brief_text, data_quality_issues, stock_risks
 
 
 def setup_db(tmp_path):
@@ -454,3 +454,37 @@ def test_partial_quality_hold_reduces_only_held_quantity(tmp_path):
     row2 = snap2[snap2["id"] == pid].iloc[0]
     assert float(row2["quality_hold_kg"]) == 0
     assert float(row2["net_available_kg"]) == 1000
+
+
+def test_ai_stock_risk_respects_open_po(tmp_path):
+    db = setup_db(tmp_path)
+    pid = id_for("product_catalog", "Vital Wheat Gluten")
+    wid = id_for("warehouses", "Merkez Depo")
+
+    control_tower.execute(
+        """INSERT INTO inventory_lots
+        (product_id,product_name,warehouse_id,lot_number,
+         quantity_received_kg,quantity_available_kg,quantity_reserved_kg,quality_status)
+        VALUES (?,?,?,?,?,?,?,?)""",
+        (pid, "Vital Wheat Gluten", wid, "VG-LOW", 1000, 1000, 0, "Released")
+    )
+    control_tower.execute(
+        """INSERT INTO inventory_policy
+        (product_id,monthly_usage_kg,safety_stock_days,lead_time_days,reorder_review_days)
+        VALUES (?,?,?,?,?)""",
+        (pid, 3000, 30, 30, 7)
+    )
+
+    risks_without_po = stock_risks(db)
+    assert "Vital Wheat Gluten" in risks_without_po["ürün"].tolist()
+
+    control_tower.execute(
+        """INSERT INTO purchase_orders
+        (po_number,supplier,product_id,product_name,quantity_kg,unit_price,currency,
+         destination_warehouse_id,status)
+        VALUES (?,?,?,?,?,?,?,?,?)""",
+        ("PO-AI-STOCK","Fidelinka",pid,"Vital Wheat Gluten",10000,1.6,"EUR",wid,"Teyitli")
+    )
+
+    risks_with_po = stock_risks(db)
+    assert "Vital Wheat Gluten" not in risks_with_po["ürün"].tolist()
