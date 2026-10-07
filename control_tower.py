@@ -1075,12 +1075,28 @@ def stock_snapshot():
         GROUP BY po.product_id
     """)
     po_open = query_df("""
-        SELECT product_id,
-               SUM(CASE
-                     WHEN status NOT IN ('Tamamlandı','İptal')
-                     THEN quantity_kg ELSE 0 END) AS open_po_kg
-        FROM purchase_orders
-        GROUP BY product_id
+        SELECT po.product_id,
+               SUM(
+                   CASE
+                     WHEN po.status NOT IN ('Tamamlandı','İptal')
+                     THEN MAX(
+                         po.quantity_kg - COALESCE(r.received_kg,0),
+                         0
+                     )
+                     ELSE 0
+                   END
+               ) AS open_po_kg
+        FROM purchase_orders po
+        LEFT JOIN (
+            SELECT purchase_order_id,
+                   SUM(
+                       CASE WHEN received_to_stock=1 AND status!='İptal'
+                            THEN quantity_kg ELSE 0 END
+                   ) AS received_kg
+            FROM shipments
+            GROUP BY purchase_order_id
+        ) r ON r.purchase_order_id=po.id
+        GROUP BY po.product_id
     """)
     policies = query_df("""
         SELECT product_id,monthly_usage_kg,safety_stock_days,lead_time_days,reorder_review_days
@@ -1111,7 +1127,10 @@ def stock_snapshot():
         if r["daily_usage_kg"] > 0 else None,
         axis=1
     )
-    df["projected_stock_kg"] = df["net_available_kg"] + df["inbound_kg"]
+    # Projected stock must include the outstanding balance of confirmed/open POs,
+    # even when a shipment record has not been created yet. inbound_kg remains a
+    # visibility metric for quantities already assigned to a shipment.
+    df["projected_stock_kg"] = df["net_available_kg"] + df["open_po_kg"]
     df["reorder_point_kg"] = df["daily_usage_kg"] * (
         df["lead_time_days"] + df["safety_stock_days"] + df["reorder_review_days"]
     )
