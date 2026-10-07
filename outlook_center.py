@@ -80,6 +80,32 @@ def init_outlook_tables(db_path):
         conn.commit()
 
 
+def outlook_access_allowed():
+    try:
+        required_password = str(st.secrets.get("CONTROL_TOWER_PASSWORD", "") or "")
+    except Exception:
+        required_password = ""
+
+    if not required_password:
+        st.warning(
+            "Outlook entegrasyonu güvenlik nedeniyle kilitli. "
+            "Streamlit Secrets içine CONTROL_TOWER_PASSWORD eklenmeden Outlook bağlantısı açılamaz."
+        )
+        return False
+
+    if st.session_state.get("outlook_admin_unlocked"):
+        return True
+
+    password = st.text_input("Outlook entegrasyon şifresi", type="password", key="outlook_admin_password")
+    if st.button("Outlook merkezini aç", key="outlook_admin_unlock"):
+        if password == required_password:
+            st.session_state["outlook_admin_unlocked"] = True
+            st.rerun()
+        else:
+            st.error("Şifre yanlış.")
+    return False
+
+
 def microsoft_settings():
     try:
         client_id = str(st.secrets.get("MICROSOFT_CLIENT_ID", "") or "").strip()
@@ -276,6 +302,9 @@ def render_outlook_center(db_path):
         "AS Control Tower Microsoft Graph üzerinden ayrı yetkilendirilir."
     )
 
+    if not outlook_access_allowed():
+        return
+
     client_id, tenant_id = microsoft_settings()
     if not client_id:
         st.warning("Microsoft bağlantısı henüz programda yapılandırılmadı.")
@@ -338,9 +367,18 @@ def render_outlook_center(db_path):
 
     try:
         profile = get_profile(access_token)
+        mailbox = (profile.get("mail") or profile.get("userPrincipalName") or "").lower()
+        try:
+            allowed_mailbox = str(st.secrets.get("MICROSOFT_ALLOWED_EMAIL", "") or "").lower().strip()
+        except Exception:
+            allowed_mailbox = ""
+        if allowed_mailbox and mailbox != allowed_mailbox:
+            st.session_state["ms_access_token"] = ""
+            st.session_state["ms_token_cache"] = ""
+            st.error("Bu Microsoft hesabının AS Control Tower'a bağlanmasına izin verilmemiş.")
+            return
         st.success(
-            f"Bağlı Outlook: {profile.get('displayName','')} · "
-            f"{profile.get('mail') or profile.get('userPrincipalName') or ''}"
+            f"Bağlı Outlook: {profile.get('displayName','')} · {mailbox}"
         )
     except Exception as exc:
         st.warning(f"Outlook oturumu yenilenmeli: {exc}")
