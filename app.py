@@ -17,7 +17,118 @@ except Exception:
 
 from control_tower import render_control_tower
 
-st.set_page_config(page_title="AS İleri Firma & Ürün Bulucu", page_icon="🏭", layout="wide")
+st.set_page_config(
+    page_title="AS İleri | Control Tower",
+    page_icon="🏭",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown(
+    """
+    <style>
+    /* AS İleri premium shell */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    div[data-testid="stToolbar"] {visibility: hidden; height: 0;}
+    div[data-testid="stDecoration"] {display: none;}
+
+    .block-container {
+        max-width: 1500px;
+        padding-top: 1.4rem;
+        padding-bottom: 3rem;
+    }
+
+    h1, h2, h3 {
+        letter-spacing: -0.025em;
+    }
+
+    div[data-testid="stMetric"] {
+        border: 1px solid rgba(128,128,128,.18);
+        border-radius: 16px;
+        padding: .85rem 1rem;
+        background: rgba(255,255,255,.025);
+    }
+
+    div[data-testid="stDataFrame"] {
+        border: 1px solid rgba(128,128,128,.14);
+        border-radius: 14px;
+        overflow: hidden;
+    }
+
+    .stButton > button,
+    .stDownloadButton > button,
+    div[data-testid="stFormSubmitButton"] > button {
+        border-radius: 12px;
+        min-height: 2.65rem;
+        font-weight: 600;
+    }
+
+    div[data-baseweb="select"] > div,
+    .stTextInput input,
+    .stNumberInput input,
+    .stTextArea textarea {
+        border-radius: 12px !important;
+    }
+
+    div[data-baseweb="tab-list"] {
+        gap: .25rem;
+    }
+
+    button[data-baseweb="tab"] {
+        border-radius: 10px 10px 0 0;
+        padding-left: .65rem !important;
+        padding-right: .65rem !important;
+    }
+
+    @media (max-width: 768px) {
+        .block-container {
+            padding-top: .7rem !important;
+            padding-left: .9rem !important;
+            padding-right: .9rem !important;
+        }
+
+        h1 {
+            font-size: 2.15rem !important;
+            line-height: 1.06 !important;
+        }
+
+        h2 {
+            font-size: 1.65rem !important;
+            line-height: 1.12 !important;
+        }
+
+        h3 {
+            font-size: 1.32rem !important;
+        }
+
+        div[data-testid="stMetricValue"] {
+            font-size: 2rem !important;
+        }
+
+        div[data-testid="stMetricLabel"] {
+            font-size: .88rem !important;
+        }
+
+        button[data-baseweb="tab"] {
+            font-size: .82rem !important;
+            min-width: max-content;
+        }
+
+        div[data-testid="stDataFrame"] {
+            font-size: .86rem;
+        }
+
+        .stButton > button,
+        .stDownloadButton > button,
+        div[data-testid="stFormSubmitButton"] > button {
+            width: 100%;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # =========================================================
 # ORTAK AYARLAR
