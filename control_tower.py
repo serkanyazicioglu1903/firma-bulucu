@@ -2172,15 +2172,23 @@ def render_control_tower():
                             )
                         },
                     )
-                    selected_idx = st.selectbox(
+                    product_options = [int(x) for x in recs["product_id"].tolist()]
+                    product_key = f"intel_customer_rec_{cid}"
+                    if (
+                        product_key in st.session_state
+                        and st.session_state[product_key] not in product_options
+                    ):
+                        st.session_state.pop(product_key, None)
+                    selected_product_id = st.selectbox(
                         "Fırsata çevrilecek öneri",
-                        list(range(len(recs))),
-                        format_func=lambda i: (
-                            f"{recs.iloc[i]['Ürün']} · skor {recs.iloc[i]['Fit Score']}"
+                        product_options,
+                        format_func=lambda product_id: (
+                            f"{recs.loc[recs['product_id']==product_id,'Ürün'].iloc[0]} · "
+                            f"skor {recs.loc[recs['product_id']==product_id,'Fit Score'].iloc[0]}"
                         ),
-                        key=f"intel_customer_rec_{cid}"
+                        key=product_key
                     )
-                    selected = recs.iloc[selected_idx]
+                    selected = recs[recs["product_id"] == int(selected_product_id)].iloc[0]
                     r1, r2 = st.columns(2)
                     value = r1.number_input(
                         "Fırsat değeri",
@@ -2295,15 +2303,23 @@ def render_control_tower():
                             )
                         },
                     )
-                    selected_idx = st.selectbox(
+                    customer_options = [int(x) for x in recs["customer_id"].tolist()]
+                    customer_key = f"intel_product_rec_{pid}"
+                    if (
+                        customer_key in st.session_state
+                        and st.session_state[customer_key] not in customer_options
+                    ):
+                        st.session_state.pop(customer_key, None)
+                    selected_customer_id = st.selectbox(
                         "Fırsata çevrilecek müşteri",
-                        list(range(len(recs))),
-                        format_func=lambda i: (
-                            f"{recs.iloc[i]['Müşteri']} · skor {recs.iloc[i]['Fit Score']}"
+                        customer_options,
+                        format_func=lambda customer_id: (
+                            f"{recs.loc[recs['customer_id']==customer_id,'Müşteri'].iloc[0]} · "
+                            f"skor {recs.loc[recs['customer_id']==customer_id,'Fit Score'].iloc[0]}"
                         ),
-                        key=f"intel_product_rec_{pid}"
+                        key=customer_key
                     )
-                    selected = recs.iloc[selected_idx]
+                    selected = recs[recs["customer_id"] == int(selected_customer_id)].iloc[0]
                     y1, y2 = st.columns(2)
                     value = y1.number_input(
                         "Fırsat değeri",
