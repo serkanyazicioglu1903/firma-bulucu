@@ -3114,10 +3114,26 @@ def render_control_tower():
 
             with st.expander("Yeni sevkiyat oluştur"):
                 pos=query_df("""
-                    SELECT id,po_number,supplier,product_name,quantity_kg,destination_warehouse_id
-                    FROM purchase_orders
-                    WHERE status NOT IN ('Tamamlandı','İptal')
-                    ORDER BY id DESC
+                    SELECT po.id,po.po_number,po.supplier,po.product_name,po.quantity_kg,
+                           po.destination_warehouse_id,
+                           COALESCE(SUM(
+                               CASE WHEN COALESCE(s.status,'')!='İptal'
+                                    THEN s.quantity_kg ELSE 0 END
+                           ),0) AS assigned_shipment_kg,
+                           MAX(
+                               po.quantity_kg - COALESCE(SUM(
+                                   CASE WHEN COALESCE(s.status,'')!='İptal'
+                                        THEN s.quantity_kg ELSE 0 END
+                               ),0),
+                               0
+                           ) AS remaining_to_ship_kg
+                    FROM purchase_orders po
+                    LEFT JOIN shipments s ON s.purchase_order_id=po.id
+                    WHERE po.status NOT IN ('Tamamlandı','İptal')
+                    GROUP BY po.id,po.po_number,po.supplier,po.product_name,
+                             po.quantity_kg,po.destination_warehouse_id
+                    HAVING remaining_to_ship_kg > 0.001
+                    ORDER BY po.id DESC
                 """)
                 warehouses_s=query_df("SELECT id,name FROM warehouses WHERE active=1 ORDER BY name")
                 if pos.empty:
@@ -3127,8 +3143,19 @@ def render_control_tower():
                         po_label=st.selectbox("PO",pos.apply(lambda r:f"{r['po_number']} · {r['supplier']} · {r['product_name']}",axis=1).tolist())
                         po_index=pos.apply(lambda r:f"{r['po_number']} · {r['supplier']} · {r['product_name']}",axis=1).tolist().index(po_label)
                         po_row=pos.iloc[po_index]
+                        st.caption(
+                            f"PO toplamı: {float(po_row['quantity_kg']):,.0f} kg · "
+                            f"Shipment'a bağlanan: {float(po_row['assigned_shipment_kg']):,.0f} kg · "
+                            f"Kalan: {float(po_row['remaining_to_ship_kg']):,.0f} kg"
+                        )
                         y1,y2,y3=st.columns(3)
-                        ship_qty=y1.number_input("Sevk miktarı (kg)",min_value=1.0,value=float(po_row["quantity_kg"]),step=1000.0)
+                        ship_qty=y1.number_input(
+                            "Sevk miktarı (kg)",
+                            min_value=1.0,
+                            max_value=float(po_row["remaining_to_ship_kg"]),
+                            value=float(po_row["remaining_to_ship_kg"]),
+                            step=min(1000.0,float(po_row["remaining_to_ship_kg"]))
+                        )
                         transport=y2.selectbox("Taşıma",["Tır","Konteyner","Hava","Parsiyel","Diğer"])
                         shipment_ref=y3.text_input("Sevkiyat / booking ref")
                         y4,y5=st.columns(2)
