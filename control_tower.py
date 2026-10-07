@@ -1872,6 +1872,10 @@ def render_control_tower():
 
     st.subheader("🧭 AS CONTROL TOWER")
     st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
+    st.caption(
+        "🟠 Pilot veri modu: Bu sürüm SQLite kullanıyor. Kalıcı şirket verisi için "
+        "PostgreSQL/Supabase geçişi tamamlanmadan kritik production verisi girmeyin."
+    )
 
     dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, quality_tab, pipeline_tab, followup_tab, tasks_tab, ai_tab, ceo_tab = st.tabs(
         [
@@ -3181,10 +3185,13 @@ def render_control_tower():
                         y1,y2,y3=st.columns(3)
                         ship_qty=y1.number_input(
                             "Sevk miktarı (kg)",
-                            min_value=1.0,
+                            min_value=0.001,
                             max_value=float(po_row["remaining_to_ship_kg"]),
                             value=float(po_row["remaining_to_ship_kg"]),
-                            step=min(1000.0,float(po_row["remaining_to_ship_kg"]))
+                            step=max(
+                                0.001,
+                                min(1000.0,float(po_row["remaining_to_ship_kg"]))
+                            )
                         )
                         transport=y2.selectbox("Taşıma",["Tır","Konteyner","Hava","Parsiyel","Diğer"])
                         shipment_ref=y3.text_input("Sevkiyat / booking ref")
