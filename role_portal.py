@@ -7,7 +7,7 @@ import streamlit as st
 
 from ai_manager import render_ai_manager
 from management_reports import render_management_reports
-from security_admin import current_user
+from security_admin import audit_sql_write, authorize_write, current_user
 
 
 def connect(db_path):
@@ -22,9 +22,12 @@ def query_df(db_path,sql,params=()):
 
 
 def execute(db_path,sql,params=()):
+    if not authorize_write(sql):
+        raise PermissionError("Bu işlem mevcut kullanıcı rolü için yetkili değil.")
     with connect(db_path) as conn:
         conn.execute(sql,params)
         conn.commit()
+    audit_sql_write(db_path,sql)
 
 
 def user_header(role):
