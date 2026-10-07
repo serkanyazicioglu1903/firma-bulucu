@@ -3264,13 +3264,33 @@ def render_control_tower():
                 )
                 lotrow=query_df("SELECT * FROM inventory_lots WHERE id=?",(int(lot_id),)).iloc[0]
                 l1,l2=st.columns(2)
-                available=l1.number_input("Mevcut miktar (kg)",min_value=0.0,value=float(lotrow["quantity_available_kg"] or 0),step=100.0)
-                reserved=l2.number_input("Rezerve miktar (kg)",min_value=0.0,value=float(lotrow["quantity_reserved_kg"] or 0),step=100.0)
+                available=l1.number_input(
+                    "Mevcut miktar (kg)",
+                    min_value=0.0,
+                    value=float(lotrow["quantity_available_kg"] or 0),
+                    step=100.0
+                )
+                reserved_default=min(
+                    float(lotrow["quantity_reserved_kg"] or 0),
+                    float(available)
+                )
+                reserved=l2.number_input(
+                    "Rezerve miktar (kg)",
+                    min_value=0.0,
+                    max_value=float(available),
+                    value=reserved_default,
+                    step=min(100.0,float(available)) if float(available)>0 else 1.0
+                )
                 if st.button("Stok miktarını güncelle"):
-                    execute("UPDATE inventory_lots SET quantity_available_kg=?,quantity_reserved_kg=? WHERE id=?",
-                            (float(available),float(reserved),int(lot_id)))
-                    st.success("Stok güncellendi.")
-                    st.rerun()
+                    if float(reserved) > float(available) + 0.0001:
+                        st.error("Rezerve miktar mevcut stoktan büyük olamaz.")
+                    else:
+                        execute(
+                            "UPDATE inventory_lots SET quantity_available_kg=?,quantity_reserved_kg=? WHERE id=?",
+                            (float(available),float(reserved),int(lot_id))
+                        )
+                        st.success("Stok güncellendi.")
+                        st.rerun()
 
         with reorder_tab:
             summary=stock_snapshot()
