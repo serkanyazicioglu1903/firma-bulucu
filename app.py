@@ -848,7 +848,9 @@ def supplier_manufacturer_status(product, title, snippet, body, url):
     ))
     trader_only = any(x in text for x in ["trading company", "broker", "agent only", "reseller only"])
 
-    if product_hit and (maker_hit or strong_factory_hit) and not trader_only:
+    if product_hit and strong_factory_hit and not trader_only:
+        return "confirmed", 45
+    if product_hit and maker_hit and not trader_only:
         return "likely", 25
     return "unclear", 0
 
