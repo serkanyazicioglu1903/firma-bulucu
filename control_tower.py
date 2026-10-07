@@ -1153,73 +1153,101 @@ def stock_snapshot():
 
 
 def receive_shipment_to_stock(shipment_id):
-    shipment = query_df("""
-        SELECT s.*, po.product_id, po.product_name, po.unit_price, po.currency,
-               po.destination_warehouse_id AS po_warehouse_id
-        FROM shipments s
-        JOIN purchase_orders po ON po.id=s.purchase_order_id
-        WHERE s.id=?
-    """, (int(shipment_id),))
-    if shipment.empty:
-        return False, "Sevkiyat bulunamadı."
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT s.*, po.product_id, po.product_name, po.unit_price, po.currency,
+                      po.quantity_kg AS ordered_kg, po.status AS po_status,
+                      po.destination_warehouse_id AS po_warehouse_id
+               FROM shipments s
+               JOIN purchase_orders po ON po.id=s.purchase_order_id
+               WHERE s.id=?""",
+            (int(shipment_id),)
+        ).fetchone()
 
-    row = shipment.iloc[0]
-    if int(row["received_to_stock"] or 0) == 1:
-        return False, "Bu sevkiyat daha önce stoğa alınmış."
+        if row is None:
+            return False, "Sevkiyat bulunamadı."
+        if int(row["received_to_stock"] or 0) == 1:
+            return False, "Bu sevkiyat daha önce stoğa alınmış."
+        if str(row["status"] or "") == "İptal":
+            return False, "İptal edilmiş sevkiyat stoğa alınamaz."
+        if str(row["po_status"] or "") == "İptal":
+            return False, "İptal edilmiş satın alma siparişine stok girişi yapılamaz."
 
-    warehouse_id = row["destination_warehouse_id"] or row["po_warehouse_id"]
-    if not warehouse_id:
-        return False, "Depo seçilmeden stok girişi yapılamaz."
+        shipment_qty = float(row["quantity_kg"] or 0)
+        if shipment_qty <= 0:
+            return False, "Sevkiyat miktarı sıfırdan büyük olmalı."
 
-    received_date = row["delivery_date"] or str(date.today())
-    execute(
-        """INSERT INTO inventory_lots
-        (product_id,product_name,warehouse_id,lot_number,expiry_date,
-         quantity_received_kg,quantity_available_kg,quantity_reserved_kg,
-         unit_cost,currency,purchase_order_id,shipment_id,received_date,notes)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            int(row["product_id"]) if row["product_id"] else None,
-            row["product_name"],
-            int(warehouse_id),
-            row["lot_number"] or "",
-            row["expiry_date"] or "",
-            float(row["quantity_kg"] or 0),
-            float(row["quantity_kg"] or 0),
-            0.0,
-            float(row["unit_price"] or 0),
-            row["currency"] or "EUR",
-            int(row["purchase_order_id"]),
-            int(shipment_id),
-            received_date,
-            "Sevkiyattan otomatik stok girişi"
-        )
-    )
-    execute(
-        """UPDATE shipments
-           SET received_to_stock=1,
-               status='Teslim Edildi',
-               delivery_date=CASE WHEN delivery_date='' THEN ? ELSE delivery_date END
-           WHERE id=?""",
-        (str(date.today()), int(shipment_id))
-    )
+        warehouse_id = row["destination_warehouse_id"] or row["po_warehouse_id"]
+        if not warehouse_id:
+            return False, "Depo seçilmeden stok girişi yapılamaz."
 
-    po_summary = query_df("""
-        SELECT po.quantity_kg AS ordered_kg,
-               COALESCE(SUM(CASE WHEN s.received_to_stock=1 THEN s.quantity_kg ELSE 0 END),0) AS received_kg
-        FROM purchase_orders po
-        LEFT JOIN shipments s ON s.purchase_order_id=po.id AND s.status!='İptal'
-        WHERE po.id=?
-        GROUP BY po.id,po.quantity_kg
-    """, (int(row["purchase_order_id"]),))
-    if not po_summary.empty:
-        ordered_kg = float(po_summary.iloc[0]["ordered_kg"] or 0)
-        received_kg = float(po_summary.iloc[0]["received_kg"] or 0)
-        po_status = "Tamamlandı" if received_kg + 0.001 >= ordered_kg else "Kısmi Sevk"
-        execute(
-            "UPDATE purchase_orders SET status=? WHERE id=?",
-            (po_status, int(row["purchase_order_id"]))
-        )
+        received_before = conn.execute(
+            """SELECT COALESCE(SUM(quantity_kg),0)
+               FROM shipments
+               WHERE purchase_order_id=?
+                 AND received_to_stock=1
+                 AND status!='İptal'""",
+            (int(row["purchase_order_id"]),)
+        ).fetchone()[0]
+        received_before = float(received_before or 0)
+        ordered_kg = float(row["ordered_kg"] or 0)
+        if received_before + shipment_qty > ordered_kg + 0.001:
+            return False, (
+                f"Bu giriş PO miktarını aşar. Sipariş: {ordered_kg:,.2f} kg · "
+                f"Daha önce alınan: {received_before:,.2f} kg · "
+                f"Bu sevkiyat: {shipment_qty:,.2f} kg"
+            )
+
+        received_date = row["delivery_date"] or str(date.today())
+
+        try:
+            conn.execute(
+                """INSERT INTO inventory_lots
+                (product_id,product_name,warehouse_id,lot_number,expiry_date,
+                 quantity_received_kg,quantity_available_kg,quantity_reserved_kg,
+                 unit_cost,currency,purchase_order_id,shipment_id,received_date,notes)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    int(row["product_id"]) if row["product_id"] else None,
+                    row["product_name"],
+                    int(warehouse_id),
+                    row["lot_number"] or "",
+                    row["expiry_date"] or "",
+                    shipment_qty,
+                    shipment_qty,
+                    0.0,
+                    float(row["unit_price"] or 0),
+                    row["currency"] or "EUR",
+                    int(row["purchase_order_id"]),
+                    int(shipment_id),
+                    received_date,
+                    "Sevkiyattan otomatik stok girişi"
+                )
+            )
+            conn.execute(
+                """UPDATE shipments
+                   SET received_to_stock=1,
+                       status='Teslim Edildi',
+                       delivery_date=CASE WHEN delivery_date='' THEN ? ELSE delivery_date END
+                   WHERE id=?""",
+                (str(date.today()), int(shipment_id))
+            )
+
+            received_after = received_before + shipment_qty
+            po_status = (
+                "Tamamlandı"
+                if received_after + 0.001 >= ordered_kg
+                else "Kısmi Sevk"
+            )
+            conn.execute(
+                "UPDATE purchase_orders SET status=? WHERE id=?",
+                (po_status, int(row["purchase_order_id"]))
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
     return True, "Sevkiyat stoğa alındı."
 
 
