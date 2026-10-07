@@ -2334,7 +2334,51 @@ def render_control_tower():
                     with st.expander("Diğer müşteriler neden listelenmiyor?"):
                         st.dataframe(pd.DataFrame(recs.attrs["diagnostics"]), hide_index=True, use_container_width=True)
                 if recs.empty:
-                    st.info("Yeni öneri yok. Yukarıdaki açıklamalardan mevcut fırsatları ve eksik müşteri profillerini kontrol edin.")
+                    active_for_product = query_df(
+                        """SELECT c.name AS müşteri,o.stage AS aşama,o.value AS değer,
+                                  o.currency AS para,o.owner AS sorumlu,o.next_action AS sonraki_aksiyon
+                           FROM opportunities o
+                           LEFT JOIN customers c ON c.id=o.customer_id
+                           WHERE lower(o.product)=lower(?)
+                             AND o.stage!='Kaybedildi'
+                           ORDER BY o.value DESC""",
+                        (product_row["name"],)
+                    )
+                    excluded_status = query_df(
+                        """SELECT c.name AS müşteri,s.status AS durum,
+                                  s.current_supplier AS mevcut_tedarikçi,
+                                  s.annual_volume_tons AS yıllık_hacim_ton,
+                                  s.notes AS notlar
+                           FROM customer_product_status s
+                           JOIN customers c ON c.id=s.customer_id
+                           WHERE s.product_id=?
+                             AND s.status IN ('Mevcut','Uygun Değil')
+                           ORDER BY c.name""",
+                        (pid,)
+                    )
+                    if not active_for_product.empty:
+                        st.success(
+                            "Bu ürün için yeni öneri yok; aşağıdaki müşterilerde zaten aktif fırsat var."
+                        )
+                        st.dataframe(
+                            active_for_product,
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                    if not excluded_status.empty:
+                        st.warning(
+                            "Aşağıdaki müşteriler ürün durumu nedeniyle yeni öneriden çıkarıldı."
+                        )
+                        st.dataframe(
+                            excluded_status,
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                    if active_for_product.empty and excluded_status.empty:
+                        st.info(
+                            "Bu ürün için yeni müşteri eşleşmesi bulunamadı. "
+                            "Müşteri sektör/profil bilgilerini zenginleştirin."
+                        )
                 else:
                     st.dataframe(
                         recs[
