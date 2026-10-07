@@ -5,3 +5,5 @@ beautifulsoup4>=4.12
 pandas>=2.2
 
 pytest>=8.0
+sqlalchemy>=2.0
+psycopg[binary]>=3.2
