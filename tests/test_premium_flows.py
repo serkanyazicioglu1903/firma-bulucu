@@ -488,3 +488,30 @@ def test_ai_stock_risk_respects_open_po(tmp_path):
 
     risks_with_po = stock_risks(db)
     assert "Vital Wheat Gluten" not in risks_with_po["ürün"].tolist()
+
+
+def test_weighted_pipeline_excludes_won_deals(tmp_path):
+    db = setup_db(tmp_path)
+    before = __import__("ai_manager").dashboard_snapshot(db)
+    assert before["active_opps"] == 2
+    assert round(float(before["weighted"]), 2) == 311000.00
+
+    opp_id = int(control_tower.query_df(
+        "SELECT id FROM opportunities WHERE product='Mokaero 22 Topping Base'"
+    ).iloc[0]["id"])
+    ok, _ = control_tower.update_opportunity_stage(
+        opp_id,
+        "Kazanıldı",
+        100,
+        "Bu alan temizlenmeli",
+        date.today()+timedelta(days=3),
+        "Satış",
+        date.today(),
+        "",
+        "Sipariş kazanıldı",
+    )
+    assert ok
+
+    after = __import__("ai_manager").dashboard_snapshot(db)
+    assert after["active_opps"] == 1
+    assert round(float(after["weighted"]), 2) == 245000.00
