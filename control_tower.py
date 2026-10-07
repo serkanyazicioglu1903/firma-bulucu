@@ -503,6 +503,7 @@ def init_db():
         ensure_column(conn, "customers", "default_payment_days", "INTEGER DEFAULT 90")
         ensure_column(conn, "inventory_lots", "quality_status", "TEXT DEFAULT 'Released'")
         ensure_column(conn, "inventory_lots", "quality_case_id", "INTEGER")
+        ensure_column(conn, "inventory_lots", "quality_hold_kg", "REAL DEFAULT 0")
         conn.commit()
 
 
@@ -1094,12 +1095,19 @@ def stock_snapshot():
 
     lots = query_df("""
         SELECT product_id,
-               SUM(CASE WHEN COALESCE(quality_status,'Released')='Released'
-                        THEN quantity_available_kg ELSE 0 END) AS available_kg,
-               SUM(CASE WHEN COALESCE(quality_status,'Released')='Released'
-                        THEN quantity_reserved_kg ELSE 0 END) AS reserved_kg,
-               SUM(CASE WHEN COALESCE(quality_status,'Released')!='Released'
-                        THEN quantity_available_kg ELSE 0 END) AS quality_hold_kg
+               SUM(quantity_available_kg) AS available_kg,
+               SUM(quantity_reserved_kg) AS reserved_kg,
+               SUM(
+                   CASE
+                     WHEN COALESCE(quality_status,'Released')!='Released'
+                     THEN CASE
+                            WHEN COALESCE(quality_hold_kg,0)>0
+                            THEN MIN(quality_hold_kg,quantity_available_kg)
+                            ELSE quantity_available_kg
+                          END
+                     ELSE 0
+                   END
+               ) AS quality_hold_kg
         FROM inventory_lots
         GROUP BY product_id
     """)
@@ -1159,7 +1167,9 @@ def stock_snapshot():
             df[col] = default
         df[col] = df[col].fillna(default)
 
-    df["net_available_kg"] = (df["available_kg"] - df["reserved_kg"]).clip(lower=0)
+    df["net_available_kg"] = (
+        df["available_kg"] - df["reserved_kg"] - df["quality_hold_kg"]
+    ).clip(lower=0)
     df["daily_usage_kg"] = df["monthly_usage_kg"] / 30.0
     df["stock_days"] = df.apply(
         lambda r: round(r["net_available_kg"] / r["daily_usage_kg"], 1)
@@ -1624,11 +1634,30 @@ def regulatory_alerts():
     return df
 
 
-def set_lot_quality_status(lot_id,status,case_id=None):
-    execute(
-        "UPDATE inventory_lots SET quality_status=?,quality_case_id=? WHERE id=?",
-        (status,int(case_id) if case_id else None,int(lot_id))
+def set_lot_quality_status(lot_id, status, case_id=None, hold_kg=None):
+    lot = query_df(
+        "SELECT quantity_available_kg FROM inventory_lots WHERE id=?",
+        (int(lot_id),)
     )
+    if lot.empty:
+        return False, "Stok lotu bulunamadı."
+
+    available = max(float(lot.iloc[0]["quantity_available_kg"] or 0), 0.0)
+    if status == "Released":
+        effective_hold = 0.0
+        effective_case = None
+    else:
+        requested = available if hold_kg is None or float(hold_kg or 0) <= 0 else float(hold_kg)
+        effective_hold = min(max(requested, 0.0), available)
+        effective_case = int(case_id) if case_id else None
+
+    execute(
+        """UPDATE inventory_lots
+           SET quality_status=?,quality_case_id=?,quality_hold_kg=?
+           WHERE id=?""",
+        (status,effective_case,effective_hold,int(lot_id))
+    )
+    return True, "Lot kalite durumu güncellendi."
 
 
 def calculate_quote(
@@ -3225,6 +3254,7 @@ def render_control_tower():
                        il.quantity_received_kg/1000.0 AS giriş_ton,
                        il.quantity_available_kg/1000.0 AS mevcut_ton,
                        il.quantity_reserved_kg/1000.0 AS rezerve_ton,
+                       COALESCE(il.quality_hold_kg,0)/1000.0 AS kalite_hold_ton,
                        il.quality_status AS kalite_durumu,
                        il.unit_cost AS birim_maliyet,il.currency AS para,
                        il.received_date AS giriş_tarihi,po.po_number AS PO
@@ -3919,7 +3949,12 @@ def render_control_tower():
                                      owner,str(target_close)))
                                 new_case=int(query_df("SELECT id FROM quality_cases ORDER BY id DESC LIMIT 1").iloc[0]["id"])
                                 if lot_id and hold_lot:
-                                    set_lot_quality_status(lot_id,"HOLD",new_case)
+                                    set_lot_quality_status(
+                                        lot_id,
+                                        "HOLD",
+                                        new_case,
+                                        float(affected) if float(affected)>0 else None
+                                    )
                                 if immediate.strip():
                                     execute("""INSERT INTO quality_actions
                                         (quality_case_id,action_type,action_text,owner,due_date,status,notes)
@@ -4512,7 +4547,7 @@ def render_control_tower():
         st.markdown("#### Kalite / claim / belge uyarıları")
         closed_hold = query_df("""
             SELECT q.case_no,q.product_name,il.lot_number,il.quality_status,
-                   il.quantity_available_kg
+                   COALESCE(il.quality_hold_kg,il.quantity_available_kg) AS quality_hold_kg
             FROM quality_cases q
             JOIN inventory_lots il ON il.id=q.inventory_lot_id
             WHERE q.status='Kapandı'
@@ -4526,7 +4561,7 @@ def render_control_tower():
             st.dataframe(
                 closed_hold.rename(columns={
                     "case_no":"dosya","product_name":"ürün","lot_number":"lot",
-                    "quality_status":"lot_durumu","quantity_available_kg":"elde_kg"
+                    "quality_status":"lot_durumu","quality_hold_kg":"hold_kg"
                 }),
                 use_container_width=True,hide_index=True
             )
