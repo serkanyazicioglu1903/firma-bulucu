@@ -29,15 +29,26 @@ jobs:
 
       - name: Streamlit startup smoke test
         run: |
+          mkdir -p .streamlit
+          cat > .streamlit/secrets.toml <<'EOF'
+          CONTROL_TOWER_PASSWORD = "ci-test-password"
+          EOF
+
           python - <<'PY'
           from streamlit.testing.v1 import AppTest
 
           app = AppTest.from_file("app.py", default_timeout=60)
+          app.session_state["ct_user"] = {
+              "username": "ci-admin",
+              "display_name": "CI Admin",
+              "role": "ADMIN",
+          }
+          app.session_state["ct_session_id"] = "ci-session"
           app.run()
 
           if app.exception:
               raise AssertionError(f"Streamlit startup exception: {app.exception}")
 
-          print("Streamlit app loaded successfully.")
+          print("Streamlit app loaded successfully with authenticated ADMIN session.")
           print("Top-level tabs:", [t.label for t in app.tabs])
           PY
