@@ -442,14 +442,20 @@ def answer_question(db_path, question):
         return "Uzun süredir aktivite olmayan müşteriler:", forgotten_customers(db_path)
     if any(x in q for x in ["fırsat", "pipeline", "satış"]):
         return "En önemli aktif satış fırsatları:", opportunities(db_path)
-    if any(x in q for x in ["veri kalitesi", "eksik veri", "hangi veri eksik", "veri eksik"]):
+    if any(
+        x in q
+        for x in [
+            "veri kalitesi", "eksik veri", "hangi veri eksik", "veri eksik",
+            "veriler eksik", "hangi veriler", "kritik veri", "kritik veriler"
+        ]
+    ):
         return "Sistemin karar kalitesini düşüren eksik veriler:", data_quality_issues(db_path)
     if any(x in q for x in ["risk", "sorun", "tehlike"]):
         return "Satış tarafındaki başlıca riskler:", sales_risks(db_path)
 
     return (
         "Bu API'siz sürüm şu konuları anlayabiliyor: bugün/öncelik, nakit/tahsilat, "
-        "stok/sipariş, marj/teklif, kalite/claim, unutulan müşteriler, satış fırsatları ve riskler.",
+        "stok/sipariş, marj/teklif, kalite/claim, unutulan müşteriler, satış fırsatları, veri kalitesi ve riskler.",
         None,
     )
 
