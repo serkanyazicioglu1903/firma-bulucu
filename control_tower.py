@@ -4547,7 +4547,10 @@ def render_control_tower():
         st.markdown("#### Kalite / claim / belge uyarıları")
         closed_hold = query_df("""
             SELECT q.case_no,q.product_name,il.lot_number,il.quality_status,
-                   COALESCE(il.quality_hold_kg,il.quantity_available_kg) AS quality_hold_kg
+                   CASE WHEN COALESCE(il.quality_hold_kg,0)>0
+                        THEN MIN(il.quality_hold_kg,il.quantity_available_kg)
+                        ELSE il.quantity_available_kg
+                   END AS quality_hold_kg
             FROM quality_cases q
             JOIN inventory_lots il ON il.id=q.inventory_lot_id
             WHERE q.status='Kapandı'
