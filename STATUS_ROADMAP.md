@@ -35,6 +35,7 @@ Kod ve test hazır.
 - Kullanıcı girişi
 - Roller
 - Rol bazlı DB yazma yetkisi
+- Admin dışındaki kullanıcılar için ayrı, kısıtlı rol portalları
 - Audit log
 - Sistem sağlığı
 - Veritabanı backup
@@ -95,6 +96,8 @@ PR #4:
 - Python compile: SUCCESS
 - Core business tests: SUCCESS
 - Authenticated ADMIN Streamlit startup: SUCCESS
+- Core business tests: SUCCESS
+- Role write-permission tests: SUCCESS
 
 ## SABAH YAPILACAK EN KISA İŞ
 
