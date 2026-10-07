@@ -2452,6 +2452,12 @@ def render_control_tower():
                         },
                     )
                     product_options = [int(x) for x in recs["product_id"].tolist()]
+                    product_labels = {
+                        int(row["product_id"]): (
+                            f"{row['Ürün']} · skor {int(row['Fit Score'])}"
+                        )
+                        for _, row in recs.iterrows()
+                    }
                     product_key = f"intel_customer_rec_{cid}"
                     if (
                         product_key in st.session_state
@@ -2461,9 +2467,9 @@ def render_control_tower():
                     selected_product_id = st.selectbox(
                         "Fırsata çevrilecek öneri",
                         product_options,
-                        format_func=lambda product_id: (
-                            f"{recs.loc[recs['product_id']==product_id,'Ürün'].iloc[0]} · "
-                            f"skor {recs.loc[recs['product_id']==product_id,'Fit Score'].iloc[0]}"
+                        format_func=lambda product_id: product_labels.get(
+                            int(product_id),
+                            f"Ürün #{product_id}"
                         ),
                         key=product_key
                     )
@@ -2627,6 +2633,12 @@ def render_control_tower():
                         },
                     )
                     customer_options = [int(x) for x in recs["customer_id"].tolist()]
+                    customer_labels = {
+                        int(row["customer_id"]): (
+                            f"{row['Müşteri']} · skor {int(row['Fit Score'])}"
+                        )
+                        for _, row in recs.iterrows()
+                    }
                     customer_key = f"intel_product_rec_{pid}"
                     if (
                         customer_key in st.session_state
@@ -2636,9 +2648,9 @@ def render_control_tower():
                     selected_customer_id = st.selectbox(
                         "Fırsata çevrilecek müşteri",
                         customer_options,
-                        format_func=lambda customer_id: (
-                            f"{recs.loc[recs['customer_id']==customer_id,'Müşteri'].iloc[0]} · "
-                            f"skor {recs.loc[recs['customer_id']==customer_id,'Fit Score'].iloc[0]}"
+                        format_func=lambda customer_id: customer_labels.get(
+                            int(customer_id),
+                            f"Müşteri #{customer_id}"
                         ),
                         key=customer_key
                     )
