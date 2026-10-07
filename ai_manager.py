@@ -278,6 +278,96 @@ def forgotten_customers(db_path):
     """)
 
 
+def data_quality_issues(db_path):
+    checks = [
+        (
+            "Yüksek",
+            "CRM",
+            "Müşteri sektör bilgisi eksik",
+            "SELECT COUNT(*) FROM customers WHERE trim(COALESCE(sector,''))=''",
+            "Sektör bilgisini doldur; ürün eşleştirme kalitesi artar.",
+        ),
+        (
+            "Yüksek",
+            "CRM",
+            "Müşteri üretim profili eksik",
+            """SELECT COUNT(*) FROM customers
+               WHERE status IN ('Aktif','Potansiyel','Riskli')
+                 AND trim(COALESCE(product_profile,''))=''""",
+            "Müşterinin ürettiği ürünleri ve kullandığı hammadde gruplarını yaz.",
+        ),
+        (
+            "Orta",
+            "CRM",
+            "Kontak/e-posta bilgisi eksik",
+            """SELECT COUNT(*) FROM customers
+               WHERE status IN ('Aktif','Potansiyel','Riskli')
+                 AND trim(COALESCE(contact_email,''))=''""",
+            "En az bir satış/teknik kontak e-postası ekle.",
+        ),
+        (
+            "Kritik",
+            "Satış",
+            "Aktif fırsatta sonraki aksiyon yok",
+            """SELECT COUNT(*) FROM opportunities
+               WHERE stage NOT IN ('Kazanıldı','Kaybedildi')
+                 AND trim(COALESCE(next_action,''))=''""",
+            "Her aktif fırsata net bir sonraki aksiyon tanımla.",
+        ),
+        (
+            "Kritik",
+            "Satış",
+            "Aktif fırsatta takip tarihi yok",
+            """SELECT COUNT(*) FROM opportunities
+               WHERE stage NOT IN ('Kazanıldı','Kaybedildi')
+                 AND trim(COALESCE(due_date,''))=''""",
+            "Takip tarihini belirle; fırsatın unutulmasını engelle.",
+        ),
+        (
+            "Orta",
+            "Ürün",
+            "Aktif üründe hedef sektör bilgisi eksik",
+            """SELECT COUNT(*) FROM product_catalog
+               WHERE active=1 AND trim(COALESCE(target_sectors,''))=''""",
+            "Hedef sektör anahtarlarını ekle; satış zekâsı daha isabetli olur.",
+        ),
+        (
+            "Orta",
+            "Ürün",
+            "Aktif üründe tedarikçi bilgisi eksik",
+            """SELECT COUNT(*) FROM product_catalog
+               WHERE active=1 AND trim(COALESCE(supplier,''))=''""",
+            "Onaylı/aday tedarikçiyi ürün kartına bağla.",
+        ),
+        (
+            "Orta",
+            "Stok",
+            "Stok politikası tanımlanmamış aktif ürün",
+            """SELECT COUNT(*) FROM product_catalog p
+               LEFT JOIN inventory_policy ip ON ip.product_id=p.id
+               WHERE p.active=1 AND ip.id IS NULL""",
+            "Aylık tüketim, safety stock ve lead time tanımla.",
+        ),
+    ]
+    rows = []
+    for severity, area, issue, sql, action in checks:
+        count = int(scalar(db_path, sql, default=0) or 0)
+        if count > 0:
+            rows.append({
+                "Önem": severity,
+                "Alan": area,
+                "Eksik / Risk": issue,
+                "Kayıt": count,
+                "Önerilen Aksiyon": action,
+            })
+    if not rows:
+        return pd.DataFrame()
+    order = {"Kritik": 1, "Yüksek": 2, "Orta": 3, "Düşük": 4}
+    df = pd.DataFrame(rows)
+    df["_order"] = df["Önem"].map(order).fillna(9)
+    return df.sort_values(["_order","Kayıt"], ascending=[True,False]).drop(columns=["_order"])
+
+
 def answer_question(db_path, question):
     q = (question or "").lower().strip()
     if not q:
@@ -297,6 +387,8 @@ def answer_question(db_path, question):
         return "Uzun süredir aktivite olmayan müşteriler:", forgotten_customers(db_path)
     if any(x in q for x in ["fırsat", "pipeline", "satış"]):
         return "En önemli aktif satış fırsatları:", opportunities(db_path)
+    if any(x in q for x in ["veri kalitesi", "eksik veri", "hangi veri eksik", "veri eksik"]):
+        return "Sistemin karar kalitesini düşüren eksik veriler:", data_quality_issues(db_path)
     if any(x in q for x in ["risk", "sorun", "tehlike"]):
         return "Satış tarafındaki başlıca riskler:", sales_risks(db_path)
 
@@ -373,6 +465,7 @@ def render_ai_manager(db_path):
             "30 gündür takip etmediğimiz müşteriler kimler?",
             "En büyük satış fırsatlarımız hangileri?",
             "Satış tarafındaki en büyük riskler neler?",
+            "Sistemde hangi kritik veriler eksik?",
         ]
         preset = st.selectbox("Hazır soru", ["— Kendim yazacağım —"] + examples)
         default_q = "" if preset == "— Kendim yazacağım —" else preset
@@ -409,3 +502,14 @@ def render_ai_manager(db_path):
             st.markdown("#### Kalite riski")
             df = quality_risks(db_path)
             st.dataframe(df, use_container_width=True, hide_index=True)
+
+        st.markdown("#### Veri kalitesi")
+        quality_df = data_quality_issues(db_path)
+        if quality_df.empty:
+            st.success("Karar motorunu etkileyen kritik veri eksiği görünmüyor.")
+        else:
+            st.caption(
+                "Bu tablo satış zekâsı, stok tahmini ve yönetici raporlarının doğruluğunu "
+                "doğrudan etkileyen eksik alanları gösterir."
+            )
+            st.dataframe(quality_df, use_container_width=True, hide_index=True)
