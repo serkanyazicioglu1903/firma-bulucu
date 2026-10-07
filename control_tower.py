@@ -2120,25 +2120,32 @@ def render_control_tower():
                 phone = st.text_input("Telefon", key="ct_customer_phone")
                 notes = st.text_area("Not", key="ct_customer_notes")
                 if st.form_submit_button("Kaydet", type="primary") and name.strip():
-                    execute(
-                        """INSERT INTO customers
-                        (name,country,sector,status,owner,contact_name,contact_email,phone,source,notes)
-                        VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                        (name.strip(), country, sector, status, owner, contact, email, phone, "Manuel", notes)
-                    )
-                    new_id = int(query_df(
-                        "SELECT id FROM customers WHERE name=? ORDER BY id DESC LIMIT 1",
+                    duplicate_customer = int(query_df(
+                        "SELECT COUNT(*) n FROM customers WHERE lower(trim(name))=lower(trim(?))",
                         (name.strip(),)
-                    ).iloc[0]["id"])
-                    if contact.strip():
+                    ).iloc[0]["n"])
+                    if duplicate_customer:
+                        st.error("Bu firma CRM'de zaten var. Mevcut kartı açıp güncelleyin.")
+                    else:
                         execute(
-                            """INSERT INTO contacts
-                            (customer_id,name,email,phone,is_primary)
-                            VALUES (?,?,?,?,1)""",
-                            (new_id, contact.strip(), email, phone)
+                            """INSERT INTO customers
+                            (name,country,sector,status,owner,contact_name,contact_email,phone,source,notes)
+                            VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                            (name.strip(), country, sector, status, owner, contact, email, phone, "Manuel", notes)
                         )
-                    st.success("CRM kaydı eklendi.")
-                    st.rerun()
+                        new_id = int(query_df(
+                            "SELECT id FROM customers WHERE lower(name)=lower(?) ORDER BY id DESC LIMIT 1",
+                            (name.strip(),)
+                        ).iloc[0]["id"])
+                        if contact.strip():
+                            execute(
+                                """INSERT INTO contacts
+                                (customer_id,name,email,phone,is_primary)
+                                VALUES (?,?,?,?,1)""",
+                                (new_id, contact.strip(), email, phone)
+                            )
+                        st.success("CRM kaydı eklendi.")
+                        st.rerun()
 
     with intelligence_tab:
         st.markdown("### 🧠 Ürün × Müşteri Satış Zekâsı")
@@ -3386,14 +3393,25 @@ def render_control_tower():
                             if amount<=0:
                                 st.error("Tutar sıfırdan büyük olmalı.")
                             else:
-                                execute("""INSERT INTO receivables
-                                    (customer_id,invoice_no,invoice_date,due_date,amount,paid_amount,
-                                     currency,fx_to_base,base_currency,status,opportunity_id,notes)
-                                    VALUES (?,?,?,?,?,0,?,?,?,'Açık',?,?)""",
-                                    (customer_id,invoice_no,str(invoice_date),str(due_date),float(amount),
-                                     currency,float(fx),base_currency,omap[opp_label],notes))
-                                st.success("Alacak kaydedildi.")
-                                st.rerun()
+                                duplicate_invoice = 0
+                                if invoice_no.strip():
+                                    duplicate_invoice = int(query_df(
+                                        """SELECT COUNT(*) n FROM receivables
+                                           WHERE customer_id=? AND lower(trim(invoice_no))=lower(trim(?))
+                                             AND status!='İptal'""",
+                                        (customer_id, invoice_no.strip())
+                                    ).iloc[0]["n"])
+                                if duplicate_invoice:
+                                    st.error("Bu müşteri için aynı fatura numarası zaten kayıtlı.")
+                                else:
+                                    execute("""INSERT INTO receivables
+                                        (customer_id,invoice_no,invoice_date,due_date,amount,paid_amount,
+                                         currency,fx_to_base,base_currency,status,opportunity_id,notes)
+                                        VALUES (?,?,?,?,?,0,?,?,?,'Açık',?,?)""",
+                                        (customer_id,invoice_no.strip(),str(invoice_date),str(due_date),float(amount),
+                                         currency,float(fx),base_currency,omap[opp_label],notes))
+                                    st.success("Alacak kaydedildi.")
+                                    st.rerun()
 
             with ar2:
                 rec_now=outstanding_receivables()
@@ -3479,14 +3497,26 @@ def render_control_tower():
                         if not supplier.strip() or amount<=0:
                             st.error("Tedarikçi ve pozitif tutar gerekli.")
                         else:
-                            execute("""INSERT INTO payables
-                                (supplier,purchase_order_id,invoice_no,invoice_date,due_date,
-                                 amount,paid_amount,currency,fx_to_base,base_currency,status,notes)
-                                VALUES (?,?,?,?,?,?,0,?,?,?,'Açık',?)""",
-                                (supplier.strip(),pmap[po_label],invoice_no,str(invoice_date),str(due_date),
-                                 float(amount),currency,float(fx),base_currency,notes))
-                            st.success("Borç kaydedildi.")
-                            st.rerun()
+                            duplicate_invoice = 0
+                            if invoice_no.strip():
+                                duplicate_invoice = int(query_df(
+                                    """SELECT COUNT(*) n FROM payables
+                                       WHERE lower(trim(supplier))=lower(trim(?))
+                                         AND lower(trim(invoice_no))=lower(trim(?))
+                                         AND status!='İptal'""",
+                                    (supplier.strip(), invoice_no.strip())
+                                ).iloc[0]["n"])
+                            if duplicate_invoice:
+                                st.error("Bu tedarikçi için aynı fatura numarası zaten kayıtlı.")
+                            else:
+                                execute("""INSERT INTO payables
+                                    (supplier,purchase_order_id,invoice_no,invoice_date,due_date,
+                                     amount,paid_amount,currency,fx_to_base,base_currency,status,notes)
+                                    VALUES (?,?,?,?,?,?,0,?,?,?,'Açık',?)""",
+                                    (supplier.strip(),pmap[po_label],invoice_no.strip(),str(invoice_date),str(due_date),
+                                     float(amount),currency,float(fx),base_currency,notes))
+                                st.success("Borç kaydedildi.")
+                                st.rerun()
 
             with ap2:
                 pay_now=outstanding_payables()
