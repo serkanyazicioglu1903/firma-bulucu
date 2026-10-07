@@ -339,3 +339,76 @@ def test_cancelled_or_over_po_shipment_is_blocked(tmp_path):
     ok_over, msg_over = control_tower.receive_shipment_to_stock(over_id)
     assert not ok_over
     assert "aşar" in msg_over.lower()
+
+
+def test_terminal_opportunity_clears_followup_and_auto_tasks(tmp_path):
+    setup_db(tmp_path)
+    opp = control_tower.query_df(
+        "SELECT id,customer_id FROM opportunities WHERE product='Mokaero 22 Topping Base'"
+    ).iloc[0]
+    opp_id = int(opp["id"])
+    customer_name = control_tower.query_df(
+        "SELECT name FROM customers WHERE id=?", (int(opp["customer_id"]),)
+    ).iloc[0]["name"]
+
+    control_tower.execute(
+        """INSERT INTO tasks
+        (title,related_to,owner,priority,due_date,status,notes)
+        VALUES (?,?,?,?,?,'Açık',?)""",
+        (
+            "Endüstriyel deneme sonucunu takip et",
+            customer_name,
+            "Satış",
+            "Yüksek",
+            str(date.today()+timedelta(days=2)),
+            f"Satış pipeline fırsatı #{opp_id}",
+        )
+    )
+
+    ok, _ = control_tower.update_opportunity_stage(
+        opp_id,
+        "Kaybedildi",
+        0,
+        "Eski takip",
+        date.today()+timedelta(days=3),
+        "Satış",
+        date.today()+timedelta(days=30),
+        "Fiyat",
+        "Müşteri devam etmedi",
+    )
+    assert ok
+
+    row = control_tower.query_df(
+        "SELECT stage,next_action,due_date,lost_reason FROM opportunities WHERE id=?",
+        (opp_id,)
+    ).iloc[0]
+    assert row["stage"] == "Kaybedildi"
+    assert row["next_action"] == ""
+    assert row["due_date"] == ""
+    assert row["lost_reason"] == "Fiyat"
+
+    task_status = control_tower.query_df(
+        "SELECT status FROM tasks WHERE notes=?",
+        (f"Satış pipeline fırsatı #{opp_id}",)
+    ).iloc[0]["status"]
+    assert task_status == "Tamamlandı"
+
+    ok2, _ = control_tower.update_opportunity_stage(
+        opp_id,
+        "Temas",
+        20,
+        "Tekrar ara",
+        date.today()+timedelta(days=2),
+        "Satış",
+        date.today()+timedelta(days=45),
+        "Eski neden kalmamalı",
+        "Fırsat yeniden açıldı",
+    )
+    assert ok2
+    reopened = control_tower.query_df(
+        "SELECT stage,next_action,lost_reason FROM opportunities WHERE id=?",
+        (opp_id,)
+    ).iloc[0]
+    assert reopened["stage"] == "Temas"
+    assert reopened["next_action"] == "Tekrar ara"
+    assert reopened["lost_reason"] == ""
