@@ -1000,22 +1000,40 @@ def add_activity(customer_id, opportunity_id, activity_type, activity_date, summ
 
 def update_opportunity_stage(opportunity_id, new_stage, probability, next_action,
                              due_date, owner, expected_close_date, lost_reason, note):
-    row = query_df("SELECT stage FROM opportunities WHERE id=?", (int(opportunity_id),))
+    if new_stage not in STAGES:
+        return False, "Geçersiz satış aşaması."
+
+    row = query_df(
+        "SELECT stage FROM opportunities WHERE id=?", (int(opportunity_id),)
+    )
     if row.empty:
-        return
+        return False, "Fırsat bulunamadı."
+
     old_stage = str(row.iloc[0]["stage"])
+    terminal = new_stage in {"Kazanıldı", "Kaybedildi"}
+    effective_next_action = "" if terminal else next_action.strip()
+    effective_due_date = "" if terminal else str(due_date)
+    effective_lost_reason = lost_reason.strip() if new_stage == "Kaybedildi" else ""
+    probability = max(0, min(100, int(probability)))
+
     execute(
         """UPDATE opportunities
            SET stage=?, probability=?, next_action=?, due_date=?, owner=?,
                expected_close_date=?, lost_reason=?, updated_at=?
            WHERE id=?""",
         (
-            new_stage, int(probability), next_action.strip(), str(due_date), owner.strip(),
+            new_stage,
+            probability,
+            effective_next_action,
+            effective_due_date,
+            owner.strip(),
             str(expected_close_date) if expected_close_date else "",
-            lost_reason.strip(), datetime.now().isoformat(timespec="seconds"),
+            effective_lost_reason,
+            datetime.now().isoformat(timespec="seconds"),
             int(opportunity_id),
         )
     )
+
     if old_stage != new_stage:
         execute(
             """INSERT INTO opportunity_stage_history
@@ -1023,6 +1041,22 @@ def update_opportunity_stage(opportunity_id, new_stage, probability, next_action
             VALUES (?,?,?,?,?)""",
             (int(opportunity_id), old_stage, new_stage, owner.strip(), note.strip())
         )
+
+    if terminal:
+        # Only close tasks that were automatically created from this exact
+        # opportunity. Customer-level unrelated tasks stay untouched.
+        execute(
+            """UPDATE tasks
+               SET status='Tamamlandı'
+               WHERE status!='Tamamlandı'
+                 AND notes IN (?,?)""",
+            (
+                f"Satış pipeline fırsatı #{int(opportunity_id)}",
+                f"Cross-sell fırsatı #{int(opportunity_id)}",
+            )
+        )
+
+    return True, "Fırsat güncellendi."
 
 
 def seed_warehouses():
