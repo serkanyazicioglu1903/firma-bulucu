@@ -2178,7 +2178,7 @@ def render_control_tower():
                         format_func=lambda i: (
                             f"{recs.iloc[i]['Ürün']} · skor {recs.iloc[i]['Fit Score']}"
                         ),
-                        key="intel_customer_rec"
+                        key=f"intel_customer_rec_{cid}"
                     )
                     selected = recs.iloc[selected_idx]
                     r1, r2 = st.columns(2)
@@ -2187,12 +2187,12 @@ def render_control_tower():
                         min_value=0.0,
                         value=float(selected["Önerilen Fırsat Değeri"]),
                         step=10000.0,
-                        key="intel_customer_value"
+                        key=f"intel_customer_value_{cid}_{int(selected['product_id'])}"
                     )
                     owner = r2.text_input(
                         "Sorumlu",
                         value=str(selected["Sorumlu"] or ""),
-                        key="intel_customer_owner"
+                        key=f"intel_customer_owner_{cid}_{int(selected['product_id'])}"
                     )
                     if st.button(
                         "Bu öneriyi satış fırsatına çevir",
@@ -2301,7 +2301,7 @@ def render_control_tower():
                         format_func=lambda i: (
                             f"{recs.iloc[i]['Müşteri']} · skor {recs.iloc[i]['Fit Score']}"
                         ),
-                        key="intel_product_rec"
+                        key=f"intel_product_rec_{pid}"
                     )
                     selected = recs.iloc[selected_idx]
                     y1, y2 = st.columns(2)
@@ -2310,12 +2310,12 @@ def render_control_tower():
                         min_value=0.0,
                         value=float(selected["Önerilen Fırsat Değeri"]),
                         step=10000.0,
-                        key="intel_product_value"
+                        key=f"intel_product_value_{pid}_{int(selected['customer_id'])}"
                     )
                     owner = y2.text_input(
                         "Sorumlu",
                         value=str(selected["Sorumlu"] or ""),
-                        key="intel_product_owner"
+                        key=f"intel_product_owner_{pid}_{int(selected['customer_id'])}"
                     )
                     if st.button(
                         "Bu müşteride fırsat oluştur",
