@@ -1325,85 +1325,127 @@ def cash_forecast(base_currency="EUR", horizons=(30,60,90)):
 
 def record_receivable_payment(receivable_id, amount, transaction_date,
                               account_id, reference, notes):
-    row = query_df("SELECT * FROM receivables WHERE id=?", (int(receivable_id),))
-    if row.empty:
-        return False, "Alacak kaydı bulunamadı."
-    r = row.iloc[0]
-    outstanding = max(float(r["amount"] or 0)-float(r["paid_amount"] or 0),0)
     amount = float(amount or 0)
     if amount <= 0:
         return False, "Tahsilat tutarı sıfırdan büyük olmalı."
-    if amount > outstanding + 0.0001:
-        return False, "Tahsilat kalan alacaktan büyük olamaz."
 
-    new_paid = float(r["paid_amount"] or 0)+amount
-    status = "Kapandı" if new_paid + 0.0001 >= float(r["amount"] or 0) else "Kısmi"
-    execute(
-        "UPDATE receivables SET paid_amount=?,status=? WHERE id=?",
-        (new_paid,status,int(receivable_id))
-    )
-    execute(
-        """INSERT INTO finance_transactions
-        (transaction_type,receivable_id,transaction_date,amount,currency,
-         fx_to_base,base_currency,account_id,reference,notes)
-        VALUES ('Tahsilat',?,?,?,?,?,?,?,?,?)""",
-        (
-            int(receivable_id),str(transaction_date),amount,r["currency"],
-            float(r["fx_to_base"] or 1),r["base_currency"] or "EUR",
-            int(account_id) if account_id else None,reference,notes
-        )
-    )
-    if account_id:
-        account = query_df("SELECT * FROM cash_accounts WHERE id=?", (int(account_id),))
-        if not account.empty:
-            a=account.iloc[0]
-            if str(a["currency"]) == str(r["currency"]):
-                execute(
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM receivables WHERE id=?", (int(receivable_id),)
+        ).fetchone()
+        if row is None:
+            return False, "Alacak kaydı bulunamadı."
+
+        outstanding = max(float(row["amount"] or 0)-float(row["paid_amount"] or 0),0)
+        if amount > outstanding + 0.0001:
+            return False, "Tahsilat kalan alacaktan büyük olamaz."
+
+        account = None
+        if account_id:
+            account = conn.execute(
+                "SELECT * FROM cash_accounts WHERE id=? AND active=1",
+                (int(account_id),)
+            ).fetchone()
+            if account is None:
+                return False, "Seçilen banka/kasa hesabı bulunamadı veya pasif."
+            if str(account["currency"]) != str(row["currency"]):
+                return False, (
+                    f"Hesap para birimi ({account['currency']}) ile tahsilat para birimi "
+                    f"({row['currency']}) aynı olmalı."
+                )
+
+        new_paid = float(row["paid_amount"] or 0)+amount
+        status = "Kapandı" if new_paid + 0.0001 >= float(row["amount"] or 0) else "Kısmi"
+
+        try:
+            conn.execute(
+                "UPDATE receivables SET paid_amount=?,status=? WHERE id=?",
+                (new_paid,status,int(receivable_id))
+            )
+            conn.execute(
+                """INSERT INTO finance_transactions
+                (transaction_type,receivable_id,transaction_date,amount,currency,
+                 fx_to_base,base_currency,account_id,reference,notes)
+                VALUES ('Tahsilat',?,?,?,?,?,?,?,?,?)""",
+                (
+                    int(receivable_id),str(transaction_date),amount,row["currency"],
+                    float(row["fx_to_base"] or 1),row["base_currency"] or "EUR",
+                    int(account_id) if account_id else None,reference,notes
+                )
+            )
+            if account is not None:
+                conn.execute(
                     "UPDATE cash_accounts SET balance=balance+?,updated_at=? WHERE id=?",
                     (amount,datetime.now().isoformat(timespec="seconds"),int(account_id))
                 )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
     return True, "Tahsilat kaydedildi."
 
 
 def record_payable_payment(payable_id, amount, transaction_date,
                            account_id, reference, notes):
-    row = query_df("SELECT * FROM payables WHERE id=?", (int(payable_id),))
-    if row.empty:
-        return False, "Borç kaydı bulunamadı."
-    p = row.iloc[0]
-    outstanding = max(float(p["amount"] or 0)-float(p["paid_amount"] or 0),0)
     amount = float(amount or 0)
     if amount <= 0:
         return False, "Ödeme tutarı sıfırdan büyük olmalı."
-    if amount > outstanding + 0.0001:
-        return False, "Ödeme kalan borçtan büyük olamaz."
 
-    new_paid = float(p["paid_amount"] or 0)+amount
-    status = "Kapandı" if new_paid + 0.0001 >= float(p["amount"] or 0) else "Kısmi"
-    execute(
-        "UPDATE payables SET paid_amount=?,status=? WHERE id=?",
-        (new_paid,status,int(payable_id))
-    )
-    execute(
-        """INSERT INTO finance_transactions
-        (transaction_type,payable_id,transaction_date,amount,currency,
-         fx_to_base,base_currency,account_id,reference,notes)
-        VALUES ('Ödeme',?,?,?,?,?,?,?,?,?)""",
-        (
-            int(payable_id),str(transaction_date),amount,p["currency"],
-            float(p["fx_to_base"] or 1),p["base_currency"] or "EUR",
-            int(account_id) if account_id else None,reference,notes
-        )
-    )
-    if account_id:
-        account = query_df("SELECT * FROM cash_accounts WHERE id=?", (int(account_id),))
-        if not account.empty:
-            a=account.iloc[0]
-            if str(a["currency"]) == str(p["currency"]):
-                execute(
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM payables WHERE id=?", (int(payable_id),)
+        ).fetchone()
+        if row is None:
+            return False, "Borç kaydı bulunamadı."
+
+        outstanding = max(float(row["amount"] or 0)-float(row["paid_amount"] or 0),0)
+        if amount > outstanding + 0.0001:
+            return False, "Ödeme kalan borçtan büyük olamaz."
+
+        account = None
+        if account_id:
+            account = conn.execute(
+                "SELECT * FROM cash_accounts WHERE id=? AND active=1",
+                (int(account_id),)
+            ).fetchone()
+            if account is None:
+                return False, "Seçilen banka/kasa hesabı bulunamadı veya pasif."
+            if str(account["currency"]) != str(row["currency"]):
+                return False, (
+                    f"Hesap para birimi ({account['currency']}) ile ödeme para birimi "
+                    f"({row['currency']}) aynı olmalı."
+                )
+
+        new_paid = float(row["paid_amount"] or 0)+amount
+        status = "Kapandı" if new_paid + 0.0001 >= float(row["amount"] or 0) else "Kısmi"
+
+        try:
+            conn.execute(
+                "UPDATE payables SET paid_amount=?,status=? WHERE id=?",
+                (new_paid,status,int(payable_id))
+            )
+            conn.execute(
+                """INSERT INTO finance_transactions
+                (transaction_type,payable_id,transaction_date,amount,currency,
+                 fx_to_base,base_currency,account_id,reference,notes)
+                VALUES ('Ödeme',?,?,?,?,?,?,?,?,?)""",
+                (
+                    int(payable_id),str(transaction_date),amount,row["currency"],
+                    float(row["fx_to_base"] or 1),row["base_currency"] or "EUR",
+                    int(account_id) if account_id else None,reference,notes
+                )
+            )
+            if account is not None:
+                conn.execute(
                     "UPDATE cash_accounts SET balance=balance-?,updated_at=? WHERE id=?",
                     (amount,datetime.now().isoformat(timespec="seconds"),int(account_id))
                 )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
     return True, "Ödeme kaydedildi."
 
 
