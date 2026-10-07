@@ -39,7 +39,8 @@ def dashboard_snapshot(db_path):
     weighted = float(scalar(
         db_path,
         """SELECT COALESCE(SUM(value*probability/100.0),0)
-           FROM opportunities WHERE stage!='Kaybedildi' AND currency='EUR'"""
+           FROM opportunities
+           WHERE stage NOT IN ('Kazanıldı','Kaybedildi') AND currency='EUR'"""
     ))
     overdue_tasks = int(scalar(
         db_path,
@@ -192,26 +193,80 @@ def cash_risks(db_path):
 
 def stock_risks(db_path):
     return query_df(db_path, """
-        WITH stock AS (
+        WITH lot_stock AS (
+          SELECT product_id,
+                 SUM(quantity_available_kg) AS available_kg,
+                 SUM(quantity_reserved_kg) AS reserved_kg,
+                 SUM(
+                   CASE
+                     WHEN COALESCE(quality_status,'Released')!='Released'
+                     THEN CASE
+                            WHEN COALESCE(quality_hold_kg,0)>0
+                            THEN MIN(quality_hold_kg,quantity_available_kg)
+                            ELSE quantity_available_kg
+                          END
+                     ELSE 0
+                   END
+                 ) AS hold_kg
+          FROM inventory_lots
+          GROUP BY product_id
+        ),
+        received AS (
+          SELECT purchase_order_id,
+                 SUM(
+                   CASE WHEN received_to_stock=1 AND status!='İptal'
+                        THEN quantity_kg ELSE 0 END
+                 ) AS received_kg
+          FROM shipments
+          GROUP BY purchase_order_id
+        ),
+        open_po AS (
+          SELECT po.product_id,
+                 SUM(
+                   CASE
+                     WHEN po.status NOT IN ('Tamamlandı','İptal')
+                     THEN MAX(po.quantity_kg-COALESCE(r.received_kg,0),0)
+                     ELSE 0
+                   END
+                 ) AS open_po_kg
+          FROM purchase_orders po
+          LEFT JOIN received r ON r.purchase_order_id=po.id
+          GROUP BY po.product_id
+        ),
+        stock AS (
           SELECT p.id,p.name,p.supplier,
-                 COALESCE(SUM(CASE WHEN COALESCE(il.quality_status,'Released')='Released'
-                                   THEN il.quantity_available_kg-il.quantity_reserved_kg ELSE 0 END),0) AS net_kg,
+                 MAX(
+                   COALESCE(ls.available_kg,0)
+                   - COALESCE(ls.reserved_kg,0)
+                   - COALESCE(ls.hold_kg,0),
+                   0
+                 ) AS net_kg,
+                 COALESCE(op.open_po_kg,0) AS open_po_kg,
                  COALESCE(pol.monthly_usage_kg,0) AS monthly_kg,
                  COALESCE(pol.safety_stock_days,30) AS safety_days,
-                 COALESCE(pol.lead_time_days,45) AS lead_days
+                 COALESCE(pol.lead_time_days,45) AS lead_days,
+                 COALESCE(pol.reorder_review_days,7) AS review_days
           FROM product_catalog p
-          LEFT JOIN inventory_lots il ON il.product_id=p.id
+          LEFT JOIN lot_stock ls ON ls.product_id=p.id
+          LEFT JOIN open_po op ON op.product_id=p.id
           LEFT JOIN inventory_policy pol ON pol.product_id=p.id
           WHERE p.active=1
-          GROUP BY p.id,p.name,p.supplier,pol.monthly_usage_kg,pol.safety_stock_days,pol.lead_time_days
         )
         SELECT name AS ürün,supplier AS tedarikçi,net_kg AS net_stok_kg,
+               open_po_kg AS açık_po_kg,
+               net_kg+open_po_kg AS projekte_stok_kg,
                monthly_kg AS aylık_tüketim_kg,
-               CASE WHEN monthly_kg>0 THEN ROUND(net_kg/(monthly_kg/30.0),1) END AS stok_gün,
-               safety_days AS güvenlik_gün,lead_days AS termin_gün
+               CASE WHEN monthly_kg>0
+                    THEN ROUND(net_kg/(monthly_kg/30.0),1) END AS mevcut_stok_gün,
+               CASE WHEN monthly_kg>0
+                    THEN ROUND((net_kg+open_po_kg)/(monthly_kg/30.0),1) END AS projekte_stok_gün,
+               safety_days AS güvenlik_gün,lead_days AS termin_gün,
+               review_days AS gözden_geçirme_gün
         FROM stock
-        WHERE monthly_kg>0 AND net_kg/(monthly_kg/30.0) < (safety_days+lead_days)
-        ORDER BY stok_gün ASC
+        WHERE monthly_kg>0
+          AND (net_kg+open_po_kg)/(monthly_kg/30.0)
+              < (safety_days+lead_days+review_days)
+        ORDER BY projekte_stok_gün ASC
         LIMIT 20
     """)
 
@@ -278,6 +333,96 @@ def forgotten_customers(db_path):
     """)
 
 
+def data_quality_issues(db_path):
+    checks = [
+        (
+            "Yüksek",
+            "CRM",
+            "Müşteri sektör bilgisi eksik",
+            "SELECT COUNT(*) FROM customers WHERE trim(COALESCE(sector,''))=''",
+            "Sektör bilgisini doldur; ürün eşleştirme kalitesi artar.",
+        ),
+        (
+            "Yüksek",
+            "CRM",
+            "Müşteri üretim profili eksik",
+            """SELECT COUNT(*) FROM customers
+               WHERE status IN ('Aktif','Potansiyel','Riskli')
+                 AND trim(COALESCE(product_profile,''))=''""",
+            "Müşterinin ürettiği ürünleri ve kullandığı hammadde gruplarını yaz.",
+        ),
+        (
+            "Orta",
+            "CRM",
+            "Kontak/e-posta bilgisi eksik",
+            """SELECT COUNT(*) FROM customers
+               WHERE status IN ('Aktif','Potansiyel','Riskli')
+                 AND trim(COALESCE(contact_email,''))=''""",
+            "En az bir satış/teknik kontak e-postası ekle.",
+        ),
+        (
+            "Kritik",
+            "Satış",
+            "Aktif fırsatta sonraki aksiyon yok",
+            """SELECT COUNT(*) FROM opportunities
+               WHERE stage NOT IN ('Kazanıldı','Kaybedildi')
+                 AND trim(COALESCE(next_action,''))=''""",
+            "Her aktif fırsata net bir sonraki aksiyon tanımla.",
+        ),
+        (
+            "Kritik",
+            "Satış",
+            "Aktif fırsatta takip tarihi yok",
+            """SELECT COUNT(*) FROM opportunities
+               WHERE stage NOT IN ('Kazanıldı','Kaybedildi')
+                 AND trim(COALESCE(due_date,''))=''""",
+            "Takip tarihini belirle; fırsatın unutulmasını engelle.",
+        ),
+        (
+            "Orta",
+            "Ürün",
+            "Aktif üründe hedef sektör bilgisi eksik",
+            """SELECT COUNT(*) FROM product_catalog
+               WHERE active=1 AND trim(COALESCE(target_sectors,''))=''""",
+            "Hedef sektör anahtarlarını ekle; satış zekâsı daha isabetli olur.",
+        ),
+        (
+            "Orta",
+            "Ürün",
+            "Aktif üründe tedarikçi bilgisi eksik",
+            """SELECT COUNT(*) FROM product_catalog
+               WHERE active=1 AND trim(COALESCE(supplier,''))=''""",
+            "Onaylı/aday tedarikçiyi ürün kartına bağla.",
+        ),
+        (
+            "Orta",
+            "Stok",
+            "Stok politikası tanımlanmamış aktif ürün",
+            """SELECT COUNT(*) FROM product_catalog p
+               LEFT JOIN inventory_policy ip ON ip.product_id=p.id
+               WHERE p.active=1 AND ip.id IS NULL""",
+            "Aylık tüketim, safety stock ve lead time tanımla.",
+        ),
+    ]
+    rows = []
+    for severity, area, issue, sql, action in checks:
+        count = int(scalar(db_path, sql, default=0) or 0)
+        if count > 0:
+            rows.append({
+                "Önem": severity,
+                "Alan": area,
+                "Eksik / Risk": issue,
+                "Kayıt": count,
+                "Önerilen Aksiyon": action,
+            })
+    if not rows:
+        return pd.DataFrame()
+    order = {"Kritik": 1, "Yüksek": 2, "Orta": 3, "Düşük": 4}
+    df = pd.DataFrame(rows)
+    df["_order"] = df["Önem"].map(order).fillna(9)
+    return df.sort_values(["_order","Kayıt"], ascending=[True,False]).drop(columns=["_order"])
+
+
 def answer_question(db_path, question):
     q = (question or "").lower().strip()
     if not q:
@@ -297,12 +442,20 @@ def answer_question(db_path, question):
         return "Uzun süredir aktivite olmayan müşteriler:", forgotten_customers(db_path)
     if any(x in q for x in ["fırsat", "pipeline", "satış"]):
         return "En önemli aktif satış fırsatları:", opportunities(db_path)
+    if any(
+        x in q
+        for x in [
+            "veri kalitesi", "eksik veri", "hangi veri eksik", "veri eksik",
+            "veriler eksik", "hangi veriler", "kritik veri", "kritik veriler"
+        ]
+    ):
+        return "Sistemin karar kalitesini düşüren eksik veriler:", data_quality_issues(db_path)
     if any(x in q for x in ["risk", "sorun", "tehlike"]):
         return "Satış tarafındaki başlıca riskler:", sales_risks(db_path)
 
     return (
         "Bu API'siz sürüm şu konuları anlayabiliyor: bugün/öncelik, nakit/tahsilat, "
-        "stok/sipariş, marj/teklif, kalite/claim, unutulan müşteriler, satış fırsatları ve riskler.",
+        "stok/sipariş, marj/teklif, kalite/claim, unutulan müşteriler, satış fırsatları, veri kalitesi ve riskler.",
         None,
     )
 
@@ -314,7 +467,7 @@ def build_ceo_brief_text(db_path):
         f"CEO ÖZETİ — {date.today().isoformat()}",
         "",
         f"Aktif fırsat: {s['active_opps']}",
-        f"Ağırlıklı satış pipeline (yalnız EUR kayıtları): {_money(s['weighted'])}",
+        f"Ağırlıklı satış pipeline (yalnız EUR aktif kayıtları): {_money(s['weighted'])}",
         f"Geciken satış takibi: {s['overdue_followups']}",
         f"Geciken görev: {s['overdue_tasks']}",
         f"Açık kalite/claim dosyası: {s['open_quality']}",
@@ -343,7 +496,7 @@ def render_ai_manager(db_path):
     snap = dashboard_snapshot(db_path)
     c1,c2,c3,c4,c5,c6 = st.columns(6)
     c1.metric("Aktif fırsat", snap["active_opps"])
-    c2.metric("Pipeline (yalnız EUR)", _money(snap["weighted"]))
+    c2.metric("Pipeline (EUR aktif)", _money(snap["weighted"]))
     c3.metric("Geciken takip", snap["overdue_followups"])
     c4.metric("Geciken görev", snap["overdue_tasks"])
     c5.metric("Açık kalite", snap["open_quality"])
@@ -373,6 +526,7 @@ def render_ai_manager(db_path):
             "30 gündür takip etmediğimiz müşteriler kimler?",
             "En büyük satış fırsatlarımız hangileri?",
             "Satış tarafındaki en büyük riskler neler?",
+            "Sistemde hangi kritik veriler eksik?",
         ]
         preset = st.selectbox("Hazır soru", ["— Kendim yazacağım —"] + examples)
         default_q = "" if preset == "— Kendim yazacağım —" else preset
@@ -409,3 +563,14 @@ def render_ai_manager(db_path):
             st.markdown("#### Kalite riski")
             df = quality_risks(db_path)
             st.dataframe(df, use_container_width=True, hide_index=True)
+
+        st.markdown("#### Veri kalitesi")
+        quality_df = data_quality_issues(db_path)
+        if quality_df.empty:
+            st.success("Karar motorunu etkileyen kritik veri eksiği görünmüyor.")
+        else:
+            st.caption(
+                "Bu tablo satış zekâsı, stok tahmini ve yönetici raporlarının doğruluğunu "
+                "doğrudan etkileyen eksik alanları gösterir."
+            )
+            st.dataframe(quality_df, use_container_width=True, hide_index=True)
