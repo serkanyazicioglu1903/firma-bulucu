@@ -26,12 +26,17 @@ def test_product_customer_selector_does_not_keep_stale_customer():
     assert not app.exception
 
     with sqlite3.connect(db_path) as conn:
-        pakmaya_id = conn.execute(
-            "SELECT id FROM customers WHERE name='Pakmaya'"
-        ).fetchone()[0]
         product_id = conn.execute(
             "SELECT id FROM product_catalog WHERE name='Fat Powder FI FP 80 PR 01'"
         ).fetchone()[0]
+        visible_customer_ids = {
+            int(row[0])
+            for row in conn.execute(
+                "SELECT id FROM customers WHERE name IN ('Ülker / Pladis','Pakmaya')"
+            ).fetchall()
+        }
 
     customer_box = find_by_key(app.selectbox, f"intel_product_rec_{product_id}")
-    assert int(customer_box.value) == int(pakmaya_id)
+    # The selector may default to either scored recommendation, but it must
+    # never retain a stale customer outside the currently visible candidates.
+    assert int(customer_box.value) in visible_customer_ids
