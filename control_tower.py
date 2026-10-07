@@ -5,6 +5,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from outlook_center import render_outlook_center
+
 DB_PATH = Path(__file__).with_name("as_control_tower.db")
 
 STAGES = [
@@ -1713,7 +1715,7 @@ def render_control_tower():
     st.subheader("🧭 AS CONTROL TOWER")
     st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
 
-    dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, quality_tab, pipeline_tab, followup_tab, tasks_tab, ceo_tab = st.tabs(
+    dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, quality_tab, outlook_tab, pipeline_tab, followup_tab, tasks_tab, ceo_tab = st.tabs(
         [
             "📊 Yönetici Paneli",
             "👥 CRM / Müşteri 360",
@@ -1722,6 +1724,7 @@ def render_control_tower():
             "🚚 Satın Alma & Stok",
             "💶 Finans & Nakit",
             "🧪 Kalite & Regülasyon",
+            "📨 Outlook & Toplantı",
             "💰 Satış Pipeline",
             "📞 Takip Merkezi",
             "✅ Görevler",
@@ -3858,6 +3861,9 @@ def render_control_tower():
                         (reg_status,reg_action,str(reg_due),datetime.now().isoformat(timespec="seconds"),int(reg_id)))
                     st.success("Regülasyon kaydı güncellendi.")
                     st.rerun()
+
+    with outlook_tab:
+        render_outlook_center(DB_PATH)
 
     with pipeline_tab:
         pipeline = query_df("""
