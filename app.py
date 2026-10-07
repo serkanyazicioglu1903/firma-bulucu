@@ -1106,7 +1106,7 @@ with main_tab1:
     with st.expander("Almanya kaynakları ve arama yöntemi"):
         st.dataframe(
             pd.DataFrame(ACQ_SOURCE_GUIDE),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={"URL": st.column_config.LinkColumn("Kaynak", display_text="Aç")},
         )
@@ -1137,7 +1137,7 @@ with main_tab1:
     with col_b:
         acq_deep = st.checkbox("İlan sayfasını açıp finansal/iletişim bilgisi çıkar", value=True, key="acq_deep")
 
-    if st.button("SATILIK FİRMA TARA", type="primary", use_container_width=True):
+    if st.button("SATILIK FİRMA TARA", type="primary", width="stretch"):
         if not acq_countries or not acq_sectors:
             st.error("En az bir ülke ve sektör seçin.")
         else:
@@ -1166,7 +1166,7 @@ with main_tab1:
         st.metric("Gösterilen ciddi aday", len(view))
         st.dataframe(
             view,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "İlan / kaynak URL": st.column_config.LinkColumn("İlan", display_text="Aç"),
@@ -1178,7 +1178,7 @@ with main_tab1:
             view.to_csv(index=False).encode("utf-8-sig"),
             file_name="Satilik_Firma_Adaylari.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
 
         st.divider()
@@ -1237,7 +1237,7 @@ with main_tab1:
                 json.dumps(assessment, ensure_ascii=False, indent=2).encode("utf-8"),
                 file_name="Firma_On_Degerlendirme.json",
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
             )
 
             if selected["Ülke"] == "Almanya":
@@ -1249,7 +1249,7 @@ with main_tab1:
                     email_text.encode("utf-8"),
                     file_name="Almanca_Ilk_Temas.txt",
                     mime="text/plain",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
 # -------------------------
@@ -1294,7 +1294,7 @@ with main_tab2:
         key="sender_email",
     )
 
-    if st.button("ÜRÜN / ÜRETİCİ ARA", type="primary", use_container_width=True):
+    if st.button("ÜRÜN / ÜRETİCİ ARA", type="primary", width="stretch"):
         if not product.strip():
             st.error("Önce ürün veya hammadde adını yazın.")
         else:
@@ -1323,7 +1323,7 @@ with main_tab2:
         st.metric("Gösterilen üretici adayı", len(supplier_view))
         st.dataframe(
             supplier_view.drop(columns=["Taslak E-mail"], errors="ignore"),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Kaynak URL": st.column_config.LinkColumn("Kaynak", display_text="Aç"),
@@ -1341,7 +1341,7 @@ with main_tab2:
                 supplier_view.to_csv(index=False).encode("utf-8-sig"),
                 file_name=f"Uretici_Adaylari_{re.sub(r'[^A-Za-z0-9]+','_',product)[:40]}.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )
         with d2:
             st.download_button(
@@ -1349,7 +1349,7 @@ with main_tab2:
                 json.dumps(supplier_view.to_dict(orient="records"), ensure_ascii=False, indent=2).encode("utf-8"),
                 file_name=f"Uretici_Adaylari_{re.sub(r'[^A-Za-z0-9]+','_',product)[:40]}.json",
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
             )
 
         st.markdown("### ✉️ Firma bazında hazır teklif / temsilcilik e-postası")
