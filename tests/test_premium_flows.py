@@ -29,21 +29,28 @@ def id_for(table, name):
 def test_product_to_customer_recommendation_is_stable(tmp_path):
     setup_db(tmp_path)
     pid = id_for("product_catalog", "Fat Powder FI FP 80 PR 01")
+    pakmaya_id = id_for("customers", "Pakmaya")
 
     recs = control_tower.recommendation_rows(product_id=pid)
-    assert recs["Müşteri"].tolist() == ["Pakmaya"]
-    assert int(recs.iloc[0]["customer_id"]) == id_for("customers", "Pakmaya")
+    assert set(recs["Müşteri"].tolist()) == {"Ülker / Pladis", "Pakmaya"}
+    assert pakmaya_id in recs["customer_id"].astype(int).tolist()
 
     ok, _ = control_tower.create_opportunity_from_recommendation(
-        int(recs.iloc[0]["customer_id"]), pid, 250000, "Serkan"
+        pakmaya_id, pid, 250000, "Serkan"
     )
     assert ok
 
     recs_after = control_tower.recommendation_rows(product_id=pid)
-    assert recs_after.empty
+    assert "Pakmaya" not in recs_after["Müşteri"].tolist()
+    assert "Ülker / Pladis" in recs_after["Müşteri"].tolist()
+    assert any(
+        "Mevcut açık" in d["Neden gösterilmiyor?"]
+        for d in recs_after.attrs.get("diagnostics", [])
+        if d["Müşteri"] == "Pakmaya"
+    )
 
     ok2, msg2 = control_tower.create_opportunity_from_recommendation(
-        id_for("customers", "Pakmaya"), pid, 250000, "Serkan"
+        pakmaya_id, pid, 250000, "Serkan"
     )
     assert not ok2
     assert "zaten" in msg2.lower()
