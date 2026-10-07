@@ -27,6 +27,9 @@ jobs:
       - name: Compile Python files
         run: python -m py_compile app.py control_tower.py ai_manager.py security_admin.py management_reports.py migrate_sqlite_to_postgres.py
 
+      - name: Core tests
+        run: pytest -q tests/test_core.py
+
       - name: Streamlit startup smoke test
         run: |
           mkdir -p .streamlit
