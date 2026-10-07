@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from ai_manager import render_ai_manager
+from sales_matching import normalize, matched_sectors
 
 DB_PATH = Path(__file__).with_name("as_control_tower.db")
 
@@ -681,7 +682,7 @@ def seed_product_catalog():
 
 
 def normalized_text(value):
-    return str(value or "").lower().replace("ı", "i").replace("İ", "i")
+    return normalize(value)
 
 
 def recommendation_rows(customer_id=None, product_id=None):
@@ -705,7 +706,7 @@ def recommendation_rows(customer_id=None, product_id=None):
         products = products[products["id"] == int(product_id)]
 
     existing = query_df("""
-        SELECT customer_id, lower(product) AS product_key, stage
+        SELECT customer_id, product AS product_key, stage
         FROM opportunities
         WHERE stage != 'Kaybedildi'
     """)
@@ -724,29 +725,31 @@ def recommendation_rows(customer_id=None, product_id=None):
     }
 
     rows = []
+    diagnostics = []
     for _, c in customers.iterrows():
         customer_text = normalized_text(
             f"{c['sector']} {c['notes']} {c['product_profile']}"
         )
-        if not customer_text.strip():
-            continue
-
         for _, p in products.iterrows():
+            def excluded(reason):
+                diagnostics.append({"Müşteri": c["name"], "Ürün": p["name"], "Neden gösterilmiyor?": reason})
+
+            if not customer_text.strip():
+                excluded("Müşteri sektör / üretim profili eksik")
+                continue
             if (int(c["id"]), normalized_text(p["name"])) in existing_keys:
+                excluded("Mevcut açık veya kazanılmış fırsat var; Satış Pipeline bölümünde takip edin")
                 continue
 
             status_row = status_map.get((int(c["id"]), int(p["id"])))
             known_status = str(status_row["status"]) if status_row is not None else ""
             if known_status in {"Mevcut", "Uygun Değil"}:
+                excluded(f"Müşteri-ürün durumu: {known_status}")
                 continue
 
-            keywords = [
-                normalized_text(x).strip()
-                for x in str(p["target_sectors"] or "").split(";")
-                if str(x).strip()
-            ]
-            matched = [k for k in keywords if k and k in customer_text]
+            matched = matched_sectors(customer_text, p["target_sectors"])
             if not matched:
+                excluded("Sektör / üretim profili eşleşmedi; müşteri kartını kontrol edin")
                 continue
 
             score = min(70, 35 + 12 * len(set(matched)))
@@ -792,11 +795,14 @@ def recommendation_rows(customer_id=None, product_id=None):
                 "Uygulama": p["applications"],
             })
 
-    if not rows:
-        return pd.DataFrame()
-    return pd.DataFrame(rows).sort_values(
-        ["Fit Score", "Önerilen Fırsat Değeri"], ascending=[False, False]
-    ).reset_index(drop=True)
+    result = pd.DataFrame(rows)
+    if not result.empty:
+        result = result.sort_values(
+            ["Fit Score", "Önerilen Fırsat Değeri"], ascending=[False, False]
+        ).reset_index(drop=True)
+    result.attrs["diagnostics"] = diagnostics
+    result.attrs["customer_count"] = len(customers)
+    return result
 
 
 def create_opportunity_from_recommendation(customer_id, product_id, value, owner):
@@ -963,6 +969,17 @@ def money(v, currency="EUR"):
         return f"{float(v):,.0f} {currency}"
     except Exception:
         return f"0 {currency}"
+
+
+def opportunity_totals(weighted=False, stages=None):
+    expr = "value * probability / 100.0" if weighted else "value"
+    where = "stage != 'Kaybedildi'"
+    params = ()
+    if stages:
+        where = "stage IN (" + ",".join("?" for _ in stages) + ")"
+        params = tuple(stages)
+    rows = query_df(f"SELECT currency, SUM({expr}) AS total FROM opportunities WHERE {where} GROUP BY currency ORDER BY currency", params)
+    return " · ".join(money(r["total"], r["currency"] or "Belirtilmemiş") for _, r in rows.iterrows()) or "0"
 
 
 def add_activity(customer_id, opportunity_id, activity_type, activity_date, summary,
@@ -1148,6 +1165,11 @@ def receive_shipment_to_stock(shipment_id):
     if int(row["received_to_stock"] or 0) == 1:
         return False, "Bu sevkiyat daha önce stoğa alınmış."
 
+    if row["status"] == "İptal":
+        return False, "İptal edilmiş sevkiyat stoğa alınamaz."
+    if float(row["quantity_kg"] or 0) <= 0:
+        return False, "Stok giriş miktarı sıfırdan büyük olmalı."
+
     warehouse_id = row["destination_warehouse_id"] or row["po_warehouse_id"]
     if not warehouse_id:
         return False, "Depo seçilmeden stok girişi yapılamaz."
@@ -1329,12 +1351,21 @@ def record_receivable_payment(receivable_id, amount, transaction_date,
     if row.empty:
         return False, "Alacak kaydı bulunamadı."
     r = row.iloc[0]
+    if r["status"] == "İptal":
+        return False, "İptal edilmiş alacak için işlem yapılamaz."
     outstanding = max(float(r["amount"] or 0)-float(r["paid_amount"] or 0),0)
     amount = float(amount or 0)
     if amount <= 0:
         return False, "Tahsilat tutarı sıfırdan büyük olmalı."
     if amount > outstanding + 0.0001:
         return False, "Tahsilat kalan alacaktan büyük olamaz."
+
+    if account_id:
+        account = query_df("SELECT * FROM cash_accounts WHERE id=? AND active=1", (int(account_id),))
+        if account.empty:
+            return False, "Aktif banka / kasa hesabı bulunamadı."
+        if str(account.iloc[0]["currency"]) != str(r["currency"]):
+            return False, "Hesap ve belge para birimi aynı olmalı. Döviz dönüşümünü ayrı kaydedin."
 
     new_paid = float(r["paid_amount"] or 0)+amount
     status = "Kapandı" if new_paid + 0.0001 >= float(r["amount"] or 0) else "Kısmi"
@@ -1371,12 +1402,21 @@ def record_payable_payment(payable_id, amount, transaction_date,
     if row.empty:
         return False, "Borç kaydı bulunamadı."
     p = row.iloc[0]
+    if p["status"] == "İptal":
+        return False, "İptal edilmiş borç için işlem yapılamaz."
     outstanding = max(float(p["amount"] or 0)-float(p["paid_amount"] or 0),0)
     amount = float(amount or 0)
     if amount <= 0:
         return False, "Ödeme tutarı sıfırdan büyük olmalı."
     if amount > outstanding + 0.0001:
         return False, "Ödeme kalan borçtan büyük olamaz."
+
+    if account_id:
+        account = query_df("SELECT * FROM cash_accounts WHERE id=? AND active=1", (int(account_id),))
+        if account.empty:
+            return False, "Aktif banka / kasa hesabı bulunamadı."
+        if str(account.iloc[0]["currency"]) != str(p["currency"]):
+            return False, "Hesap ve belge para birimi aynı olmalı. Döviz dönüşümünü ayrı kaydedin."
 
     new_paid = float(p["paid_amount"] or 0)+amount
     status = "Kapandı" if new_paid + 0.0001 >= float(p["amount"] or 0) else "Kısmi"
@@ -1713,7 +1753,7 @@ def render_control_tower():
     )
 
     st.subheader("🧭 AS CONTROL TOWER")
-    st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
+    st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi · İyileştirme 07.10.2026")
 
     dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, quality_tab, pipeline_tab, followup_tab, tasks_tab, ai_tab, ceo_tab = st.tabs(
         [
@@ -1754,8 +1794,8 @@ def render_control_tower():
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("CRM kayıtları", customer_count)
         m2.metric("Aktif fırsat", active_opps)
-        m3.metric("Ağırlıklı pipeline", money(weighted))
-        m4.metric("Kazanılan", money(won))
+        m3.metric("Ağırlıklı pipeline", opportunity_totals(weighted=True))
+        m4.metric("Kazanılan", opportunity_totals(stages=["Kazanıldı"]))
         m5.metric("Geciken takip", overdue_followups)
 
         rec_dashboard = outstanding_receivables()
@@ -1796,12 +1836,12 @@ def render_control_tower():
 
         st.markdown("#### Satış hunisi")
         funnel = query_df("""
-            SELECT stage AS aşama,
+            SELECT stage AS aşama, currency AS para_birimi,
                    COUNT(*) AS fırsat_sayısı,
                    ROUND(SUM(value),0) AS toplam_değer,
                    ROUND(SUM(value * probability / 100.0),0) AS ağırlıklı_değer
             FROM opportunities
-            GROUP BY stage
+            GROUP BY stage, currency
         """)
         if not funnel.empty:
             order = {stage: i for i, stage in enumerate(STAGES)}
@@ -2182,7 +2222,7 @@ def render_control_tower():
                     selected_product_id = st.selectbox(
                         "Fırsata çevrilecek öneri",
                         product_options,
-                        format_func=lambda product_id: (
+                        format_func=lambda product_id, recs=recs: (
                             f"{recs.loc[recs['product_id']==product_id,'Ürün'].iloc[0]} · "
                             f"skor {recs.loc[recs['product_id']==product_id,'Fit Score'].iloc[0]}"
                         ),
@@ -2269,26 +2309,32 @@ def render_control_tower():
             if products_intel.empty:
                 st.info("Ürün kataloğu boş.")
             else:
-                product_name = st.selectbox(
+                pid = st.selectbox(
                     "Ürün seç",
-                    products_intel["name"].tolist(),
-                    key="intel_product_select"
-                )
-                pid = int(
-                    products_intel.loc[
-                        products_intel["name"] == product_name, "id"
-                    ].iloc[0]
+                    [int(x) for x in products_intel["id"]],
+                    format_func=lambda product_id: products_intel.loc[
+                        products_intel["id"] == product_id, "name"
+                    ].iloc[0],
+                    key="intel_product_select_id"
                 )
                 product_row = products_intel[
                     products_intel["id"] == pid
                 ].iloc[0]
                 st.caption(
                     f"{product_row['category']} · {product_row['applications']} · "
-                    f"Hedef sektörler: {product_row['target_sectors']}"
+                    f"Hedef sektörler: {str(product_row['target_sectors']).replace(';', ' · ')}"
                 )
                 recs = recommendation_rows(product_id=pid)
+                m1, m2, m3 = st.columns(3)
+                m1.metric("İncelenen müşteri", recs.attrs["customer_count"])
+                m2.metric("Yeni öneri", len(recs))
+                m3.metric("Öneri dışında", len(recs.attrs["diagnostics"]))
+                st.caption("Kayıtlı müşteri profillerinden öneri üretilir; bu ekran internetten yeni firma aramaz. Skor, doğrulanmış talep veya satın alma olasılığı değildir.")
+                if recs.attrs["diagnostics"]:
+                    with st.expander("Diğer müşteriler neden listelenmiyor?"):
+                        st.dataframe(pd.DataFrame(recs.attrs["diagnostics"]), hide_index=True, use_container_width=True)
                 if recs.empty:
-                    st.info("Bu ürün için yeni müşteri eşleşmesi bulunamadı.")
+                    st.info("Yeni öneri yok. Yukarıdaki açıklamalardan mevcut fırsatları ve eksik müşteri profillerini kontrol edin.")
                 else:
                     st.dataframe(
                         recs[
@@ -2313,13 +2359,18 @@ def render_control_tower():
                     selected_customer_id = st.selectbox(
                         "Fırsata çevrilecek müşteri",
                         customer_options,
-                        format_func=lambda customer_id: (
+                        format_func=lambda customer_id, recs=recs: (
                             f"{recs.loc[recs['customer_id']==customer_id,'Müşteri'].iloc[0]} · "
                             f"skor {recs.loc[recs['customer_id']==customer_id,'Fit Score'].iloc[0]}"
                         ),
                         key=customer_key
                     )
                     selected = recs[recs["customer_id"] == int(selected_customer_id)].iloc[0]
+                    st.markdown(f"**{selected['Müşteri']} · {selected['Ürün']}**")
+                    st.write(f"Uygulama: {selected['Uygulama']}")
+                    st.write(f"Öneri gerekçesi: {selected['Neden']}")
+                    st.info("Sonraki adım: Kullanım alanı ve teknik şartnameyi doğrulayın; uygun bulunursa numune ve deneme planı oluşturun.")
+                    st.download_button("Müşteri önerilerini indir", recs.to_csv(index=False).encode("utf-8-sig"), file_name="Musteri_Onerileri.csv", mime="text/csv", key=f"recs_export_{pid}")
                     y1, y2 = st.columns(2)
                     value = y1.number_input(
                         "Fırsat değeri",
@@ -4173,8 +4224,8 @@ def render_control_tower():
         ).iloc[0]["n"])
 
         c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Ağırlıklı fırsat", money(weighted))
-        c2.metric("Risk altındaki iş", money(risk))
+        c1.metric("Ağırlıklı fırsat", opportunity_totals(weighted=True))
+        c2.metric("Risk altındaki iş", opportunity_totals(stages=["Problem / Koruma"]))
         c3.metric("Kritik / yüksek konu", critical)
         c4.metric("Geciken satış takibi", overdue)
         c5.metric("14+ gün sessiz fırsat", stale_count)
