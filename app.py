@@ -627,14 +627,31 @@ def acq_build_queries(country, sector):
         q.append(f'"{s}" "business for sale" manufacturer {c["name"]}')
     return list(dict.fromkeys(q))
 
-def acq_candidate_ok(title, snippet, body, url, country):
+def acq_candidate_ok(title, snippet, body, url, country, sector=None):
     text = f"{title} {snippet} {body[:10000]}".lower()
     sale = any(x in text for x in ACQ_SALE_TERMS)
     maker = any(x in text for x in MANUFACTURING_TERMS)
     preferred = acq_preferred(url, country)
+    excluded = any(x in text for x in ACQ_EXCLUSION_TERMS)
+
+    sector_hits = 1
+    if sector:
+        sector_hits = sum(
+            1 for keyword in ACQ_SECTOR_KEYWORDS.get(sector, [])
+            if keyword in text
+        )
+
+    if excluded:
+        return False, sale, maker
+
     if preferred:
-        return sale or maker, sale, maker
-    return sale and maker, sale, maker
+        # Preferred M&A sources are trusted as listing sources, but the listing
+        # must still look like the requested industrial sector.
+        return bool(sale and sector_hits > 0), sale, maker
+
+    # Generic web results require both a sale/succession signal and a real
+    # manufacturing signal, plus a sector match.
+    return bool(sale and maker and sector_hits > 0), sale, maker
 
 def acq_score(title, snippet, body, url, country, sector):
     text = f"{title} {snippet} {body[:10000]}".lower()
@@ -697,12 +714,12 @@ def acq_scan(countries, sectors, per_query, deep_scan):
             snippet = clean(item.get("body", ""))
             body = email = phone = ""
 
-            cheap_ok, _, _ = acq_candidate_ok(title, snippet, "", url, country)
+            cheap_ok, _, _ = acq_candidate_ok(title, snippet, "", url, country, sector)
             if deep_scan and (cheap_ok or acq_preferred(url, country)):
                 body, email, phone = fetch_page(url)
                 time.sleep(0.03)
 
-            ok, sale, maker = acq_candidate_ok(title, snippet, body, url, country)
+            ok, sale, maker = acq_candidate_ok(title, snippet, body, url, country, sector)
             if not ok:
                 continue
 
