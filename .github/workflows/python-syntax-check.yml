@@ -26,6 +26,9 @@ jobs:
       - name: Compile Python files
         run: python -m py_compile app.py control_tower.py ai_manager.py
 
+      - name: Business regression tests
+        run: python -m unittest discover -s tests -v
+
       - name: Streamlit startup smoke test
         run: |
           python - <<'PY'
@@ -36,6 +39,10 @@ jobs:
 
           if app.exception:
               raise AssertionError(f"Streamlit startup exception: {app.exception}")
+
+          app.selectbox(key="intel_product_select_id").select(3).run()
+          if app.exception:
+              raise AssertionError(f"Product selection failed: {app.exception}")
 
           print("Streamlit app loaded successfully.")
           print("Top-level tabs:", [t.label for t in app.tabs])

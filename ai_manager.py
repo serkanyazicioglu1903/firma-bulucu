@@ -39,7 +39,7 @@ def dashboard_snapshot(db_path):
     weighted = float(scalar(
         db_path,
         """SELECT COALESCE(SUM(value*probability/100.0),0)
-           FROM opportunities WHERE stage!='Kaybedildi'"""
+           FROM opportunities WHERE stage!='Kaybedildi' AND currency='EUR'"""
     ))
     overdue_tasks = int(scalar(
         db_path,
@@ -314,7 +314,7 @@ def build_ceo_brief_text(db_path):
         f"CEO ÖZETİ — {date.today().isoformat()}",
         "",
         f"Aktif fırsat: {s['active_opps']}",
-        f"Ağırlıklı satış pipeline: {_money(s['weighted'])}",
+        f"Ağırlıklı satış pipeline (yalnız EUR kayıtları): {_money(s['weighted'])}",
         f"Geciken satış takibi: {s['overdue_followups']}",
         f"Geciken görev: {s['overdue_tasks']}",
         f"Açık kalite/claim dosyası: {s['open_quality']}",
@@ -343,7 +343,7 @@ def render_ai_manager(db_path):
     snap = dashboard_snapshot(db_path)
     c1,c2,c3,c4,c5,c6 = st.columns(6)
     c1.metric("Aktif fırsat", snap["active_opps"])
-    c2.metric("Ağırlıklı pipeline", _money(snap["weighted"]))
+    c2.metric("Pipeline (yalnız EUR)", _money(snap["weighted"]))
     c3.metric("Geciken takip", snap["overdue_followups"])
     c4.metric("Geciken görev", snap["overdue_tasks"])
     c5.metric("Açık kalite", snap["open_quality"])
