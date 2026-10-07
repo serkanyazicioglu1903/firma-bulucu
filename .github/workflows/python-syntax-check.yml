@@ -5,9 +5,10 @@ on:
   push:
     branches:
       - main
-      - as-control-tower-v1
-      - premium-qa-polish
-      - step-9-ai-manager
+
+concurrency:
+  group: python-app-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   app-check:
