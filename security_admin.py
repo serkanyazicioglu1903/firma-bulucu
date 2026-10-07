@@ -202,6 +202,54 @@ def logout_button():
         st.rerun()
 
 
+WRITE_TABLE_PERMISSIONS = {
+    "SALES": {
+        "customers","contacts","opportunities","activities","tasks","quotes",
+        "customer_product_status","opportunity_stage_history"
+    },
+    "PURCHASING": {
+        "product_catalog","purchase_orders","shipments","inventory_lots",
+        "inventory_policy","warehouses","tasks","customer_product_status"
+    },
+    "FINANCE": {
+        "quotes","receivables","payables","finance_transactions",
+        "cash_accounts","cash_events","tasks"
+    },
+    "QUALITY": {
+        "quality_cases","quality_actions","quality_recoveries",
+        "compliance_documents","regulatory_items","inventory_lots","tasks","activities"
+    },
+    "VIEWER": set(),
+}
+
+
+def sql_write_table(sql):
+    sql_text=" ".join(str(sql or "").strip().split())
+    patterns=[
+        r"INSERT\s+INTO\s+([A-Za-z0-9_]+)",
+        r"UPDATE\s+([A-Za-z0-9_]+)",
+        r"DELETE\s+FROM\s+([A-Za-z0-9_]+)",
+        r"REPLACE\s+INTO\s+([A-Za-z0-9_]+)",
+    ]
+    for pattern in patterns:
+        m=re.search(pattern,sql_text,re.I)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def authorize_write(sql):
+    role=current_role()
+    if role in ("","SYSTEM"):
+        return True
+    if role=="ADMIN":
+        return True
+    table=sql_write_table(sql)
+    if not table:
+        return True
+    return table in WRITE_TABLE_PERMISSIONS.get(role,set())
+
+
 def audit_sql_write(db_path, sql):
     sql_text = " ".join(str(sql or "").strip().split())
     if not sql_text:
