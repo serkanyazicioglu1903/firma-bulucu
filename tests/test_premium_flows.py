@@ -154,6 +154,13 @@ def test_partial_and_complete_shipment_receiving(tmp_path):
     ).iloc[0]["status"]
     assert status1 == "Kısmi Sevk"
 
+    snap_after_partial = control_tower.stock_snapshot()
+    prow = snap_after_partial[snap_after_partial["id"] == pid].iloc[0]
+    assert float(prow["net_available_kg"]) == 400
+    assert float(prow["open_po_kg"]) == 600
+    assert float(prow["inbound_kg"]) == 600
+    assert float(prow["projected_stock_kg"]) == 1000
+
     ok2, _ = control_tower.receive_shipment_to_stock(s2)
     assert ok2
     status2 = control_tower.query_df(
