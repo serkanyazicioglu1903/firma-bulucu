@@ -9,6 +9,7 @@ from ai_manager import render_ai_manager
 from management_reports import render_management_reports
 from security_admin import (
     audit_sql_write,
+    authorize_write,
     can_access,
     init_security_tables,
     login_gate,
@@ -49,6 +50,8 @@ def get_conn():
 
 
 def execute(sql, params=()):
+    if not authorize_write(sql):
+        raise PermissionError("Bu işlem mevcut kullanıcı rolü için yetkili değil.")
     with get_conn() as conn:
         conn.execute(sql, params)
         conn.commit()
