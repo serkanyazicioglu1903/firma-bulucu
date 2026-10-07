@@ -16,7 +16,8 @@ def test_product_customer_selector_does_not_keep_stale_customer():
     if db_path.exists():
         db_path.unlink()
 
-    app = AppTest.from_file("app.py", default_timeout=60)
+    app_path = Path(__file__).resolve().parents[1] / "app.py"
+    app = AppTest.from_file(app_path, default_timeout=60)
     app.run()
     assert not app.exception
 
