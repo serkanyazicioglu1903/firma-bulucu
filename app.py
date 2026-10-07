@@ -1015,8 +1015,13 @@ def supplier_scan(product, country_label, objective, max_companies, deep_scan, t
 
         evidence = evidence_context(
             supporting_body,
-            ["we manufacture", "we produce", "our factory", "our factories", "our manufacturing", "our production facilities", "company manufactures", "group manufactures"],
-            width=260,
+            [
+                "we manufacture", "we produce", "our factory", "our factories",
+                "manufacturing facility", "manufacturing site", "production facility",
+                "production site", "our manufacturing", "our production facilities",
+                "company manufactures", "group manufactures", "factory", "plant"
+            ],
+            width=300,
         )
 
         rows.append({
@@ -1027,8 +1032,25 @@ def supplier_scan(product, country_label, objective, max_companies, deep_scan, t
             "Website": f"https://{get_domain(url)}" if get_domain(url) else url,
             "Manufacturer Status": status_value,
             "Üretim Kanıtı": evidence,
-            "Üretim Kaynak URL": next((p[0] for p in pages if any(t in p[1].lower() for t in ["we manufacture", "we produce", "our factory", "our manufacturing", "company manufactures"])), url),
-            "Kayıt Türü": "Canlı arama adayı · şirket adı ve üretim teyidi bekleniyor",
+            "Üretim Kaynak URL": next(
+                (
+                    p[0] for p in pages
+                    if any(
+                        t in p[1].lower()
+                        for t in [
+                            "we manufacture", "we produce", "our factory",
+                            "manufacturing facility", "manufacturing site",
+                            "production facility", "production site", "plant"
+                        ]
+                    )
+                ),
+                url
+            ),
+            "Kayıt Türü": (
+                "Canlı arama · güçlü üretim kanıtı bulundu"
+                if status_value == "confirmed"
+                else "Canlı arama adayı · üretim teyidi güçlendirilmeli"
+            ),
             "İletişim URL": next((p[0] for p in pages if re.search(r"contact|enquiry", p[0], re.I)), ""),
             "Türkiye Varlığı": turkey_presence or ("Doğrulanamadı; temsilcisi olmadığı anlamına gelmez." if turkey_check else "Kontrol edilmedi"),
             "Satış / Export E-mail": sales_email,
