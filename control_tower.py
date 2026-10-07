@@ -776,6 +776,10 @@ def recommendation_rows(customer_id=None, product_id=None):
                 score += 5
 
             score = min(100, int(score))
+            recommendation_level = (
+                "Güçlü" if score >= 75
+                else ("Orta" if score >= 60 else "Keşif")
+            )
             rows.append({
                 "customer_id": int(c["id"]),
                 "product_id": int(p["id"]),
@@ -784,6 +788,7 @@ def recommendation_rows(customer_id=None, product_id=None):
                 "Kategori": p["category"],
                 "Tedarikçi": p["supplier"],
                 "Fit Score": score,
+                "Öneri Seviyesi": recommendation_level,
                 "Neden": "; ".join(reasons),
                 "Durum": known_status or "Yeni öneri",
                 "Sorumlu": c["owner"],
@@ -2291,7 +2296,7 @@ def render_control_tower():
                 else:
                     st.dataframe(
                         recs[
-                            ["Ürün","Kategori","Fit Score","Neden","Durum",
+                            ["Ürün","Kategori","Fit Score","Öneri Seviyesi","Neden","Durum",
                              "Önerilen Fırsat Değeri","Para","Uygulama"]
                         ],
                         use_container_width=True,
@@ -2466,7 +2471,7 @@ def render_control_tower():
                 else:
                     st.dataframe(
                         recs[
-                            ["Müşteri","Fit Score","Neden","Durum","Sorumlu",
+                            ["Müşteri","Fit Score","Öneri Seviyesi","Neden","Durum","Sorumlu",
                              "Önerilen Fırsat Değeri","Para"]
                         ],
                         use_container_width=True,
@@ -2539,7 +2544,7 @@ def render_control_tower():
                 st.metric("Yeni öneri", len(view))
                 st.dataframe(
                     view[
-                        ["Müşteri","Ürün","Kategori","Fit Score","Neden",
+                        ["Müşteri","Ürün","Kategori","Fit Score","Öneri Seviyesi","Neden",
                          "Durum","Sorumlu","Önerilen Fırsat Değeri","Para"]
                     ],
                     use_container_width=True,
