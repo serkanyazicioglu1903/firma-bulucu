@@ -1349,7 +1349,8 @@ def outstanding_payables():
     df["outstanding_base"] = df["outstanding"] * df["fx_to_base"].fillna(1)
     df["risk"] = df.apply(
         lambda r:
-            "GECİKMİŞ" if r["days_overdue"] > 0 else "AÇIK",
+            "KRİTİK" if r["days_overdue"] >= 30
+            else ("GECİKMİŞ" if r["days_overdue"] > 0 else "AÇIK"),
         axis=1
     )
     return df
