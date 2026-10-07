@@ -30,6 +30,9 @@ jobs:
       - name: Premium business flow tests
         run: pytest -q tests/test_premium_flows.py
 
+      - name: Recommendation UI regression test
+        run: pytest -q tests/test_streamlit_recommendation_ui.py
+
       - name: Streamlit startup smoke test
         run: |
           python - <<'PY'
