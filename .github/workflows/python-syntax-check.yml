@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - as-control-tower-v1
+      - step-10-11-production-hardening
       - step-9-ai-manager
 
 jobs:
@@ -24,7 +25,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile Python files
-        run: python -m py_compile app.py control_tower.py ai_manager.py
+        run: python -m py_compile app.py control_tower.py ai_manager.py security_admin.py management_reports.py migrate_sqlite_to_postgres.py
 
       - name: Streamlit startup smoke test
         run: |
