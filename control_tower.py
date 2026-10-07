@@ -7,10 +7,12 @@ import streamlit as st
 
 from ai_manager import render_ai_manager
 from management_reports import render_management_reports
+from role_portal import render_role_portal
 from security_admin import (
     audit_sql_write,
     authorize_write,
     can_access,
+    current_role,
     init_security_tables,
     login_gate,
     logout_button,
@@ -1698,6 +1700,10 @@ def render_control_tower():
     seed_once()
     seed_product_catalog()
     seed_warehouses()
+
+    if current_role() != "ADMIN":
+        render_role_portal(DB_PATH, current_role())
+        return
 
     st.markdown(
         """
