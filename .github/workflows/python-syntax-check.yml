@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - as-control-tower-v1
+      - step-9-ai-manager
 
 jobs:
   app-check:
@@ -23,7 +24,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile Python files
-        run: python -m py_compile app.py control_tower.py
+        run: python -m py_compile app.py control_tower.py ai_manager.py
 
       - name: Streamlit startup smoke test
         run: |
