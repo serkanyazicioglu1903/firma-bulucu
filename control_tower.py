@@ -2810,43 +2810,75 @@ def render_control_tower():
                         customer_id, opp_id, product_name.strip(), inputs, calc
                     )
                     if opp_id:
-                        old_stage_row = query_df(
-                            "SELECT stage, owner FROM opportunities WHERE id=?",
+                        opp_row = query_df(
+                            """SELECT o.stage,o.owner,c.name AS customer_name
+                               FROM opportunities o
+                               LEFT JOIN customers c ON c.id=o.customer_id
+                               WHERE o.id=?""",
                             (int(opp_id),)
                         )
-                        old_stage = (
-                            str(old_stage_row.iloc[0]["stage"])
-                            if not old_stage_row.empty else ""
-                        )
-                        opp_owner = (
-                            str(old_stage_row.iloc[0]["owner"] or "")
-                            if not old_stage_row.empty else customer_owner
-                        )
-                        execute(
-                            """UPDATE opportunities
-                               SET stage='Teklif', probability=?,
-                                   next_action='Teklif takibi',
-                                   due_date=?, updated_at=?
-                               WHERE id=?""",
-                            (
-                                STAGE_PROBABILITY["Teklif"],
-                                str(date.today() + timedelta(days=3)),
-                                datetime.now().isoformat(timespec="seconds"),
-                                int(opp_id),
+                        if not opp_row.empty:
+                            old_stage = str(opp_row.iloc[0]["stage"] or "")
+                            opp_owner = str(
+                                opp_row.iloc[0]["owner"] or customer_owner or ""
                             )
-                        )
-                        if old_stage != "Teklif":
-                            execute(
-                                """INSERT INTO opportunity_stage_history
-                                (opportunity_id,old_stage,new_stage,owner,note)
-                                VALUES (?,?,'Teklif',?,?)""",
-                                (
+                            customer_name_for_task = str(
+                                opp_row.iloc[0]["customer_name"] or customer_name or ""
+                            )
+
+                            target_stage = None
+                            next_action_text = ""
+                            task_priority = "Orta"
+                            task_due = date.today() + timedelta(days=3)
+
+                            if quote_status in ["Gönderildi", "Revizyon"]:
+                                target_stage = "Teklif"
+                                next_action_text = "Teklif takibi"
+                                task_priority = "Yüksek"
+                            elif quote_status == "Kabul":
+                                target_stage = "Sipariş"
+                                next_action_text = "Sipariş teyidi / sevkiyat planı"
+                                task_priority = "Kritik"
+                                task_due = date.today() + timedelta(days=1)
+                            elif quote_status == "Red":
+                                next_action_text = "Teklif red nedenini ve revizyon kararını netleştir"
+                                task_priority = "Yüksek"
+                                task_due = date.today() + timedelta(days=1)
+
+                            if target_stage:
+                                update_opportunity_stage(
                                     int(opp_id),
-                                    old_stage,
+                                    target_stage,
+                                    STAGE_PROBABILITY[target_stage],
+                                    next_action_text,
+                                    task_due,
                                     opp_owner,
-                                    "Teklif & Kârlılık motorundan teklif kaydedildi"
+                                    date.today() + timedelta(days=30),
+                                    "",
+                                    f"Teklif durumu: {quote_status}"
                                 )
-                            )
+
+                            if next_action_text:
+                                existing_task = int(query_df(
+                                    """SELECT COUNT(*) n FROM tasks
+                                       WHERE title=? AND related_to=?
+                                         AND status!='Tamamlandı'""",
+                                    (next_action_text, customer_name_for_task)
+                                ).iloc[0]["n"])
+                                if not existing_task:
+                                    execute(
+                                        """INSERT INTO tasks
+                                        (title,related_to,owner,priority,due_date,status,notes)
+                                        VALUES (?,?,?,?,?,'Açık',?)""",
+                                        (
+                                            next_action_text,
+                                            customer_name_for_task,
+                                            opp_owner,
+                                            task_priority,
+                                            str(task_due),
+                                            f"Teklif #{quote_status} durumundan otomatik"
+                                        )
+                                    )
                     st.success("Teklif hesabı kaydedildi.")
                     st.rerun()
 
