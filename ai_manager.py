@@ -514,7 +514,7 @@ def render_ai_manager(db_path):
         if p.empty:
             st.success("Kritik öncelik görünmüyor.")
         else:
-            st.dataframe(p, use_container_width=True, hide_index=True)
+            st.dataframe(p, width="stretch", hide_index=True)
 
     with ask_tab:
         examples = [
@@ -543,7 +543,7 @@ def render_ai_manager(db_path):
                 if df.empty:
                     st.info("Bu sorgu için kayıt bulunamadı.")
                 else:
-                    st.dataframe(df, use_container_width=True, hide_index=True)
+                    st.dataframe(df, width="stretch", hide_index=True)
             else:
                 st.info(st.session_state["ai_manager_answer_title"])
 
@@ -552,17 +552,17 @@ def render_ai_manager(db_path):
         with r1:
             st.markdown("#### Satış riski")
             df = sales_risks(db_path)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, width="stretch", hide_index=True)
             st.markdown("#### Marj riski")
             df = margin_risks(db_path)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, width="stretch", hide_index=True)
         with r2:
             st.markdown("#### Tahsilat riski")
             df = cash_risks(db_path)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, width="stretch", hide_index=True)
             st.markdown("#### Kalite riski")
             df = quality_risks(db_path)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, width="stretch", hide_index=True)
 
         st.markdown("#### Veri kalitesi")
         quality_df = data_quality_issues(db_path)
@@ -573,4 +573,4 @@ def render_ai_manager(db_path):
                 "Bu tablo satış zekâsı, stok tahmini ve yönetici raporlarının doğruluğunu "
                 "doğrudan etkileyen eksik alanları gösterir."
             )
-            st.dataframe(quality_df, use_container_width=True, hide_index=True)
+            st.dataframe(quality_df, width="stretch", hide_index=True)
