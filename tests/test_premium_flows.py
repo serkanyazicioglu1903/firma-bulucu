@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import control_tower
-from ai_manager import answer_question, build_ceo_brief_text
+from ai_manager import answer_question, build_ceo_brief_text, data_quality_issues
 
 
 def setup_db(tmp_path):
@@ -412,3 +412,13 @@ def test_terminal_opportunity_clears_followup_and_auto_tasks(tmp_path):
     assert reopened["stage"] == "Temas"
     assert reopened["next_action"] == "Tekrar ara"
     assert reopened["lost_reason"] == ""
+
+
+def test_data_quality_diagnostics_flag_missing_profiles(tmp_path):
+    db = setup_db(tmp_path)
+    issues = data_quality_issues(db)
+    assert not issues.empty
+    assert "Müşteri üretim profili eksik" in issues["Eksik / Risk"].tolist()
+    title, df = answer_question(db, "Sistemde hangi kritik veriler eksik?")
+    assert "eksik" in title.lower()
+    assert df is not None and not df.empty
