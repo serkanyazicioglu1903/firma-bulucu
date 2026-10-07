@@ -2120,6 +2120,13 @@ def render_control_tower():
                                 phone, 1 if is_primary else 0, notes
                             )
                         )
+                        if is_primary:
+                            execute(
+                                """UPDATE customers
+                                   SET contact_name=?,contact_email=?,phone=?
+                                   WHERE id=?""",
+                                (name.strip(), email.strip(), phone.strip(), customer_id)
+                            )
                         st.success("Kontak eklendi.")
                         st.rerun()
 
