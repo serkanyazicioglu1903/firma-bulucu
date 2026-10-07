@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - as-control-tower-v1
+      - premium-qa-polish
       - step-9-ai-manager
 
 jobs:
@@ -25,6 +26,9 @@ jobs:
 
       - name: Compile Python files
         run: python -m py_compile app.py control_tower.py ai_manager.py
+
+      - name: Premium business flow tests
+        run: pytest -q tests/test_premium_flows.py
 
       - name: Streamlit startup smoke test
         run: |
