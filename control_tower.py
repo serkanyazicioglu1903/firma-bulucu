@@ -1834,6 +1834,93 @@ def save_quote(customer_id, opportunity_id, product_name, inputs, calc):
     )
 
 
+def sync_quote_to_opportunity(opportunity_id, quote_status,
+                              fallback_owner="", fallback_customer_name=""):
+    if not opportunity_id:
+        return False, "Fırsata bağlı değil."
+
+    opp_row = query_df(
+        """SELECT o.stage,o.owner,c.name AS customer_name
+           FROM opportunities o
+           LEFT JOIN customers c ON c.id=o.customer_id
+           WHERE o.id=?""",
+        (int(opportunity_id),)
+    )
+    if opp_row.empty:
+        return False, "Bağlı satış fırsatı bulunamadı."
+
+    current_stage = str(opp_row.iloc[0]["stage"] or "")
+    owner = str(opp_row.iloc[0]["owner"] or fallback_owner or "")
+    customer_name = str(
+        opp_row.iloc[0]["customer_name"] or fallback_customer_name or ""
+    )
+
+    target_stage = None
+    next_action = ""
+    task_priority = "Orta"
+    task_due = date.today() + timedelta(days=3)
+
+    if quote_status in {"Gönderildi", "Revizyon"}:
+        # A new/revised quote must never move an already more advanced deal
+        # backwards from Pazarlık/Sipariş/Kazanıldı.
+        if current_stage in {
+            "Lead","Temas","Numune","Deneme","Teklif","Problem / Koruma"
+        }:
+            target_stage = "Teklif"
+        next_action = "Teklif takibi"
+        task_priority = "Yüksek"
+    elif quote_status == "Kabul":
+        if current_stage != "Kazanıldı":
+            target_stage = "Sipariş"
+        next_action = "Sipariş teyidi / sevkiyat planı"
+        task_priority = "Kritik"
+        task_due = date.today() + timedelta(days=1)
+    elif quote_status == "Red":
+        next_action = "Teklif red nedenini ve revizyon kararını netleştir"
+        task_priority = "Yüksek"
+        task_due = date.today() + timedelta(days=1)
+    else:
+        # Taslak is only a profitability calculation. It must not create
+        # pipeline movement or follow-up noise.
+        return True, "Taslak teklif pipeline'ı değiştirmedi."
+
+    if target_stage:
+        update_opportunity_stage(
+            int(opportunity_id),
+            target_stage,
+            STAGE_PROBABILITY[target_stage],
+            next_action,
+            task_due,
+            owner,
+            date.today() + timedelta(days=30),
+            "",
+            f"Teklif durumu: {quote_status}"
+        )
+
+    if next_action:
+        existing_task = int(query_df(
+            """SELECT COUNT(*) n FROM tasks
+               WHERE title=? AND related_to=? AND status!='Tamamlandı'""",
+            (next_action, customer_name)
+        ).iloc[0]["n"])
+        if not existing_task:
+            execute(
+                """INSERT INTO tasks
+                (title,related_to,owner,priority,due_date,status,notes)
+                VALUES (?,?,?,?,?,'Açık',?)""",
+                (
+                    next_action,
+                    customer_name,
+                    owner,
+                    task_priority,
+                    str(task_due),
+                    f"Teklif #{quote_status} durumundan otomatik"
+                )
+            )
+
+    return True, f"Teklif durumu işlendi: {quote_status}"
+
+
 def render_control_tower():
     init_db()
     seed_once()
@@ -2960,75 +3047,12 @@ def render_control_tower():
                         customer_id, opp_id, product_name.strip(), inputs, calc
                     )
                     if opp_id:
-                        opp_row = query_df(
-                            """SELECT o.stage,o.owner,c.name AS customer_name
-                               FROM opportunities o
-                               LEFT JOIN customers c ON c.id=o.customer_id
-                               WHERE o.id=?""",
-                            (int(opp_id),)
+                        sync_quote_to_opportunity(
+                            int(opp_id),
+                            quote_status,
+                            customer_owner,
+                            customer_name,
                         )
-                        if not opp_row.empty:
-                            old_stage = str(opp_row.iloc[0]["stage"] or "")
-                            opp_owner = str(
-                                opp_row.iloc[0]["owner"] or customer_owner or ""
-                            )
-                            customer_name_for_task = str(
-                                opp_row.iloc[0]["customer_name"] or customer_name or ""
-                            )
-
-                            target_stage = None
-                            next_action_text = ""
-                            task_priority = "Orta"
-                            task_due = date.today() + timedelta(days=3)
-
-                            if quote_status in ["Gönderildi", "Revizyon"]:
-                                target_stage = "Teklif"
-                                next_action_text = "Teklif takibi"
-                                task_priority = "Yüksek"
-                            elif quote_status == "Kabul":
-                                target_stage = "Sipariş"
-                                next_action_text = "Sipariş teyidi / sevkiyat planı"
-                                task_priority = "Kritik"
-                                task_due = date.today() + timedelta(days=1)
-                            elif quote_status == "Red":
-                                next_action_text = "Teklif red nedenini ve revizyon kararını netleştir"
-                                task_priority = "Yüksek"
-                                task_due = date.today() + timedelta(days=1)
-
-                            if target_stage:
-                                update_opportunity_stage(
-                                    int(opp_id),
-                                    target_stage,
-                                    STAGE_PROBABILITY[target_stage],
-                                    next_action_text,
-                                    task_due,
-                                    opp_owner,
-                                    date.today() + timedelta(days=30),
-                                    "",
-                                    f"Teklif durumu: {quote_status}"
-                                )
-
-                            if next_action_text:
-                                existing_task = int(query_df(
-                                    """SELECT COUNT(*) n FROM tasks
-                                       WHERE title=? AND related_to=?
-                                         AND status!='Tamamlandı'""",
-                                    (next_action_text, customer_name_for_task)
-                                ).iloc[0]["n"])
-                                if not existing_task:
-                                    execute(
-                                        """INSERT INTO tasks
-                                        (title,related_to,owner,priority,due_date,status,notes)
-                                        VALUES (?,?,?,?,?,'Açık',?)""",
-                                        (
-                                            next_action_text,
-                                            customer_name_for_task,
-                                            opp_owner,
-                                            task_priority,
-                                            str(task_due),
-                                            f"Teklif #{quote_status} durumundan otomatik"
-                                        )
-                                    )
                     st.success("Teklif hesabı kaydedildi.")
                     st.rerun()
 
