@@ -387,12 +387,12 @@ def test_postgres_connection(url):
     if not url or not str(url).strip():
         return False, "missing"
     url = str(url).strip()
+    if "[YOUR-PASSWORD]" in url or "SUPABASE_BAGLANTI_ADRESIN" in url:
+        return False, "placeholder"
     try:
         parsed = urlsplit(url)
         if parsed.scheme not in ("postgresql", "postgres") or not parsed.hostname:
             return False, "invalid_url"
-        if "[YOUR-PASSWORD]" in url or "SUPABASE_BAGLANTI_ADRESIN" in url:
-            return False, "placeholder"
         import psycopg
         with psycopg.connect(url, connect_timeout=8, sslmode="require") as conn:
             with conn.cursor() as cur:
