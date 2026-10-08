@@ -38,6 +38,13 @@ jobs:
       - name: Security and role tests
         run: pytest -q tests/test_core.py tests/test_security_gate_ui.py tests/test_postgres_connection.py
 
+      - name: Offline PostgreSQL staging schema checks
+        run: |
+          python -m unittest discover -s tests -p 'test_postgres_staging_schema.py' -v
+          python scripts/build_pg_schema.py --output /tmp/control_tower_pg_staging.sql
+          test -s /tmp/control_tower_pg_staging.sql
+          grep -q 'CREATE SCHEMA IF NOT EXISTS "ct_staging"' /tmp/control_tower_pg_staging.sql
+
       - name: Control Tower preflight
         run: python preflight_check.py --demo
 
