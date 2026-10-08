@@ -1,6 +1,8 @@
 # AS Control Tower — PostgreSQL staging migration
 
-Status: OFFLINE SCHEMA GENERATOR ADDED. Do not enable PostgreSQL as the business database in production.\n\nRun `python scripts/build_pg_schema.py --output postgres_staging_schema.sql` to generate reviewable staging DDL locally; this command never connects to Supabase. Run `python -m unittest tests.test_postgres_staging_schema -v` for offline regression checks. The output is not automatically applied.
+Status: OFFLINE SCHEMA GENERATOR ADDED. Do not enable PostgreSQL as the business database in production.
+
+Run `python scripts/build_pg_schema.py --output postgres_staging_schema.sql` to generate reviewable staging DDL locally; this command never connects to Supabase. Run `python -m unittest tests.test_postgres_staging_schema -v` for offline regression checks. The output is not automatically applied.
 
 ## Current architecture (verified against main)
 - `control_tower.py` opens SQLite directly and defines ~24 operational tables.
