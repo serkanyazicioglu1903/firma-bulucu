@@ -36,7 +36,7 @@ jobs:
         run: python -m py_compile app.py control_tower.py ai_manager.py preflight_check.py security_admin.py management_reports.py role_portal.py migrate_sqlite_to_postgres.py
 
       - name: Security and role tests
-        run: pytest -q tests/test_core.py
+        run: pytest -q tests/test_core.py tests/test_security_gate_ui.py
 
       - name: Control Tower preflight
         run: python preflight_check.py --demo
