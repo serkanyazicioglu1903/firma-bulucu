@@ -25,8 +25,18 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Configure CI security secret
+        run: |
+          mkdir -p .streamlit
+          cat > .streamlit/secrets.toml <<'EOF'
+          CONTROL_TOWER_PASSWORD = "ci-test-password"
+          EOF
+
       - name: Compile Python files
-        run: python -m py_compile app.py control_tower.py ai_manager.py preflight_check.py
+        run: python -m py_compile app.py control_tower.py ai_manager.py preflight_check.py security_admin.py management_reports.py role_portal.py migrate_sqlite_to_postgres.py
+
+      - name: Security and role tests
+        run: pytest -q tests/test_core.py tests/test_security_gate_ui.py
 
       - name: Control Tower preflight
         run: python preflight_check.py --demo
@@ -49,6 +59,12 @@ jobs:
           from streamlit.testing.v1 import AppTest
 
           app = AppTest.from_file("app.py", default_timeout=60)
+          app.session_state["ct_user"] = {
+              "username": "ci-admin",
+              "display_name": "CI Admin",
+              "role": "ADMIN",
+          }
+          app.session_state["ct_session_id"] = "ci-session"
           app.run()
 
           if app.exception:

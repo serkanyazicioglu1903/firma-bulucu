@@ -16,6 +16,7 @@ except Exception:
     DDGS = None
 
 from control_tower import render_control_tower
+from security_admin import login_gate, logout_button
 
 st.set_page_config(
     page_title="AS İleri | Control Tower",
@@ -129,6 +130,12 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# Guard every tab, including supplier and acquisition searches. The previous
+# Control Tower-only gate did not protect the rest of the application.
+if not login_gate():
+    st.stop()
+logout_button()
 
 # =========================================================
 # ORTAK AYARLAR
