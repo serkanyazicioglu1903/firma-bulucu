@@ -17,7 +17,118 @@ except Exception:
 
 from control_tower import render_control_tower
 
-st.set_page_config(page_title="AS İleri Firma & Ürün Bulucu", page_icon="🏭", layout="wide")
+st.set_page_config(
+    page_title="AS İleri | Control Tower",
+    page_icon="🏭",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown(
+    """
+    <style>
+    /* AS İleri premium shell */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    div[data-testid="stToolbar"] {visibility: hidden; height: 0;}
+    div[data-testid="stDecoration"] {display: none;}
+
+    .block-container {
+        max-width: 1500px;
+        padding-top: 1.4rem;
+        padding-bottom: 3rem;
+    }
+
+    h1, h2, h3 {
+        letter-spacing: -0.025em;
+    }
+
+    div[data-testid="stMetric"] {
+        border: 1px solid rgba(128,128,128,.18);
+        border-radius: 16px;
+        padding: .85rem 1rem;
+        background: rgba(255,255,255,.025);
+    }
+
+    div[data-testid="stDataFrame"] {
+        border: 1px solid rgba(128,128,128,.14);
+        border-radius: 14px;
+        overflow: hidden;
+    }
+
+    .stButton > button,
+    .stDownloadButton > button,
+    div[data-testid="stFormSubmitButton"] > button {
+        border-radius: 12px;
+        min-height: 2.65rem;
+        font-weight: 600;
+    }
+
+    div[data-baseweb="select"] > div,
+    .stTextInput input,
+    .stNumberInput input,
+    .stTextArea textarea {
+        border-radius: 12px !important;
+    }
+
+    div[data-baseweb="tab-list"] {
+        gap: .25rem;
+    }
+
+    button[data-baseweb="tab"] {
+        border-radius: 10px 10px 0 0;
+        padding-left: .65rem !important;
+        padding-right: .65rem !important;
+    }
+
+    @media (max-width: 768px) {
+        .block-container {
+            padding-top: .7rem !important;
+            padding-left: .9rem !important;
+            padding-right: .9rem !important;
+        }
+
+        h1 {
+            font-size: 2.15rem !important;
+            line-height: 1.06 !important;
+        }
+
+        h2 {
+            font-size: 1.65rem !important;
+            line-height: 1.12 !important;
+        }
+
+        h3 {
+            font-size: 1.32rem !important;
+        }
+
+        div[data-testid="stMetricValue"] {
+            font-size: 2rem !important;
+        }
+
+        div[data-testid="stMetricLabel"] {
+            font-size: .88rem !important;
+        }
+
+        button[data-baseweb="tab"] {
+            font-size: .82rem !important;
+            min-width: max-content;
+        }
+
+        div[data-testid="stDataFrame"] {
+            font-size: .86rem;
+        }
+
+        .stButton > button,
+        .stDownloadButton > button,
+        div[data-testid="stFormSubmitButton"] > button {
+            width: 100%;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # =========================================================
 # ORTAK AYARLAR
@@ -516,14 +627,31 @@ def acq_build_queries(country, sector):
         q.append(f'"{s}" "business for sale" manufacturer {c["name"]}')
     return list(dict.fromkeys(q))
 
-def acq_candidate_ok(title, snippet, body, url, country):
+def acq_candidate_ok(title, snippet, body, url, country, sector=None):
     text = f"{title} {snippet} {body[:10000]}".lower()
     sale = any(x in text for x in ACQ_SALE_TERMS)
     maker = any(x in text for x in MANUFACTURING_TERMS)
     preferred = acq_preferred(url, country)
+    excluded = any(x in text for x in ACQ_EXCLUSION_TERMS)
+
+    sector_hits = 1
+    if sector:
+        sector_hits = sum(
+            1 for keyword in ACQ_SECTOR_KEYWORDS.get(sector, [])
+            if keyword in text
+        )
+
+    if excluded:
+        return False, sale, maker
+
     if preferred:
-        return sale or maker, sale, maker
-    return sale and maker, sale, maker
+        # Preferred M&A sources are trusted as listing sources, but the listing
+        # must still look like the requested industrial sector.
+        return bool(sale and sector_hits > 0), sale, maker
+
+    # Generic web results require both a sale/succession signal and a real
+    # manufacturing signal, plus a sector match.
+    return bool(sale and maker and sector_hits > 0), sale, maker
 
 def acq_score(title, snippet, body, url, country, sector):
     text = f"{title} {snippet} {body[:10000]}".lower()
@@ -586,12 +714,12 @@ def acq_scan(countries, sectors, per_query, deep_scan):
             snippet = clean(item.get("body", ""))
             body = email = phone = ""
 
-            cheap_ok, _, _ = acq_candidate_ok(title, snippet, "", url, country)
+            cheap_ok, _, _ = acq_candidate_ok(title, snippet, "", url, country, sector)
             if deep_scan and (cheap_ok or acq_preferred(url, country)):
                 body, email, phone = fetch_page(url)
                 time.sleep(0.03)
 
-            ok, sale, maker = acq_candidate_ok(title, snippet, body, url, country)
+            ok, sale, maker = acq_candidate_ok(title, snippet, body, url, country, sector)
             if not ok:
                 continue
 
@@ -720,7 +848,9 @@ def supplier_manufacturer_status(product, title, snippet, body, url):
     ))
     trader_only = any(x in text for x in ["trading company", "broker", "agent only", "reseller only"])
 
-    if product_hit and (maker_hit or strong_factory_hit) and not trader_only:
+    if product_hit and strong_factory_hit and not trader_only:
+        return "confirmed", 45
+    if product_hit and maker_hit and not trader_only:
         return "likely", 25
     return "unclear", 0
 
@@ -885,8 +1015,13 @@ def supplier_scan(product, country_label, objective, max_companies, deep_scan, t
 
         evidence = evidence_context(
             supporting_body,
-            ["we manufacture", "we produce", "our factory", "our factories", "our manufacturing", "our production facilities", "company manufactures", "group manufactures"],
-            width=260,
+            [
+                "we manufacture", "we produce", "our factory", "our factories",
+                "manufacturing facility", "manufacturing site", "production facility",
+                "production site", "our manufacturing", "our production facilities",
+                "company manufactures", "group manufactures", "factory", "plant"
+            ],
+            width=300,
         )
 
         rows.append({
@@ -897,8 +1032,25 @@ def supplier_scan(product, country_label, objective, max_companies, deep_scan, t
             "Website": f"https://{get_domain(url)}" if get_domain(url) else url,
             "Manufacturer Status": status_value,
             "Üretim Kanıtı": evidence,
-            "Üretim Kaynak URL": next((p[0] for p in pages if any(t in p[1].lower() for t in ["we manufacture", "we produce", "our factory", "our manufacturing", "company manufactures"])), url),
-            "Kayıt Türü": "Canlı arama adayı · şirket adı ve üretim teyidi bekleniyor",
+            "Üretim Kaynak URL": next(
+                (
+                    p[0] for p in pages
+                    if any(
+                        t in p[1].lower()
+                        for t in [
+                            "we manufacture", "we produce", "our factory",
+                            "manufacturing facility", "manufacturing site",
+                            "production facility", "production site", "plant"
+                        ]
+                    )
+                ),
+                url
+            ),
+            "Kayıt Türü": (
+                "Canlı arama · güçlü üretim kanıtı bulundu"
+                if status_value == "confirmed"
+                else "Canlı arama adayı · üretim teyidi güçlendirilmeli"
+            ),
             "İletişim URL": next((p[0] for p in pages if re.search(r"contact|enquiry", p[0], re.I)), ""),
             "Türkiye Varlığı": turkey_presence or ("Doğrulanamadı; temsilcisi olmadığı anlamına gelmez." if turkey_check else "Kontrol edilmedi"),
             "Satış / Export E-mail": sales_email,
@@ -954,7 +1106,7 @@ with main_tab1:
     with st.expander("Almanya kaynakları ve arama yöntemi"):
         st.dataframe(
             pd.DataFrame(ACQ_SOURCE_GUIDE),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={"URL": st.column_config.LinkColumn("Kaynak", display_text="Aç")},
         )
@@ -985,7 +1137,7 @@ with main_tab1:
     with col_b:
         acq_deep = st.checkbox("İlan sayfasını açıp finansal/iletişim bilgisi çıkar", value=True, key="acq_deep")
 
-    if st.button("SATILIK FİRMA TARA", type="primary", use_container_width=True):
+    if st.button("SATILIK FİRMA TARA", type="primary", width="stretch"):
         if not acq_countries or not acq_sectors:
             st.error("En az bir ülke ve sektör seçin.")
         else:
@@ -1014,7 +1166,7 @@ with main_tab1:
         st.metric("Gösterilen ciddi aday", len(view))
         st.dataframe(
             view,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "İlan / kaynak URL": st.column_config.LinkColumn("İlan", display_text="Aç"),
@@ -1026,7 +1178,7 @@ with main_tab1:
             view.to_csv(index=False).encode("utf-8-sig"),
             file_name="Satilik_Firma_Adaylari.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
 
         st.divider()
@@ -1085,7 +1237,7 @@ with main_tab1:
                 json.dumps(assessment, ensure_ascii=False, indent=2).encode("utf-8"),
                 file_name="Firma_On_Degerlendirme.json",
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
             )
 
             if selected["Ülke"] == "Almanya":
@@ -1097,7 +1249,7 @@ with main_tab1:
                     email_text.encode("utf-8"),
                     file_name="Almanca_Ilk_Temas.txt",
                     mime="text/plain",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
 # -------------------------
@@ -1142,7 +1294,7 @@ with main_tab2:
         key="sender_email",
     )
 
-    if st.button("ÜRÜN / ÜRETİCİ ARA", type="primary", use_container_width=True):
+    if st.button("ÜRÜN / ÜRETİCİ ARA", type="primary", width="stretch"):
         if not product.strip():
             st.error("Önce ürün veya hammadde adını yazın.")
         else:
@@ -1171,7 +1323,7 @@ with main_tab2:
         st.metric("Gösterilen üretici adayı", len(supplier_view))
         st.dataframe(
             supplier_view.drop(columns=["Taslak E-mail"], errors="ignore"),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Kaynak URL": st.column_config.LinkColumn("Kaynak", display_text="Aç"),
@@ -1189,7 +1341,7 @@ with main_tab2:
                 supplier_view.to_csv(index=False).encode("utf-8-sig"),
                 file_name=f"Uretici_Adaylari_{re.sub(r'[^A-Za-z0-9]+','_',product)[:40]}.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )
         with d2:
             st.download_button(
@@ -1197,7 +1349,7 @@ with main_tab2:
                 json.dumps(supplier_view.to_dict(orient="records"), ensure_ascii=False, indent=2).encode("utf-8"),
                 file_name=f"Uretici_Adaylari_{re.sub(r'[^A-Za-z0-9]+','_',product)[:40]}.json",
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
             )
 
         st.markdown("### ✉️ Firma bazında hazır teklif / temsilcilik e-postası")

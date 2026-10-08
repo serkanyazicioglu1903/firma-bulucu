@@ -5,8 +5,10 @@ on:
   push:
     branches:
       - main
-      - as-control-tower-v1
-      - step-9-ai-manager
+
+concurrency:
+  group: python-app-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   app-check:
@@ -24,10 +26,22 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile Python files
-        run: python -m py_compile app.py control_tower.py ai_manager.py
+        run: python -m py_compile app.py control_tower.py ai_manager.py preflight_check.py
 
-      - name: Business regression tests
+      - name: Control Tower preflight
+        run: python preflight_check.py --demo
+
+      - name: Legacy review regression tests
         run: python -m unittest discover -s tests -v
+
+      - name: Premium business flow tests
+        run: pytest -q tests/test_premium_flows.py
+
+      - name: Search quality tests
+        run: pytest -q tests/test_search_quality.py
+
+      - name: Recommendation UI regression test
+        run: pytest -q tests/test_streamlit_recommendation_ui.py
 
       - name: Streamlit startup smoke test
         run: |
@@ -39,10 +53,6 @@ jobs:
 
           if app.exception:
               raise AssertionError(f"Streamlit startup exception: {app.exception}")
-
-          app.selectbox(key="intel_product_select_id").select(3).run()
-          if app.exception:
-              raise AssertionError(f"Product selection failed: {app.exception}")
 
           print("Streamlit app loaded successfully.")
           print("Top-level tabs:", [t.label for t in app.tabs])

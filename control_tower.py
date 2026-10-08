@@ -504,6 +504,7 @@ def init_db():
         ensure_column(conn, "customers", "default_payment_days", "INTEGER DEFAULT 90")
         ensure_column(conn, "inventory_lots", "quality_status", "TEXT DEFAULT 'Released'")
         ensure_column(conn, "inventory_lots", "quality_case_id", "INTEGER")
+        ensure_column(conn, "inventory_lots", "quality_hold_kg", "REAL DEFAULT 0")
         conn.commit()
 
 
@@ -732,7 +733,11 @@ def recommendation_rows(customer_id=None, product_id=None):
         )
         for _, p in products.iterrows():
             def excluded(reason):
-                diagnostics.append({"Müşteri": c["name"], "Ürün": p["name"], "Neden gösterilmiyor?": reason})
+                diagnostics.append({
+                    "Müşteri": c["name"],
+                    "Ürün": p["name"],
+                    "Neden gösterilmiyor?": reason,
+                })
 
             if not customer_text.strip():
                 excluded("Müşteri sektör / üretim profili eksik")
@@ -779,6 +784,10 @@ def recommendation_rows(customer_id=None, product_id=None):
                 score += 5
 
             score = min(100, int(score))
+            recommendation_level = (
+                "Güçlü" if score >= 75
+                else ("Orta" if score >= 60 else "Keşif")
+            )
             rows.append({
                 "customer_id": int(c["id"]),
                 "product_id": int(p["id"]),
@@ -787,6 +796,7 @@ def recommendation_rows(customer_id=None, product_id=None):
                 "Kategori": p["category"],
                 "Tedarikçi": p["supplier"],
                 "Fit Score": score,
+                "Öneri Seviyesi": recommendation_level,
                 "Neden": "; ".join(reasons),
                 "Durum": known_status or "Yeni öneri",
                 "Sorumlu": c["owner"],
@@ -973,13 +983,26 @@ def money(v, currency="EUR"):
 
 def opportunity_totals(weighted=False, stages=None):
     expr = "value * probability / 100.0" if weighted else "value"
-    where = "stage != 'Kaybedildi'"
     params = ()
     if stages:
         where = "stage IN (" + ",".join("?" for _ in stages) + ")"
         params = tuple(stages)
-    rows = query_df(f"SELECT currency, SUM({expr}) AS total FROM opportunities WHERE {where} GROUP BY currency ORDER BY currency", params)
-    return " · ".join(money(r["total"], r["currency"] or "Belirtilmemiş") for _, r in rows.iterrows()) or "0"
+    elif weighted:
+        where = "stage NOT IN ('Kazanıldı','Kaybedildi')"
+    else:
+        where = "stage != 'Kaybedildi'"
+    rows = query_df(
+        f"""SELECT currency, SUM({expr}) AS total
+            FROM opportunities
+            WHERE {where}
+            GROUP BY currency
+            ORDER BY currency""",
+        params
+    )
+    return " · ".join(
+        money(r["total"], r["currency"] or "Belirtilmemiş")
+        for _, r in rows.iterrows()
+    ) or "0"
 
 
 def add_activity(customer_id, opportunity_id, activity_type, activity_date, summary,
@@ -1017,22 +1040,40 @@ def add_activity(customer_id, opportunity_id, activity_type, activity_date, summ
 
 def update_opportunity_stage(opportunity_id, new_stage, probability, next_action,
                              due_date, owner, expected_close_date, lost_reason, note):
-    row = query_df("SELECT stage FROM opportunities WHERE id=?", (int(opportunity_id),))
+    if new_stage not in STAGES:
+        return False, "Geçersiz satış aşaması."
+
+    row = query_df(
+        "SELECT stage FROM opportunities WHERE id=?", (int(opportunity_id),)
+    )
     if row.empty:
-        return
+        return False, "Fırsat bulunamadı."
+
     old_stage = str(row.iloc[0]["stage"])
+    terminal = new_stage in {"Kazanıldı", "Kaybedildi"}
+    effective_next_action = "" if terminal else next_action.strip()
+    effective_due_date = "" if terminal else str(due_date)
+    effective_lost_reason = lost_reason.strip() if new_stage == "Kaybedildi" else ""
+    probability = max(0, min(100, int(probability)))
+
     execute(
         """UPDATE opportunities
            SET stage=?, probability=?, next_action=?, due_date=?, owner=?,
                expected_close_date=?, lost_reason=?, updated_at=?
            WHERE id=?""",
         (
-            new_stage, int(probability), next_action.strip(), str(due_date), owner.strip(),
+            new_stage,
+            probability,
+            effective_next_action,
+            effective_due_date,
+            owner.strip(),
             str(expected_close_date) if expected_close_date else "",
-            lost_reason.strip(), datetime.now().isoformat(timespec="seconds"),
+            effective_lost_reason,
+            datetime.now().isoformat(timespec="seconds"),
             int(opportunity_id),
         )
     )
+
     if old_stage != new_stage:
         execute(
             """INSERT INTO opportunity_stage_history
@@ -1040,6 +1081,22 @@ def update_opportunity_stage(opportunity_id, new_stage, probability, next_action
             VALUES (?,?,?,?,?)""",
             (int(opportunity_id), old_stage, new_stage, owner.strip(), note.strip())
         )
+
+    if terminal:
+        # Only close tasks that were automatically created from this exact
+        # opportunity. Customer-level unrelated tasks stay untouched.
+        execute(
+            """UPDATE tasks
+               SET status='Tamamlandı'
+               WHERE status!='Tamamlandı'
+                 AND notes IN (?,?)""",
+            (
+                f"Satış pipeline fırsatı #{int(opportunity_id)}",
+                f"Cross-sell fırsatı #{int(opportunity_id)}",
+            )
+        )
+
+    return True, "Fırsat güncellendi."
 
 
 def seed_warehouses():
@@ -1072,12 +1129,19 @@ def stock_snapshot():
 
     lots = query_df("""
         SELECT product_id,
-               SUM(CASE WHEN COALESCE(quality_status,'Released')='Released'
-                        THEN quantity_available_kg ELSE 0 END) AS available_kg,
-               SUM(CASE WHEN COALESCE(quality_status,'Released')='Released'
-                        THEN quantity_reserved_kg ELSE 0 END) AS reserved_kg,
-               SUM(CASE WHEN COALESCE(quality_status,'Released')!='Released'
-                        THEN quantity_available_kg ELSE 0 END) AS quality_hold_kg
+               SUM(quantity_available_kg) AS available_kg,
+               SUM(quantity_reserved_kg) AS reserved_kg,
+               SUM(
+                   CASE
+                     WHEN COALESCE(quality_status,'Released')!='Released'
+                     THEN CASE
+                            WHEN COALESCE(quality_hold_kg,0)>0
+                            THEN MIN(quality_hold_kg,quantity_available_kg)
+                            ELSE quantity_available_kg
+                          END
+                     ELSE 0
+                   END
+               ) AS quality_hold_kg
         FROM inventory_lots
         GROUP BY product_id
     """)
@@ -1092,12 +1156,28 @@ def stock_snapshot():
         GROUP BY po.product_id
     """)
     po_open = query_df("""
-        SELECT product_id,
-               SUM(CASE
-                     WHEN status NOT IN ('Tamamlandı','İptal')
-                     THEN quantity_kg ELSE 0 END) AS open_po_kg
-        FROM purchase_orders
-        GROUP BY product_id
+        SELECT po.product_id,
+               SUM(
+                   CASE
+                     WHEN po.status NOT IN ('Tamamlandı','İptal')
+                     THEN MAX(
+                         po.quantity_kg - COALESCE(r.received_kg,0),
+                         0
+                     )
+                     ELSE 0
+                   END
+               ) AS open_po_kg
+        FROM purchase_orders po
+        LEFT JOIN (
+            SELECT purchase_order_id,
+                   SUM(
+                       CASE WHEN received_to_stock=1 AND status!='İptal'
+                            THEN quantity_kg ELSE 0 END
+                   ) AS received_kg
+            FROM shipments
+            GROUP BY purchase_order_id
+        ) r ON r.purchase_order_id=po.id
+        GROUP BY po.product_id
     """)
     policies = query_df("""
         SELECT product_id,monthly_usage_kg,safety_stock_days,lead_time_days,reorder_review_days
@@ -1121,14 +1201,19 @@ def stock_snapshot():
             df[col] = default
         df[col] = df[col].fillna(default)
 
-    df["net_available_kg"] = (df["available_kg"] - df["reserved_kg"]).clip(lower=0)
+    df["net_available_kg"] = (
+        df["available_kg"] - df["reserved_kg"] - df["quality_hold_kg"]
+    ).clip(lower=0)
     df["daily_usage_kg"] = df["monthly_usage_kg"] / 30.0
     df["stock_days"] = df.apply(
         lambda r: round(r["net_available_kg"] / r["daily_usage_kg"], 1)
         if r["daily_usage_kg"] > 0 else None,
         axis=1
     )
-    df["projected_stock_kg"] = df["net_available_kg"] + df["inbound_kg"]
+    # Projected stock must include the outstanding balance of confirmed/open POs,
+    # even when a shipment record has not been created yet. inbound_kg remains a
+    # visibility metric for quantities already assigned to a shipment.
+    df["projected_stock_kg"] = df["net_available_kg"] + df["open_po_kg"]
     df["reorder_point_kg"] = df["daily_usage_kg"] * (
         df["lead_time_days"] + df["safety_stock_days"] + df["reorder_review_days"]
     )
@@ -1151,78 +1236,101 @@ def stock_snapshot():
 
 
 def receive_shipment_to_stock(shipment_id):
-    shipment = query_df("""
-        SELECT s.*, po.product_id, po.product_name, po.unit_price, po.currency,
-               po.destination_warehouse_id AS po_warehouse_id
-        FROM shipments s
-        JOIN purchase_orders po ON po.id=s.purchase_order_id
-        WHERE s.id=?
-    """, (int(shipment_id),))
-    if shipment.empty:
-        return False, "Sevkiyat bulunamadı."
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT s.*, po.product_id, po.product_name, po.unit_price, po.currency,
+                      po.quantity_kg AS ordered_kg, po.status AS po_status,
+                      po.destination_warehouse_id AS po_warehouse_id
+               FROM shipments s
+               JOIN purchase_orders po ON po.id=s.purchase_order_id
+               WHERE s.id=?""",
+            (int(shipment_id),)
+        ).fetchone()
 
-    row = shipment.iloc[0]
-    if int(row["received_to_stock"] or 0) == 1:
-        return False, "Bu sevkiyat daha önce stoğa alınmış."
+        if row is None:
+            return False, "Sevkiyat bulunamadı."
+        if int(row["received_to_stock"] or 0) == 1:
+            return False, "Bu sevkiyat daha önce stoğa alınmış."
+        if str(row["status"] or "") == "İptal":
+            return False, "İptal edilmiş sevkiyat stoğa alınamaz."
+        if str(row["po_status"] or "") == "İptal":
+            return False, "İptal edilmiş satın alma siparişine stok girişi yapılamaz."
 
-    if row["status"] == "İptal":
-        return False, "İptal edilmiş sevkiyat stoğa alınamaz."
-    if float(row["quantity_kg"] or 0) <= 0:
-        return False, "Stok giriş miktarı sıfırdan büyük olmalı."
+        shipment_qty = float(row["quantity_kg"] or 0)
+        if shipment_qty <= 0:
+            return False, "Sevkiyat miktarı sıfırdan büyük olmalı."
 
-    warehouse_id = row["destination_warehouse_id"] or row["po_warehouse_id"]
-    if not warehouse_id:
-        return False, "Depo seçilmeden stok girişi yapılamaz."
+        warehouse_id = row["destination_warehouse_id"] or row["po_warehouse_id"]
+        if not warehouse_id:
+            return False, "Depo seçilmeden stok girişi yapılamaz."
 
-    received_date = row["delivery_date"] or str(date.today())
-    execute(
-        """INSERT INTO inventory_lots
-        (product_id,product_name,warehouse_id,lot_number,expiry_date,
-         quantity_received_kg,quantity_available_kg,quantity_reserved_kg,
-         unit_cost,currency,purchase_order_id,shipment_id,received_date,notes)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            int(row["product_id"]) if row["product_id"] else None,
-            row["product_name"],
-            int(warehouse_id),
-            row["lot_number"] or "",
-            row["expiry_date"] or "",
-            float(row["quantity_kg"] or 0),
-            float(row["quantity_kg"] or 0),
-            0.0,
-            float(row["unit_price"] or 0),
-            row["currency"] or "EUR",
-            int(row["purchase_order_id"]),
-            int(shipment_id),
-            received_date,
-            "Sevkiyattan otomatik stok girişi"
-        )
-    )
-    execute(
-        """UPDATE shipments
-           SET received_to_stock=1,
-               status='Teslim Edildi',
-               delivery_date=CASE WHEN delivery_date='' THEN ? ELSE delivery_date END
-           WHERE id=?""",
-        (str(date.today()), int(shipment_id))
-    )
+        received_before = conn.execute(
+            """SELECT COALESCE(SUM(quantity_kg),0)
+               FROM shipments
+               WHERE purchase_order_id=?
+                 AND received_to_stock=1
+                 AND status!='İptal'""",
+            (int(row["purchase_order_id"]),)
+        ).fetchone()[0]
+        received_before = float(received_before or 0)
+        ordered_kg = float(row["ordered_kg"] or 0)
+        if received_before + shipment_qty > ordered_kg + 0.001:
+            return False, (
+                f"Bu giriş PO miktarını aşar. Sipariş: {ordered_kg:,.2f} kg · "
+                f"Daha önce alınan: {received_before:,.2f} kg · "
+                f"Bu sevkiyat: {shipment_qty:,.2f} kg"
+            )
 
-    po_summary = query_df("""
-        SELECT po.quantity_kg AS ordered_kg,
-               COALESCE(SUM(CASE WHEN s.received_to_stock=1 THEN s.quantity_kg ELSE 0 END),0) AS received_kg
-        FROM purchase_orders po
-        LEFT JOIN shipments s ON s.purchase_order_id=po.id AND s.status!='İptal'
-        WHERE po.id=?
-        GROUP BY po.id,po.quantity_kg
-    """, (int(row["purchase_order_id"]),))
-    if not po_summary.empty:
-        ordered_kg = float(po_summary.iloc[0]["ordered_kg"] or 0)
-        received_kg = float(po_summary.iloc[0]["received_kg"] or 0)
-        po_status = "Tamamlandı" if received_kg + 0.001 >= ordered_kg else "Kısmi Sevk"
-        execute(
-            "UPDATE purchase_orders SET status=? WHERE id=?",
-            (po_status, int(row["purchase_order_id"]))
-        )
+        received_date = row["delivery_date"] or str(date.today())
+
+        try:
+            conn.execute(
+                """INSERT INTO inventory_lots
+                (product_id,product_name,warehouse_id,lot_number,expiry_date,
+                 quantity_received_kg,quantity_available_kg,quantity_reserved_kg,
+                 unit_cost,currency,purchase_order_id,shipment_id,received_date,notes)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    int(row["product_id"]) if row["product_id"] else None,
+                    row["product_name"],
+                    int(warehouse_id),
+                    row["lot_number"] or "",
+                    row["expiry_date"] or "",
+                    shipment_qty,
+                    shipment_qty,
+                    0.0,
+                    float(row["unit_price"] or 0),
+                    row["currency"] or "EUR",
+                    int(row["purchase_order_id"]),
+                    int(shipment_id),
+                    received_date,
+                    "Sevkiyattan otomatik stok girişi"
+                )
+            )
+            conn.execute(
+                """UPDATE shipments
+                   SET received_to_stock=1,
+                       status='Teslim Edildi',
+                       delivery_date=CASE WHEN delivery_date='' THEN ? ELSE delivery_date END
+                   WHERE id=?""",
+                (str(date.today()), int(shipment_id))
+            )
+
+            received_after = received_before + shipment_qty
+            po_status = (
+                "Tamamlandı"
+                if received_after + 0.001 >= ordered_kg
+                else "Kısmi Sevk"
+            )
+            conn.execute(
+                "UPDATE purchase_orders SET status=? WHERE id=?",
+                (po_status, int(row["purchase_order_id"]))
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
     return True, "Sevkiyat stoğa alındı."
 
 
@@ -1275,7 +1383,8 @@ def outstanding_payables():
     df["outstanding_base"] = df["outstanding"] * df["fx_to_base"].fillna(1)
     df["risk"] = df.apply(
         lambda r:
-            "GECİKMİŞ" if r["days_overdue"] > 0 else "AÇIK",
+            "KRİTİK" if r["days_overdue"] >= 30
+            else ("GECİKMİŞ" if r["days_overdue"] > 0 else "AÇIK"),
         axis=1
     )
     return df
@@ -1347,103 +1456,127 @@ def cash_forecast(base_currency="EUR", horizons=(30,60,90)):
 
 def record_receivable_payment(receivable_id, amount, transaction_date,
                               account_id, reference, notes):
-    row = query_df("SELECT * FROM receivables WHERE id=?", (int(receivable_id),))
-    if row.empty:
-        return False, "Alacak kaydı bulunamadı."
-    r = row.iloc[0]
-    if r["status"] == "İptal":
-        return False, "İptal edilmiş alacak için işlem yapılamaz."
-    outstanding = max(float(r["amount"] or 0)-float(r["paid_amount"] or 0),0)
     amount = float(amount or 0)
     if amount <= 0:
         return False, "Tahsilat tutarı sıfırdan büyük olmalı."
-    if amount > outstanding + 0.0001:
-        return False, "Tahsilat kalan alacaktan büyük olamaz."
 
-    if account_id:
-        account = query_df("SELECT * FROM cash_accounts WHERE id=? AND active=1", (int(account_id),))
-        if account.empty:
-            return False, "Aktif banka / kasa hesabı bulunamadı."
-        if str(account.iloc[0]["currency"]) != str(r["currency"]):
-            return False, "Hesap ve belge para birimi aynı olmalı. Döviz dönüşümünü ayrı kaydedin."
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM receivables WHERE id=?", (int(receivable_id),)
+        ).fetchone()
+        if row is None:
+            return False, "Alacak kaydı bulunamadı."
 
-    new_paid = float(r["paid_amount"] or 0)+amount
-    status = "Kapandı" if new_paid + 0.0001 >= float(r["amount"] or 0) else "Kısmi"
-    execute(
-        "UPDATE receivables SET paid_amount=?,status=? WHERE id=?",
-        (new_paid,status,int(receivable_id))
-    )
-    execute(
-        """INSERT INTO finance_transactions
-        (transaction_type,receivable_id,transaction_date,amount,currency,
-         fx_to_base,base_currency,account_id,reference,notes)
-        VALUES ('Tahsilat',?,?,?,?,?,?,?,?,?)""",
-        (
-            int(receivable_id),str(transaction_date),amount,r["currency"],
-            float(r["fx_to_base"] or 1),r["base_currency"] or "EUR",
-            int(account_id) if account_id else None,reference,notes
-        )
-    )
-    if account_id:
-        account = query_df("SELECT * FROM cash_accounts WHERE id=?", (int(account_id),))
-        if not account.empty:
-            a=account.iloc[0]
-            if str(a["currency"]) == str(r["currency"]):
-                execute(
+        outstanding = max(float(row["amount"] or 0)-float(row["paid_amount"] or 0),0)
+        if amount > outstanding + 0.0001:
+            return False, "Tahsilat kalan alacaktan büyük olamaz."
+
+        account = None
+        if account_id:
+            account = conn.execute(
+                "SELECT * FROM cash_accounts WHERE id=? AND active=1",
+                (int(account_id),)
+            ).fetchone()
+            if account is None:
+                return False, "Seçilen banka/kasa hesabı bulunamadı veya pasif."
+            if str(account["currency"]) != str(row["currency"]):
+                return False, (
+                    f"Hesap para birimi ({account['currency']}) ile tahsilat para birimi "
+                    f"({row['currency']}) aynı olmalı."
+                )
+
+        new_paid = float(row["paid_amount"] or 0)+amount
+        status = "Kapandı" if new_paid + 0.0001 >= float(row["amount"] or 0) else "Kısmi"
+
+        try:
+            conn.execute(
+                "UPDATE receivables SET paid_amount=?,status=? WHERE id=?",
+                (new_paid,status,int(receivable_id))
+            )
+            conn.execute(
+                """INSERT INTO finance_transactions
+                (transaction_type,receivable_id,transaction_date,amount,currency,
+                 fx_to_base,base_currency,account_id,reference,notes)
+                VALUES ('Tahsilat',?,?,?,?,?,?,?,?,?)""",
+                (
+                    int(receivable_id),str(transaction_date),amount,row["currency"],
+                    float(row["fx_to_base"] or 1),row["base_currency"] or "EUR",
+                    int(account_id) if account_id else None,reference,notes
+                )
+            )
+            if account is not None:
+                conn.execute(
                     "UPDATE cash_accounts SET balance=balance+?,updated_at=? WHERE id=?",
                     (amount,datetime.now().isoformat(timespec="seconds"),int(account_id))
                 )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
     return True, "Tahsilat kaydedildi."
 
 
 def record_payable_payment(payable_id, amount, transaction_date,
                            account_id, reference, notes):
-    row = query_df("SELECT * FROM payables WHERE id=?", (int(payable_id),))
-    if row.empty:
-        return False, "Borç kaydı bulunamadı."
-    p = row.iloc[0]
-    if p["status"] == "İptal":
-        return False, "İptal edilmiş borç için işlem yapılamaz."
-    outstanding = max(float(p["amount"] or 0)-float(p["paid_amount"] or 0),0)
     amount = float(amount or 0)
     if amount <= 0:
         return False, "Ödeme tutarı sıfırdan büyük olmalı."
-    if amount > outstanding + 0.0001:
-        return False, "Ödeme kalan borçtan büyük olamaz."
 
-    if account_id:
-        account = query_df("SELECT * FROM cash_accounts WHERE id=? AND active=1", (int(account_id),))
-        if account.empty:
-            return False, "Aktif banka / kasa hesabı bulunamadı."
-        if str(account.iloc[0]["currency"]) != str(p["currency"]):
-            return False, "Hesap ve belge para birimi aynı olmalı. Döviz dönüşümünü ayrı kaydedin."
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM payables WHERE id=?", (int(payable_id),)
+        ).fetchone()
+        if row is None:
+            return False, "Borç kaydı bulunamadı."
 
-    new_paid = float(p["paid_amount"] or 0)+amount
-    status = "Kapandı" if new_paid + 0.0001 >= float(p["amount"] or 0) else "Kısmi"
-    execute(
-        "UPDATE payables SET paid_amount=?,status=? WHERE id=?",
-        (new_paid,status,int(payable_id))
-    )
-    execute(
-        """INSERT INTO finance_transactions
-        (transaction_type,payable_id,transaction_date,amount,currency,
-         fx_to_base,base_currency,account_id,reference,notes)
-        VALUES ('Ödeme',?,?,?,?,?,?,?,?,?)""",
-        (
-            int(payable_id),str(transaction_date),amount,p["currency"],
-            float(p["fx_to_base"] or 1),p["base_currency"] or "EUR",
-            int(account_id) if account_id else None,reference,notes
-        )
-    )
-    if account_id:
-        account = query_df("SELECT * FROM cash_accounts WHERE id=?", (int(account_id),))
-        if not account.empty:
-            a=account.iloc[0]
-            if str(a["currency"]) == str(p["currency"]):
-                execute(
+        outstanding = max(float(row["amount"] or 0)-float(row["paid_amount"] or 0),0)
+        if amount > outstanding + 0.0001:
+            return False, "Ödeme kalan borçtan büyük olamaz."
+
+        account = None
+        if account_id:
+            account = conn.execute(
+                "SELECT * FROM cash_accounts WHERE id=? AND active=1",
+                (int(account_id),)
+            ).fetchone()
+            if account is None:
+                return False, "Seçilen banka/kasa hesabı bulunamadı veya pasif."
+            if str(account["currency"]) != str(row["currency"]):
+                return False, (
+                    f"Hesap para birimi ({account['currency']}) ile ödeme para birimi "
+                    f"({row['currency']}) aynı olmalı."
+                )
+
+        new_paid = float(row["paid_amount"] or 0)+amount
+        status = "Kapandı" if new_paid + 0.0001 >= float(row["amount"] or 0) else "Kısmi"
+
+        try:
+            conn.execute(
+                "UPDATE payables SET paid_amount=?,status=? WHERE id=?",
+                (new_paid,status,int(payable_id))
+            )
+            conn.execute(
+                """INSERT INTO finance_transactions
+                (transaction_type,payable_id,transaction_date,amount,currency,
+                 fx_to_base,base_currency,account_id,reference,notes)
+                VALUES ('Ödeme',?,?,?,?,?,?,?,?,?)""",
+                (
+                    int(payable_id),str(transaction_date),amount,row["currency"],
+                    float(row["fx_to_base"] or 1),row["base_currency"] or "EUR",
+                    int(account_id) if account_id else None,reference,notes
+                )
+            )
+            if account is not None:
+                conn.execute(
                     "UPDATE cash_accounts SET balance=balance-?,updated_at=? WHERE id=?",
                     (amount,datetime.now().isoformat(timespec="seconds"),int(account_id))
                 )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
     return True, "Ödeme kaydedildi."
 
 
@@ -1536,11 +1669,30 @@ def regulatory_alerts():
     return df
 
 
-def set_lot_quality_status(lot_id,status,case_id=None):
-    execute(
-        "UPDATE inventory_lots SET quality_status=?,quality_case_id=? WHERE id=?",
-        (status,int(case_id) if case_id else None,int(lot_id))
+def set_lot_quality_status(lot_id, status, case_id=None, hold_kg=None):
+    lot = query_df(
+        "SELECT quantity_available_kg FROM inventory_lots WHERE id=?",
+        (int(lot_id),)
     )
+    if lot.empty:
+        return False, "Stok lotu bulunamadı."
+
+    available = max(float(lot.iloc[0]["quantity_available_kg"] or 0), 0.0)
+    if status == "Released":
+        effective_hold = 0.0
+        effective_case = None
+    else:
+        requested = available if hold_kg is None or float(hold_kg or 0) <= 0 else float(hold_kg)
+        effective_hold = min(max(requested, 0.0), available)
+        effective_case = int(case_id) if case_id else None
+
+    execute(
+        """UPDATE inventory_lots
+           SET quality_status=?,quality_case_id=?,quality_hold_kg=?
+           WHERE id=?""",
+        (status,effective_case,effective_hold,int(lot_id))
+    )
+    return True, "Lot kalite durumu güncellendi."
 
 
 def calculate_quote(
@@ -1716,6 +1868,93 @@ def save_quote(customer_id, opportunity_id, product_name, inputs, calc):
     )
 
 
+def sync_quote_to_opportunity(opportunity_id, quote_status,
+                              fallback_owner="", fallback_customer_name=""):
+    if not opportunity_id:
+        return False, "Fırsata bağlı değil."
+
+    opp_row = query_df(
+        """SELECT o.stage,o.owner,c.name AS customer_name
+           FROM opportunities o
+           LEFT JOIN customers c ON c.id=o.customer_id
+           WHERE o.id=?""",
+        (int(opportunity_id),)
+    )
+    if opp_row.empty:
+        return False, "Bağlı satış fırsatı bulunamadı."
+
+    current_stage = str(opp_row.iloc[0]["stage"] or "")
+    owner = str(opp_row.iloc[0]["owner"] or fallback_owner or "")
+    customer_name = str(
+        opp_row.iloc[0]["customer_name"] or fallback_customer_name or ""
+    )
+
+    target_stage = None
+    next_action = ""
+    task_priority = "Orta"
+    task_due = date.today() + timedelta(days=3)
+
+    if quote_status in {"Gönderildi", "Revizyon"}:
+        # A new/revised quote must never move an already more advanced deal
+        # backwards from Pazarlık/Sipariş/Kazanıldı.
+        if current_stage in {
+            "Lead","Temas","Numune","Deneme","Teklif","Problem / Koruma"
+        }:
+            target_stage = "Teklif"
+        next_action = "Teklif takibi"
+        task_priority = "Yüksek"
+    elif quote_status == "Kabul":
+        if current_stage != "Kazanıldı":
+            target_stage = "Sipariş"
+        next_action = "Sipariş teyidi / sevkiyat planı"
+        task_priority = "Kritik"
+        task_due = date.today() + timedelta(days=1)
+    elif quote_status == "Red":
+        next_action = "Teklif red nedenini ve revizyon kararını netleştir"
+        task_priority = "Yüksek"
+        task_due = date.today() + timedelta(days=1)
+    else:
+        # Taslak is only a profitability calculation. It must not create
+        # pipeline movement or follow-up noise.
+        return True, "Taslak teklif pipeline'ı değiştirmedi."
+
+    if target_stage:
+        update_opportunity_stage(
+            int(opportunity_id),
+            target_stage,
+            STAGE_PROBABILITY[target_stage],
+            next_action,
+            task_due,
+            owner,
+            date.today() + timedelta(days=30),
+            "",
+            f"Teklif durumu: {quote_status}"
+        )
+
+    if next_action:
+        existing_task = int(query_df(
+            """SELECT COUNT(*) n FROM tasks
+               WHERE title=? AND related_to=? AND status!='Tamamlandı'""",
+            (next_action, customer_name)
+        ).iloc[0]["n"])
+        if not existing_task:
+            execute(
+                """INSERT INTO tasks
+                (title,related_to,owner,priority,due_date,status,notes)
+                VALUES (?,?,?,?,?,'Açık',?)""",
+                (
+                    next_action,
+                    customer_name,
+                    owner,
+                    task_priority,
+                    str(task_due),
+                    f"Teklif #{quote_status} durumundan otomatik"
+                )
+            )
+
+    return True, f"Teklif durumu işlendi: {quote_status}"
+
+
 def render_control_tower():
     init_db()
     seed_once()
@@ -1753,7 +1992,11 @@ def render_control_tower():
     )
 
     st.subheader("🧭 AS CONTROL TOWER")
-    st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi · İyileştirme 07.10.2026")
+    st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
+    st.caption(
+        "🟠 Pilot veri modu: Bu sürüm SQLite kullanıyor. Kalıcı şirket verisi için "
+        "PostgreSQL/Supabase geçişi tamamlanmadan kritik production verisi girmeyin."
+    )
 
     dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, quality_tab, pipeline_tab, followup_tab, tasks_tab, ai_tab, ceo_tab = st.tabs(
         [
@@ -1778,7 +2021,7 @@ def render_control_tower():
             "SELECT COUNT(*) n FROM opportunities WHERE stage NOT IN ('Kazanıldı','Kaybedildi')"
         ).iloc[0]["n"])
         opp = query_df(
-            "SELECT value, probability FROM opportunities WHERE stage NOT IN ('Kaybedildi')"
+            "SELECT value, probability FROM opportunities WHERE stage NOT IN ('Kazanıldı','Kaybedildi')"
         )
         weighted = float((opp["value"] * opp["probability"] / 100).sum()) if not opp.empty else 0
         won = float(query_df(
@@ -1847,7 +2090,7 @@ def render_control_tower():
             order = {stage: i for i, stage in enumerate(STAGES)}
             funnel["_order"] = funnel["aşama"].map(order).fillna(999)
             funnel = funnel.sort_values("_order").drop(columns=["_order"])
-        st.dataframe(funnel, use_container_width=True, hide_index=True)
+        st.dataframe(funnel, width="stretch", hide_index=True)
 
         st.markdown("#### Bugün / gecikmiş satış takipleri")
         due = query_df("""
@@ -1861,7 +2104,7 @@ def render_control_tower():
             ORDER BY o.due_date ASC
             LIMIT 12
         """, (str(date.today()),))
-        st.dataframe(due, use_container_width=True, hide_index=True)
+        st.dataframe(due, width="stretch", hide_index=True)
 
         st.markdown("#### En güçlü yeni cross-sell önerileri")
         dashboard_recs = recommendation_rows()
@@ -1872,7 +2115,7 @@ def render_control_tower():
                 dashboard_recs[
                     ["Müşteri", "Ürün", "Fit Score", "Neden", "Sorumlu"]
                 ].head(8),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "Fit Score": st.column_config.ProgressColumn(
@@ -1884,11 +2127,11 @@ def render_control_tower():
         st.markdown("#### Arama sonuçlarını sisteme al")
         i1, i2 = st.columns(2)
         with i1:
-            if st.button("Son Üretici Bulucu sonuçlarını CRM'e aktar", use_container_width=True):
+            if st.button("Son Üretici Bulucu sonuçlarını CRM'e aktar", width="stretch"):
                 n = import_supplier_results()
                 st.success(f"{n} yeni kayıt CRM'e aktarıldı.")
         with i2:
-            if st.button("Son Satılık Firma sonuçlarını CRM'e aktar", use_container_width=True):
+            if st.button("Son Satılık Firma sonuçlarını CRM'e aktar", width="stretch"):
                 n = import_acquisition_results()
                 st.success(f"{n} yeni kayıt CRM'e aktarıldı.")
 
@@ -1935,7 +2178,7 @@ def render_control_tower():
                     WHERE customer_id=?
                     ORDER BY created_at DESC
                 """, (customer_id,))
-                st.dataframe(customer_opps, use_container_width=True, hide_index=True)
+                st.dataframe(customer_opps, width="stretch", hide_index=True)
 
             with ctab2:
                 activities = query_df("""
@@ -1948,7 +2191,7 @@ def render_control_tower():
                     WHERE a.customer_id=?
                     ORDER BY a.activity_date DESC, a.id DESC
                 """, (customer_id,))
-                st.dataframe(activities, use_container_width=True, hide_index=True)
+                st.dataframe(activities, width="stretch", hide_index=True)
 
                 st.markdown("##### Yeni görüşme / temas kaydı")
                 opp_choices = query_df(
@@ -2008,7 +2251,7 @@ def render_control_tower():
                     WHERE customer_id=?
                     ORDER BY is_primary DESC, name
                 """, (customer_id,))
-                st.dataframe(contacts, use_container_width=True, hide_index=True)
+                st.dataframe(contacts, width="stretch", hide_index=True)
 
                 with st.form("ct_contact_form", clear_on_submit=True):
                     name = st.text_input("Ad soyad *")
@@ -2032,6 +2275,13 @@ def render_control_tower():
                                 phone, 1 if is_primary else 0, notes
                             )
                         )
+                        if is_primary:
+                            execute(
+                                """UPDATE customers
+                                   SET contact_name=?,contact_email=?,phone=?
+                                   WHERE id=?""",
+                                (name.strip(), email.strip(), phone.strip(), customer_id)
+                            )
                         st.success("Kontak eklendi.")
                         st.rerun()
 
@@ -2072,6 +2322,20 @@ def render_control_tower():
                         value=int(customer["default_payment_days"] or 90),
                         step=5
                     )
+                    st.markdown("##### Ana iletişim")
+                    i1, i2 = st.columns(2)
+                    contact_name = i1.text_input(
+                        "Ana kontak",
+                        value=customer["contact_name"] or ""
+                    )
+                    contact_email = i2.text_input(
+                        "Genel / ana e-posta",
+                        value=customer["contact_email"] or ""
+                    )
+                    phone = st.text_input(
+                        "Telefon",
+                        value=customer["phone"] or ""
+                    )
                     profile = st.text_area(
                         "Üretim / ürün profili",
                         value=customer["product_profile"] or "",
@@ -2089,11 +2353,13 @@ def render_control_tower():
                         execute(
                             """UPDATE customers
                                SET country=?,sector=?,status=?,owner=?,
-                                   annual_potential=?,currency=?,product_profile=?,
+                                   annual_potential=?,currency=?,contact_name=?,
+                                   contact_email=?,phone=?,product_profile=?,
                                    priority_tier=?,credit_limit=?,default_payment_days=?,notes=?
                                WHERE id=?""",
                             (
                                 country, sector, status, owner, potential, currency,
+                                contact_name, contact_email.strip(), phone.strip(),
                                 profile, priority_tier, float(credit_limit),
                                 int(default_payment_days), notes, customer_id
                             )
@@ -2118,25 +2384,32 @@ def render_control_tower():
                 phone = st.text_input("Telefon", key="ct_customer_phone")
                 notes = st.text_area("Not", key="ct_customer_notes")
                 if st.form_submit_button("Kaydet", type="primary") and name.strip():
-                    execute(
-                        """INSERT INTO customers
-                        (name,country,sector,status,owner,contact_name,contact_email,phone,source,notes)
-                        VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                        (name.strip(), country, sector, status, owner, contact, email, phone, "Manuel", notes)
-                    )
-                    new_id = int(query_df(
-                        "SELECT id FROM customers WHERE name=? ORDER BY id DESC LIMIT 1",
+                    duplicate_customer = int(query_df(
+                        "SELECT COUNT(*) n FROM customers WHERE lower(trim(name))=lower(trim(?))",
                         (name.strip(),)
-                    ).iloc[0]["id"])
-                    if contact.strip():
+                    ).iloc[0]["n"])
+                    if duplicate_customer:
+                        st.error("Bu firma CRM'de zaten var. Mevcut kartı açıp güncelleyin.")
+                    else:
                         execute(
-                            """INSERT INTO contacts
-                            (customer_id,name,email,phone,is_primary)
-                            VALUES (?,?,?,?,1)""",
-                            (new_id, contact.strip(), email, phone)
+                            """INSERT INTO customers
+                            (name,country,sector,status,owner,contact_name,contact_email,phone,source,notes)
+                            VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                            (name.strip(), country, sector, status, owner, contact, email, phone, "Manuel", notes)
                         )
-                    st.success("CRM kaydı eklendi.")
-                    st.rerun()
+                        new_id = int(query_df(
+                            "SELECT id FROM customers WHERE lower(name)=lower(?) ORDER BY id DESC LIMIT 1",
+                            (name.strip(),)
+                        ).iloc[0]["id"])
+                        if contact.strip():
+                            execute(
+                                """INSERT INTO contacts
+                                (customer_id,name,email,phone,is_primary)
+                                VALUES (?,?,?,?,1)""",
+                                (new_id, contact.strip(), email, phone)
+                            )
+                        st.success("CRM kaydı eklendi.")
+                        st.rerun()
 
     with intelligence_tab:
         st.markdown("### 🧠 Ürün × Müşteri Satış Zekâsı")
@@ -2201,10 +2474,10 @@ def render_control_tower():
                 else:
                     st.dataframe(
                         recs[
-                            ["Ürün","Kategori","Fit Score","Neden","Durum",
+                            ["Ürün","Kategori","Fit Score","Öneri Seviyesi","Neden","Durum",
                              "Önerilen Fırsat Değeri","Para","Uygulama"]
                         ],
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                         column_config={
                             "Fit Score": st.column_config.ProgressColumn(
@@ -2213,6 +2486,12 @@ def render_control_tower():
                         },
                     )
                     product_options = [int(x) for x in recs["product_id"].tolist()]
+                    product_labels = {
+                        int(row["product_id"]): (
+                            f"{row['Ürün']} · skor {int(row['Fit Score'])}"
+                        )
+                        for _, row in recs.iterrows()
+                    }
                     product_key = f"intel_customer_rec_{cid}"
                     if (
                         product_key in st.session_state
@@ -2222,9 +2501,9 @@ def render_control_tower():
                     selected_product_id = st.selectbox(
                         "Fırsata çevrilecek öneri",
                         product_options,
-                        format_func=lambda product_id, recs=recs: (
-                            f"{recs.loc[recs['product_id']==product_id,'Ürün'].iloc[0]} · "
-                            f"skor {recs.loc[recs['product_id']==product_id,'Fit Score'].iloc[0]}"
+                        format_func=lambda product_id: product_labels.get(
+                            int(product_id),
+                            f"Ürün #{product_id}"
                         ),
                         key=product_key
                     )
@@ -2245,7 +2524,7 @@ def render_control_tower():
                     if st.button(
                         "Bu öneriyi satış fırsatına çevir",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                         key="intel_customer_create"
                     ):
                         ok, msg = create_opportunity_from_recommendation(
@@ -2295,7 +2574,7 @@ def render_control_tower():
                     )
                     if st.button(
                         "Ürün durumunu kaydet",
-                        use_container_width=True,
+                        width="stretch",
                         key="intel_status_save"
                     ):
                         save_customer_product_status(
@@ -2309,30 +2588,39 @@ def render_control_tower():
             if products_intel.empty:
                 st.info("Ürün kataloğu boş.")
             else:
-                pid = st.selectbox(
+                product_name = st.selectbox(
                     "Ürün seç",
-                    [int(x) for x in products_intel["id"]],
-                    format_func=lambda product_id: products_intel.loc[
-                        products_intel["id"] == product_id, "name"
-                    ].iloc[0],
-                    key="intel_product_select_id"
+                    products_intel["name"].tolist(),
+                    key="intel_product_select"
+                )
+                pid = int(
+                    products_intel.loc[
+                        products_intel["name"] == product_name, "id"
+                    ].iloc[0]
                 )
                 product_row = products_intel[
                     products_intel["id"] == pid
                 ].iloc[0]
                 st.caption(
                     f"{product_row['category']} · {product_row['applications']} · "
-                    f"Hedef sektörler: {str(product_row['target_sectors']).replace(';', ' · ')}"
+                    f"Hedef sektörler: {product_row['target_sectors']}"
                 )
                 recs = recommendation_rows(product_id=pid)
                 m1, m2, m3 = st.columns(3)
-                m1.metric("İncelenen müşteri", recs.attrs["customer_count"])
+                m1.metric("İncelenen müşteri", recs.attrs.get("customer_count", 0))
                 m2.metric("Yeni öneri", len(recs))
-                m3.metric("Öneri dışında", len(recs.attrs["diagnostics"]))
-                st.caption("Kayıtlı müşteri profillerinden öneri üretilir; bu ekran internetten yeni firma aramaz. Skor, doğrulanmış talep veya satın alma olasılığı değildir.")
-                if recs.attrs["diagnostics"]:
+                m3.metric("Öneri dışında", len(recs.attrs.get("diagnostics", [])))
+                st.caption(
+                    "Kayıtlı müşteri profillerinden öneri üretilir; bu ekran internetten "
+                    "yeni firma aramaz. Skor doğrulanmış talep veya satın alma olasılığı değildir."
+                )
+                if recs.attrs.get("diagnostics"):
                     with st.expander("Diğer müşteriler neden listelenmiyor?"):
-                        st.dataframe(pd.DataFrame(recs.attrs["diagnostics"]), hide_index=True, use_container_width=True)
+                        st.dataframe(
+                            pd.DataFrame(recs.attrs["diagnostics"]),
+                            hide_index=True,
+                            width="stretch"
+                        )
                 if recs.empty:
                     active_for_product = query_df(
                         """SELECT c.name AS müşteri,o.stage AS aşama,o.value AS değer,
@@ -2342,13 +2630,13 @@ def render_control_tower():
                            WHERE lower(o.product)=lower(?)
                              AND o.stage!='Kaybedildi'
                            ORDER BY o.value DESC""",
-                        (product_row["name"],)
+                        (product_name,)
                     )
                     excluded_status = query_df(
                         """SELECT c.name AS müşteri,s.status AS durum,
                                   s.current_supplier AS mevcut_tedarikçi,
                                   s.annual_volume_tons AS yıllık_hacim_ton,
-                                  s.notes AS notlar
+                                  s.notes AS not
                            FROM customer_product_status s
                            JOIN customers c ON c.id=s.customer_id
                            WHERE s.product_id=?
@@ -2362,7 +2650,7 @@ def render_control_tower():
                         )
                         st.dataframe(
                             active_for_product,
-                            use_container_width=True,
+                            width="stretch",
                             hide_index=True
                         )
                     if not excluded_status.empty:
@@ -2371,7 +2659,7 @@ def render_control_tower():
                         )
                         st.dataframe(
                             excluded_status,
-                            use_container_width=True,
+                            width="stretch",
                             hide_index=True
                         )
                     if active_for_product.empty and excluded_status.empty:
@@ -2382,10 +2670,10 @@ def render_control_tower():
                 else:
                     st.dataframe(
                         recs[
-                            ["Müşteri","Fit Score","Neden","Durum","Sorumlu",
+                            ["Müşteri","Fit Score","Öneri Seviyesi","Neden","Durum","Sorumlu",
                              "Önerilen Fırsat Değeri","Para"]
                         ],
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                         column_config={
                             "Fit Score": st.column_config.ProgressColumn(
@@ -2394,6 +2682,12 @@ def render_control_tower():
                         },
                     )
                     customer_options = [int(x) for x in recs["customer_id"].tolist()]
+                    customer_labels = {
+                        int(row["customer_id"]): (
+                            f"{row['Müşteri']} · skor {int(row['Fit Score'])}"
+                        )
+                        for _, row in recs.iterrows()
+                    }
                     customer_key = f"intel_product_rec_{pid}"
                     if (
                         customer_key in st.session_state
@@ -2403,18 +2697,13 @@ def render_control_tower():
                     selected_customer_id = st.selectbox(
                         "Fırsata çevrilecek müşteri",
                         customer_options,
-                        format_func=lambda customer_id, recs=recs: (
-                            f"{recs.loc[recs['customer_id']==customer_id,'Müşteri'].iloc[0]} · "
-                            f"skor {recs.loc[recs['customer_id']==customer_id,'Fit Score'].iloc[0]}"
+                        format_func=lambda customer_id: customer_labels.get(
+                            int(customer_id),
+                            f"Müşteri #{customer_id}"
                         ),
                         key=customer_key
                     )
                     selected = recs[recs["customer_id"] == int(selected_customer_id)].iloc[0]
-                    st.markdown(f"**{selected['Müşteri']} · {selected['Ürün']}**")
-                    st.write(f"Uygulama: {selected['Uygulama']}")
-                    st.write(f"Öneri gerekçesi: {selected['Neden']}")
-                    st.info("Sonraki adım: Kullanım alanı ve teknik şartnameyi doğrulayın; uygun bulunursa numune ve deneme planı oluşturun.")
-                    st.download_button("Müşteri önerilerini indir", recs.to_csv(index=False).encode("utf-8-sig"), file_name="Musteri_Onerileri.csv", mime="text/csv", key=f"recs_export_{pid}")
                     y1, y2 = st.columns(2)
                     value = y1.number_input(
                         "Fırsat değeri",
@@ -2431,7 +2720,7 @@ def render_control_tower():
                     if st.button(
                         "Bu müşteride fırsat oluştur",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                         key="intel_product_create"
                     ):
                         ok, msg = create_opportunity_from_recommendation(
@@ -2460,10 +2749,10 @@ def render_control_tower():
                 st.metric("Yeni öneri", len(view))
                 st.dataframe(
                     view[
-                        ["Müşteri","Ürün","Kategori","Fit Score","Neden",
+                        ["Müşteri","Ürün","Kategori","Fit Score","Öneri Seviyesi","Neden",
                          "Durum","Sorumlu","Önerilen Fırsat Değeri","Para"]
                     ],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     column_config={
                         "Fit Score": st.column_config.ProgressColumn(
@@ -2475,7 +2764,7 @@ def render_control_tower():
         with intel4:
             st.dataframe(
                 products_intel,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
             with st.expander("Yeni ürün ekle"):
@@ -2762,7 +3051,7 @@ def render_control_tower():
                     {"Kalem":"Depo / handling / iç nakliye","Tutar":handling,"Para":base_currency},
                     {"Kalem":"Finansman","Tutar":calc["finance_cost_total"],"Para":base_currency},
                 ])
-                st.dataframe(breakdown, use_container_width=True, hide_index=True)
+                st.dataframe(breakdown, width="stretch", hide_index=True)
 
             st.markdown("##### Teklifi kaydet")
             e1, e2, e3 = st.columns(3)
@@ -2784,7 +3073,7 @@ def render_control_tower():
             if st.button(
                 "Hesabı / teklifi kaydet",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 key="quote_save"
             ):
                 if not product_name.strip():
@@ -2819,43 +3108,12 @@ def render_control_tower():
                         customer_id, opp_id, product_name.strip(), inputs, calc
                     )
                     if opp_id:
-                        old_stage_row = query_df(
-                            "SELECT stage, owner FROM opportunities WHERE id=?",
-                            (int(opp_id),)
+                        sync_quote_to_opportunity(
+                            int(opp_id),
+                            quote_status,
+                            customer_owner,
+                            customer_name,
                         )
-                        old_stage = (
-                            str(old_stage_row.iloc[0]["stage"])
-                            if not old_stage_row.empty else ""
-                        )
-                        opp_owner = (
-                            str(old_stage_row.iloc[0]["owner"] or "")
-                            if not old_stage_row.empty else customer_owner
-                        )
-                        execute(
-                            """UPDATE opportunities
-                               SET stage='Teklif', probability=?,
-                                   next_action='Teklif takibi',
-                                   due_date=?, updated_at=?
-                               WHERE id=?""",
-                            (
-                                STAGE_PROBABILITY["Teklif"],
-                                str(date.today() + timedelta(days=3)),
-                                datetime.now().isoformat(timespec="seconds"),
-                                int(opp_id),
-                            )
-                        )
-                        if old_stage != "Teklif":
-                            execute(
-                                """INSERT INTO opportunity_stage_history
-                                (opportunity_id,old_stage,new_stage,owner,note)
-                                VALUES (?,?,'Teklif',?,?)""",
-                                (
-                                    int(opp_id),
-                                    old_stage,
-                                    opp_owner,
-                                    "Teklif & Kârlılık motorundan teklif kaydedildi"
-                                )
-                            )
                     st.success("Teklif hesabı kaydedildi.")
                     st.rerun()
 
@@ -2879,7 +3137,7 @@ def render_control_tower():
             """)
             st.dataframe(
                 quote_history,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
 
@@ -2908,7 +3166,7 @@ def render_control_tower():
                 LEFT JOIN warehouses w ON w.id=po.destination_warehouse_id
                 ORDER BY po.id DESC
             """)
-            st.dataframe(po_df,use_container_width=True,hide_index=True)
+            st.dataframe(po_df,width="stretch",hide_index=True)
 
             with st.expander("Yeni PO oluştur", expanded=po_df.empty):
                 products_po=query_df("""
@@ -2971,14 +3229,30 @@ def render_control_tower():
                 LEFT JOIN warehouses w ON w.id=s.destination_warehouse_id
                 ORDER BY s.id DESC
             """)
-            st.dataframe(shipments_df,use_container_width=True,hide_index=True)
+            st.dataframe(shipments_df,width="stretch",hide_index=True)
 
             with st.expander("Yeni sevkiyat oluştur"):
                 pos=query_df("""
-                    SELECT id,po_number,supplier,product_name,quantity_kg,destination_warehouse_id
-                    FROM purchase_orders
-                    WHERE status NOT IN ('Tamamlandı','İptal')
-                    ORDER BY id DESC
+                    SELECT po.id,po.po_number,po.supplier,po.product_name,po.quantity_kg,
+                           po.destination_warehouse_id,
+                           COALESCE(SUM(
+                               CASE WHEN COALESCE(s.status,'')!='İptal'
+                                    THEN s.quantity_kg ELSE 0 END
+                           ),0) AS assigned_shipment_kg,
+                           MAX(
+                               po.quantity_kg - COALESCE(SUM(
+                                   CASE WHEN COALESCE(s.status,'')!='İptal'
+                                        THEN s.quantity_kg ELSE 0 END
+                               ),0),
+                               0
+                           ) AS remaining_to_ship_kg
+                    FROM purchase_orders po
+                    LEFT JOIN shipments s ON s.purchase_order_id=po.id
+                    WHERE po.status NOT IN ('Tamamlandı','İptal')
+                    GROUP BY po.id,po.po_number,po.supplier,po.product_name,
+                             po.quantity_kg,po.destination_warehouse_id
+                    HAVING remaining_to_ship_kg > 0.001
+                    ORDER BY po.id DESC
                 """)
                 warehouses_s=query_df("SELECT id,name FROM warehouses WHERE active=1 ORDER BY name")
                 if pos.empty:
@@ -2988,8 +3262,22 @@ def render_control_tower():
                         po_label=st.selectbox("PO",pos.apply(lambda r:f"{r['po_number']} · {r['supplier']} · {r['product_name']}",axis=1).tolist())
                         po_index=pos.apply(lambda r:f"{r['po_number']} · {r['supplier']} · {r['product_name']}",axis=1).tolist().index(po_label)
                         po_row=pos.iloc[po_index]
+                        st.caption(
+                            f"PO toplamı: {float(po_row['quantity_kg']):,.0f} kg · "
+                            f"Shipment'a bağlanan: {float(po_row['assigned_shipment_kg']):,.0f} kg · "
+                            f"Kalan: {float(po_row['remaining_to_ship_kg']):,.0f} kg"
+                        )
                         y1,y2,y3=st.columns(3)
-                        ship_qty=y1.number_input("Sevk miktarı (kg)",min_value=1.0,value=float(po_row["quantity_kg"]),step=1000.0)
+                        ship_qty=y1.number_input(
+                            "Sevk miktarı (kg)",
+                            min_value=0.001,
+                            max_value=float(po_row["remaining_to_ship_kg"]),
+                            value=float(po_row["remaining_to_ship_kg"]),
+                            step=max(
+                                0.001,
+                                min(1000.0,float(po_row["remaining_to_ship_kg"]))
+                            )
+                        )
                         transport=y2.selectbox("Taşıma",["Tır","Konteyner","Hava","Parsiyel","Diğer"])
                         shipment_ref=y3.text_input("Sevkiyat / booking ref")
                         y4,y5=st.columns(2)
@@ -3038,7 +3326,7 @@ def render_control_tower():
                 customs_date=u2.date_input("Gümrük tarihi",value=date.today(),key="proc_customs_date")
                 delivery_date=u3.date_input("Teslim tarihi",value=date.today(),key="proc_delivery_date")
                 c1,c2=st.columns(2)
-                if c1.button("Sevkiyatı güncelle",use_container_width=True):
+                if c1.button("Sevkiyatı güncelle",width="stretch"):
                     execute("""UPDATE shipments SET status=?,
                                customs_date=CASE WHEN ?='Gümrükte' THEN ? ELSE customs_date END,
                                delivery_date=CASE WHEN ?='Teslim Edildi' THEN ? ELSE delivery_date END
@@ -3046,7 +3334,7 @@ def render_control_tower():
                             (new_status,new_status,str(customs_date),new_status,str(delivery_date),int(ship_id)))
                     st.success("Sevkiyat güncellendi.")
                     st.rerun()
-                if c2.button("Teslim al ve stoğa giriş yap",type="primary",use_container_width=True):
+                if c2.button("Teslim al ve stoğa giriş yap",type="primary",width="stretch"):
                     ok,msg=receive_shipment_to_stock(ship_id)
                     (st.success if ok else st.warning)(msg)
                     if ok:
@@ -3059,6 +3347,7 @@ def render_control_tower():
                        il.quantity_received_kg/1000.0 AS giriş_ton,
                        il.quantity_available_kg/1000.0 AS mevcut_ton,
                        il.quantity_reserved_kg/1000.0 AS rezerve_ton,
+                       COALESCE(il.quality_hold_kg,0)/1000.0 AS kalite_hold_ton,
                        il.quality_status AS kalite_durumu,
                        il.unit_cost AS birim_maliyet,il.currency AS para,
                        il.received_date AS giriş_tarihi,po.po_number AS PO
@@ -3067,7 +3356,7 @@ def render_control_tower():
                 LEFT JOIN purchase_orders po ON po.id=il.purchase_order_id
                 ORDER BY il.received_date DESC,il.id DESC
             """)
-            st.dataframe(stock_by_lot,use_container_width=True,hide_index=True)
+            st.dataframe(stock_by_lot,width="stretch",hide_index=True)
 
             summary=stock_snapshot()
             st.markdown("##### Ürün bazında stok özeti")
@@ -3085,7 +3374,7 @@ def render_control_tower():
                     stock_view[["ürün","tedarikçi","net_stok_kg","hold_kg","yolda_kg","aylık_tüketim_kg",
                                 "stok_gün","safety_stock_days","lead_time_days",
                                 "önerilen_sipariş_kg","durum"]],
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
 
             st.markdown("##### Manuel stok düzeltmesi / rezervasyon")
@@ -3098,13 +3387,33 @@ def render_control_tower():
                 )
                 lotrow=query_df("SELECT * FROM inventory_lots WHERE id=?",(int(lot_id),)).iloc[0]
                 l1,l2=st.columns(2)
-                available=l1.number_input("Mevcut miktar (kg)",min_value=0.0,value=float(lotrow["quantity_available_kg"] or 0),step=100.0)
-                reserved=l2.number_input("Rezerve miktar (kg)",min_value=0.0,value=float(lotrow["quantity_reserved_kg"] or 0),step=100.0)
+                available=l1.number_input(
+                    "Mevcut miktar (kg)",
+                    min_value=0.0,
+                    value=float(lotrow["quantity_available_kg"] or 0),
+                    step=100.0
+                )
+                reserved_default=min(
+                    float(lotrow["quantity_reserved_kg"] or 0),
+                    float(available)
+                )
+                reserved=l2.number_input(
+                    "Rezerve miktar (kg)",
+                    min_value=0.0,
+                    max_value=float(available),
+                    value=reserved_default,
+                    step=min(100.0,float(available)) if float(available)>0 else 1.0
+                )
                 if st.button("Stok miktarını güncelle"):
-                    execute("UPDATE inventory_lots SET quantity_available_kg=?,quantity_reserved_kg=? WHERE id=?",
-                            (float(available),float(reserved),int(lot_id)))
-                    st.success("Stok güncellendi.")
-                    st.rerun()
+                    if float(reserved) > float(available) + 0.0001:
+                        st.error("Rezerve miktar mevcut stoktan büyük olamaz.")
+                    else:
+                        execute(
+                            "UPDATE inventory_lots SET quantity_available_kg=?,quantity_reserved_kg=? WHERE id=?",
+                            (float(available),float(reserved),int(lot_id))
+                        )
+                        st.success("Stok güncellendi.")
+                        st.rerun()
 
         with reorder_tab:
             summary=stock_snapshot()
@@ -3127,7 +3436,7 @@ def render_control_tower():
                         view[["ürün","tedarikçi","net_stok_kg","hold_kg","yolda_kg","aylık_tüketim_kg",
                               "stok_gün","lead_time_days","safety_stock_days",
                               "sipariş_noktası_kg","önerilen_sipariş_kg","durum"]],
-                        use_container_width=True,hide_index=True
+                        width="stretch",hide_index=True
                     )
 
                 st.markdown("##### Ürün stok politikası")
@@ -3169,7 +3478,7 @@ def render_control_tower():
                        CASE WHEN active=1 THEN 'Aktif' ELSE 'Pasif' END AS durum,notes AS notlar
                 FROM warehouses ORDER BY name
             """)
-            st.dataframe(wh_df,use_container_width=True,hide_index=True)
+            st.dataframe(wh_df,width="stretch",hide_index=True)
             with st.form("proc_new_warehouse",clear_on_submit=True):
                 w1,w2=st.columns(2)
                 wname=w1.text_input("Depo adı *")
@@ -3233,7 +3542,7 @@ def render_control_tower():
 
             forecast=cash_forecast(base_currency_fin,(7,30,60,90))
             st.markdown("#### Nakit projeksiyonu")
-            st.dataframe(forecast,use_container_width=True,hide_index=True)
+            st.dataframe(forecast,width="stretch",hide_index=True)
 
             if not forecast.empty:
                 ninety=float(forecast.loc[forecast["Gün"]==90,"Tahmini Nakit"].iloc[0])
@@ -3262,7 +3571,7 @@ def render_control_tower():
                             ["id","customer","invoice_no","due_date","outstanding",
                              "currency","days_overdue","outstanding_base","risk"]
                         ],
-                        use_container_width=True,hide_index=True
+                        width="stretch",hide_index=True
                     )
 
         with ar_tab:
@@ -3279,7 +3588,7 @@ def render_control_tower():
                 st.dataframe(
                     ar_view[["id","müşteri","fatura","vade","kalan","currency",
                              "gecikme_gün","yönetim_tutarı","base_currency","risk"]],
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
 
             st.markdown("#### Müşteri kredi riski")
@@ -3313,7 +3622,7 @@ def render_control_tower():
                 )
                 st.dataframe(
                     credit_risk,
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True
                 )
 
@@ -3363,14 +3672,25 @@ def render_control_tower():
                             if amount<=0:
                                 st.error("Tutar sıfırdan büyük olmalı.")
                             else:
-                                execute("""INSERT INTO receivables
-                                    (customer_id,invoice_no,invoice_date,due_date,amount,paid_amount,
-                                     currency,fx_to_base,base_currency,status,opportunity_id,notes)
-                                    VALUES (?,?,?,?,?,0,?,?,?,'Açık',?,?)""",
-                                    (customer_id,invoice_no,str(invoice_date),str(due_date),float(amount),
-                                     currency,float(fx),base_currency,omap[opp_label],notes))
-                                st.success("Alacak kaydedildi.")
-                                st.rerun()
+                                duplicate_invoice = 0
+                                if invoice_no.strip():
+                                    duplicate_invoice = int(query_df(
+                                        """SELECT COUNT(*) n FROM receivables
+                                           WHERE customer_id=? AND lower(trim(invoice_no))=lower(trim(?))
+                                             AND status!='İptal'""",
+                                        (customer_id, invoice_no.strip())
+                                    ).iloc[0]["n"])
+                                if duplicate_invoice:
+                                    st.error("Bu müşteri için aynı fatura numarası zaten kayıtlı.")
+                                else:
+                                    execute("""INSERT INTO receivables
+                                        (customer_id,invoice_no,invoice_date,due_date,amount,paid_amount,
+                                         currency,fx_to_base,base_currency,status,opportunity_id,notes)
+                                        VALUES (?,?,?,?,?,0,?,?,?,'Açık',?,?)""",
+                                        (customer_id,invoice_no.strip(),str(invoice_date),str(due_date),float(amount),
+                                         currency,float(fx),base_currency,omap[opp_label],notes))
+                                    st.success("Alacak kaydedildi.")
+                                    st.rerun()
 
             with ar2:
                 rec_now=outstanding_receivables()
@@ -3397,7 +3717,7 @@ def render_control_tower():
                     account_label=st.selectbox("Girdiği banka/kasa",list(account_map.keys()),key="fin_ar_account")
                     reference=st.text_input("Referans",key="fin_ar_reference")
                     notes=st.text_input("Tahsilat notu",key="fin_ar_collect_notes")
-                    if st.button("Tahsilatı kaydet",type="primary",use_container_width=True,key="fin_ar_collect_btn"):
+                    if st.button("Tahsilatı kaydet",type="primary",width="stretch",key="fin_ar_collect_btn"):
                         ok,msg=record_receivable_payment(
                             rid,collection,collection_date,account_map[account_label],reference,notes
                         )
@@ -3418,7 +3738,7 @@ def render_control_tower():
                 st.dataframe(
                     ap_view[["id","tedarikçi","fatura","vade","kalan","currency",
                              "gecikme_gün","yönetim_tutarı","base_currency","risk"]],
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
 
             ap1,ap2=st.tabs(["Yeni Borç","Ödeme Gir"])
@@ -3456,14 +3776,26 @@ def render_control_tower():
                         if not supplier.strip() or amount<=0:
                             st.error("Tedarikçi ve pozitif tutar gerekli.")
                         else:
-                            execute("""INSERT INTO payables
-                                (supplier,purchase_order_id,invoice_no,invoice_date,due_date,
-                                 amount,paid_amount,currency,fx_to_base,base_currency,status,notes)
-                                VALUES (?,?,?,?,?,?,0,?,?,?,'Açık',?)""",
-                                (supplier.strip(),pmap[po_label],invoice_no,str(invoice_date),str(due_date),
-                                 float(amount),currency,float(fx),base_currency,notes))
-                            st.success("Borç kaydedildi.")
-                            st.rerun()
+                            duplicate_invoice = 0
+                            if invoice_no.strip():
+                                duplicate_invoice = int(query_df(
+                                    """SELECT COUNT(*) n FROM payables
+                                       WHERE lower(trim(supplier))=lower(trim(?))
+                                         AND lower(trim(invoice_no))=lower(trim(?))
+                                         AND status!='İptal'""",
+                                    (supplier.strip(), invoice_no.strip())
+                                ).iloc[0]["n"])
+                            if duplicate_invoice:
+                                st.error("Bu tedarikçi için aynı fatura numarası zaten kayıtlı.")
+                            else:
+                                execute("""INSERT INTO payables
+                                    (supplier,purchase_order_id,invoice_no,invoice_date,due_date,
+                                     amount,paid_amount,currency,fx_to_base,base_currency,status,notes)
+                                    VALUES (?,?,?,?,?,?,0,?,?,?,'Açık',?)""",
+                                    (supplier.strip(),pmap[po_label],invoice_no.strip(),str(invoice_date),str(due_date),
+                                     float(amount),currency,float(fx),base_currency,notes))
+                                st.success("Borç kaydedildi.")
+                                st.rerun()
 
             with ap2:
                 pay_now=outstanding_payables()
@@ -3490,7 +3822,7 @@ def render_control_tower():
                     account_label=st.selectbox("Çıktığı banka/kasa",list(account_map.keys()),key="fin_ap_account")
                     reference=st.text_input("Referans",key="fin_ap_reference")
                     notes=st.text_input("Ödeme notu",key="fin_ap_pay_notes")
-                    if st.button("Ödemeyi kaydet",type="primary",use_container_width=True,key="fin_ap_pay_btn"):
+                    if st.button("Ödemeyi kaydet",type="primary",width="stretch",key="fin_ap_pay_btn"):
                         ok,msg=record_payable_payment(
                             pid,payment,payment_date,account_map[account_label],reference,notes
                         )
@@ -3505,7 +3837,7 @@ def render_control_tower():
                        balance*fx_to_base AS yönetim_değeri,notes AS notlar
                 FROM cash_accounts WHERE active=1 ORDER BY name
             """)
-            st.dataframe(account_df,use_container_width=True,hide_index=True)
+            st.dataframe(account_df,width="stretch",hide_index=True)
             with st.form("fin_new_account",clear_on_submit=True):
                 a1,a2=st.columns(2)
                 name=a1.text_input("Hesap adı *",placeholder="EUR Banka / GBP Banka / Kasa")
@@ -3554,7 +3886,7 @@ def render_control_tower():
                 FROM cash_events
                 ORDER BY event_date ASC,id ASC
             """)
-            st.dataframe(events,use_container_width=True,hide_index=True)
+            st.dataframe(events,width="stretch",hide_index=True)
             with st.form("fin_new_event",clear_on_submit=True):
                 e1,e2,e3=st.columns(3)
                 event_date=e1.date_input("Tarih",value=date.today()+timedelta(days=7))
@@ -3590,7 +3922,7 @@ def render_control_tower():
                 LEFT JOIN cash_accounts ca ON ca.id=ft.account_id
                 ORDER BY ft.transaction_date DESC,ft.id DESC
             """)
-            st.dataframe(tx,use_container_width=True,hide_index=True)
+            st.dataframe(tx,width="stretch",hide_index=True)
 
     with quality_tab:
         st.markdown("### 🧪 Kalite + Claim + Sertifika + Regülasyon Merkezi")
@@ -3619,7 +3951,7 @@ def render_control_tower():
                     qview[["id","dosya_no","açılış","müşteri","tedarikçi","ürün","tip",
                            "önem","durum","etkilenen_kg","tahmini_zarar","currency",
                            "müşteri_claim","sorumlu","hedef_kapanış","gecikme_gün"]],
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
 
             with st.expander("Yeni kalite / claim dosyası aç",expanded=qcases.empty):
@@ -3710,7 +4042,12 @@ def render_control_tower():
                                      owner,str(target_close)))
                                 new_case=int(query_df("SELECT id FROM quality_cases ORDER BY id DESC LIMIT 1").iloc[0]["id"])
                                 if lot_id and hold_lot:
-                                    set_lot_quality_status(lot_id,"HOLD",new_case)
+                                    set_lot_quality_status(
+                                        lot_id,
+                                        "HOLD",
+                                        new_case,
+                                        float(affected) if float(affected)>0 else None
+                                    )
                                 if immediate.strip():
                                     execute("""INSERT INTO quality_actions
                                         (quality_case_id,action_type,action_text,owner,due_date,status,notes)
@@ -3770,7 +4107,7 @@ def render_control_tower():
                         FROM quality_actions WHERE quality_case_id=?
                         ORDER BY CASE status WHEN 'Açık' THEN 1 WHEN 'Devam' THEN 2 ELSE 3 END,due_date ASC,id DESC
                     """,(int(case_id),))
-                    st.dataframe(actions,use_container_width=True,hide_index=True)
+                    st.dataframe(actions,width="stretch",hide_index=True)
                     with st.form("quality_add_action",clear_on_submit=True):
                         a1,a2=st.columns(2)
                         action_type=a1.selectbox("Aksiyon tipi",["Teknik İnceleme","Müşteri","Tedarikçi","Numune/Analiz","Lojistik","Finansal","Regülasyon","Takip"])
@@ -3815,7 +4152,7 @@ def render_control_tower():
                         FROM quality_recoveries WHERE quality_case_id=?
                         ORDER BY id DESC
                     """,(int(case_id),))
-                    st.dataframe(recoveries,use_container_width=True,hide_index=True)
+                    st.dataframe(recoveries,width="stretch",hide_index=True)
                     with st.form("quality_recovery_form",clear_on_submit=True):
                         r1,r2,r3=st.columns(3)
                         recovery_type=r1.selectbox("Geri kazanım",["Credit Note","Replacement","İskonto","Chargeback","Return","Transport/Handling","Diğer"])
@@ -3847,7 +4184,7 @@ def render_control_tower():
                         final_resolution=st.text_area("Nihai çözüm",value=str(qc["final_resolution"] or ""))
                         release_lot=st.checkbox("Dosya kapanırsa bağlı lotu RELEASE et",value=False)
                         if st.form_submit_button("Dosyayı güncelle",type="primary"):
-                            closed=str(date.today()) if status=="Kapandı" else str(qc["closed_date"] or "")
+                            closed=str(date.today()) if status=="Kapandı" else ""
                             execute("""UPDATE quality_cases
                                 SET status=?,root_cause=?,supplier_response=?,final_resolution=?,closed_date=?
                                 WHERE id=?""",
@@ -3866,7 +4203,7 @@ def render_control_tower():
                     certs[["id","owner_type","owner_name","document_type","market_country",
                            "authority","document_no","issue_date","expiry_date",
                            "renewal_lead_days","responsible","kalan_gün","uyarı","document_ref"]],
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
             with st.expander("Yeni sertifika / belge ekle",expanded=certs.empty):
                 products_c=query_df("SELECT id,name,supplier FROM product_catalog WHERE active=1 ORDER BY name")
@@ -3916,7 +4253,7 @@ def render_control_tower():
             if regs.empty:
                 st.info("Regülasyon / izin kaydı yok.")
             else:
-                st.dataframe(regs,use_container_width=True,hide_index=True)
+                st.dataframe(regs,width="stretch",hide_index=True)
             with st.expander("Yeni regülasyon / izin konusu aç",expanded=regs.empty):
                 products_r=query_df("SELECT id,name FROM product_catalog WHERE active=1 ORDER BY name")
                 with st.form("quality_new_reg",clear_on_submit=True):
@@ -3995,7 +4332,7 @@ def render_control_tower():
                 ELSE 10 END,
                 o.value DESC
         """)
-        st.dataframe(pipeline, use_container_width=True, hide_index=True)
+        st.dataframe(pipeline, width="stretch", hide_index=True)
 
         ptab1, ptab2 = st.tabs(["Fırsatı Güncelle", "Yeni Fırsat"])
 
@@ -4092,7 +4429,7 @@ def render_control_tower():
                 """, (int(opp_id),))
                 if not history.empty:
                     st.markdown("##### Aşama geçmişi")
-                    st.dataframe(history, use_container_width=True, hide_index=True)
+                    st.dataframe(history, width="stretch", hide_index=True)
 
         with ptab2:
             customers = query_df("SELECT id, name FROM customers ORDER BY name")
@@ -4159,7 +4496,7 @@ def render_control_tower():
               AND o.due_date != '' AND o.due_date <= ?
             ORDER BY o.due_date ASC
         """, (str(date.today()), str(date.today())))
-        st.dataframe(followups, use_container_width=True, hide_index=True)
+        st.dataframe(followups, width="stretch", hide_index=True)
 
         st.markdown("#### 14+ gündür temas edilmeyen aktif fırsatlar")
         stale = query_df("""
@@ -4176,7 +4513,7 @@ def render_control_tower():
               )
             ORDER BY o.value DESC
         """, (str(date.today()),))
-        st.dataframe(stale, use_container_width=True, hide_index=True)
+        st.dataframe(stale, width="stretch", hide_index=True)
 
         st.markdown("#### Son satış aktiviteleri")
         recent = query_df("""
@@ -4189,7 +4526,7 @@ def render_control_tower():
             ORDER BY a.activity_date DESC, a.id DESC
             LIMIT 30
         """)
-        st.dataframe(recent, use_container_width=True, hide_index=True)
+        st.dataframe(recent, width="stretch", hide_index=True)
 
     with tasks_tab:
         task_df = query_df("""
@@ -4201,7 +4538,7 @@ def render_control_tower():
                 WHEN 'Orta' THEN 3 ELSE 4 END,
                 due_date ASC
         """)
-        st.dataframe(task_df, use_container_width=True, hide_index=True)
+        st.dataframe(task_df, width="stretch", hide_index=True)
 
         with st.expander("Yeni görev ekle"):
             with st.form("ct_task_form", clear_on_submit=True):
@@ -4284,7 +4621,7 @@ def render_control_tower():
             ORDER BY CASE priority WHEN 'Kritik' THEN 1 ELSE 2 END, due_date ASC
             LIMIT 10
         """)
-        st.dataframe(decisions, use_container_width=True, hide_index=True)
+        st.dataframe(decisions, width="stretch", hide_index=True)
 
         st.markdown("#### En büyük aktif satış fırsatları")
         top = query_df("""
@@ -4298,9 +4635,33 @@ def render_control_tower():
             ORDER BY o.value DESC
             LIMIT 10
         """)
-        st.dataframe(top, use_container_width=True, hide_index=True)
+        st.dataframe(top, width="stretch", hide_index=True)
 
         st.markdown("#### Kalite / claim / belge uyarıları")
+        closed_hold = query_df("""
+            SELECT q.case_no,q.product_name,il.lot_number,il.quality_status,
+                   CASE WHEN COALESCE(il.quality_hold_kg,0)>0
+                        THEN MIN(il.quality_hold_kg,il.quantity_available_kg)
+                        ELSE il.quantity_available_kg
+                   END AS quality_hold_kg
+            FROM quality_cases q
+            JOIN inventory_lots il ON il.id=q.inventory_lot_id
+            WHERE q.status='Kapandı'
+              AND COALESCE(il.quality_status,'Released')!='Released'
+            ORDER BY q.id DESC
+        """)
+        if not closed_hold.empty:
+            st.error(
+                f"{len(closed_hold)} kapalı kalite dosyasına bağlı lot hâlâ HOLD/Karantina durumda."
+            )
+            st.dataframe(
+                closed_hold.rename(columns={
+                    "case_no":"dosya","product_name":"ürün","lot_number":"lot",
+                    "quality_status":"lot_durumu","quality_hold_kg":"hold_kg"
+                }),
+                width="stretch",hide_index=True
+            )
+
         ceo_q=quality_case_summary()
         if not ceo_q.empty:
             ceo_q_open=ceo_q[~ceo_q["status"].isin(["Kapandı","İptal"])].copy()
@@ -4309,7 +4670,7 @@ def render_control_tower():
                     ceo_q_open[["case_no","customer","product_name","severity","status",
                                 "affected_quantity_kg","estimated_loss","currency",
                                 "owner","target_close_date","gecikme_gün"]].head(10),
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
         ceo_cert=certificate_alerts()
         if not ceo_cert.empty:
@@ -4319,7 +4680,7 @@ def render_control_tower():
                 st.dataframe(
                     cert_risk[["owner_name","document_type","market_country","expiry_date",
                                "kalan_gün","uyarı","responsible"]].head(10),
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
         ceo_reg=regulatory_alerts()
         if not ceo_reg.empty:
@@ -4328,7 +4689,7 @@ def render_control_tower():
                 st.markdown("##### Açık regülasyon konuları")
                 st.dataframe(
                     reg_risk[["ürün","ülke","tip","durum","sonraki_aksiyon","son_tarih","sorumlu","gecikme_gün"]].head(10),
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
 
         st.markdown("#### Finans / tahsilat uyarıları")
@@ -4349,7 +4710,7 @@ def render_control_tower():
         z3.metric("Gecikmiş alacak",f"{ceo_overdue:,.0f} EUR")
         z4.metric("Açık borç",f"{ceo_pay_total:,.0f} EUR")
         if not fc90.empty:
-            st.dataframe(fc90,use_container_width=True,hide_index=True)
+            st.dataframe(fc90,width="stretch",hide_index=True)
             min_cash=float(fc90["Tahmini Nakit"].min())
             if min_cash<0:
                 st.error(f"30/60/90 günlük projeksiyonda yaklaşık {abs(min_cash):,.0f} EUR nakit açığı riski var.")
@@ -4385,7 +4746,7 @@ def render_control_tower():
                 axis=1
             )
             st.markdown("##### Müşteri kredi riski")
-            st.dataframe(ceo_credit,use_container_width=True,hide_index=True)
+            st.dataframe(ceo_credit,width="stretch",hide_index=True)
 
         if not ceo_rec.empty:
             risky=ceo_rec[ceo_rec["days_overdue"]>0].copy()
@@ -4393,7 +4754,7 @@ def render_control_tower():
                 st.markdown("##### Gecikmiş tahsilatlar")
                 st.dataframe(
                     risky[["customer","invoice_no","due_date","outstanding","currency","days_overdue","risk"]].head(10),
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
 
         st.markdown("#### Satın alma / stok uyarıları")
@@ -4412,7 +4773,7 @@ def render_control_tower():
                 st.dataframe(
                     ceo_alerts[["ürün","net_stok_kg","yolda_kg","stok_gün",
                                 "önerilen_sipariş_kg","durum"]].head(10),
-                    use_container_width=True,hide_index=True
+                    width="stretch",hide_index=True
                 )
 
         st.markdown("#### Yaklaşan sevkiyatlar")
@@ -4428,7 +4789,7 @@ def render_control_tower():
             LIMIT 8
         """)
         if not ceo_ship.empty:
-            st.dataframe(ceo_ship,use_container_width=True,hide_index=True)
+            st.dataframe(ceo_ship,width="stretch",hide_index=True)
 
         st.markdown("#### Teklif kârlılığı")
         recent_quotes = query_df("""
@@ -4446,7 +4807,7 @@ def render_control_tower():
         if recent_quotes.empty:
             st.info("Henüz kayıtlı teklif hesabı yok.")
         else:
-            st.dataframe(recent_quotes, use_container_width=True, hide_index=True)
+            st.dataframe(recent_quotes, width="stretch", hide_index=True)
 
         st.markdown("#### Henüz açılmamış en güçlü ürün fırsatları")
         ceo_recs = recommendation_rows()
@@ -4457,7 +4818,7 @@ def render_control_tower():
                 ceo_recs[
                     ["Müşteri","Ürün","Fit Score","Neden","Sorumlu"]
                 ].head(10),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "Fit Score": st.column_config.ProgressColumn(
