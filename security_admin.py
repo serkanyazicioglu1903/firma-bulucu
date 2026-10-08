@@ -429,6 +429,33 @@ def test_postgres_connection(url):
         return False, "connection_failed"
 
 
+def inspect_postgres_staging(url, schema="ct_staging"):
+    """Read-only metadata inspection. Returns no credentials or business rows."""
+    if not url or not str(url).strip():
+        return False, "missing", []
+    if schema != "ct_staging":
+        return False, "invalid_schema", []
+    from urllib.parse import urlsplit
+    try:
+        parsed = urlsplit(str(url).strip())
+        if parsed.scheme not in ("postgresql", "postgres") or not parsed.hostname:
+            return False, "invalid_url", []
+        import psycopg
+        with psycopg.connect(str(url).strip(), connect_timeout=8, sslmode="require") as conn:
+            with conn.cursor() as cur:
+                cur.execute("SET TRANSACTION READ ONLY")
+                cur.execute(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = %s AND table_type = 'BASE TABLE' "
+                    "ORDER BY table_name",
+                    (schema,),
+                )
+                return True, "ok", [row[0] for row in cur.fetchall()]
+    except Exception:
+        # Never expose connection strings or PostgreSQL error messages in UI.
+        return False, "connection_failed", []
+
+
 def render_system_admin(db_path):
     init_security_tables(db_path)
     st.markdown("### ⚙️ Sistem Yönetimi")
@@ -475,6 +502,55 @@ def render_system_admin(db_path):
                     "veritabanı şifresi, özel karakterlerin URL kodlaması "
                     "ve projenin aktif olduğunu kontrol edin."
                 )
+
+        st.markdown("#### PostgreSQL test tabloları (yalnızca kontrol)")
+        st.caption(
+            "Bu bölüm mevcut Supabase tablolarını sadece okur. "
+            "SQLite kayıtlarını taşımaz, PostgreSQL tablolarını oluşturmaz."
+        )
+        if st.button("Supabase test tablolarını kontrol et", key="ct_pg_staging_inspect"):
+            ok, reason, existing = inspect_postgres_staging(db_url)
+            if ok:
+                from scripts.build_pg_schema import generate
+                _, expected = generate()
+                missing = sorted(set(expected) - set(existing))
+                st.info(
+                    f"ct_staging: {len(existing)} mevcut tablo; "
+                    f"{len(expected)} beklenen uygulama tablosu."
+                )
+                if missing:
+                    st.warning(
+                        "Henüz oluşturulmamış tablolar: " + ", ".join(missing)
+                    )
+                else:
+                    st.success(
+                        "Uygulamanın beklediği tablo adları test şemasında mevcut. "
+                        "Bu kontrol kolonları, ilişkileri veya uygulama işlevlerini "
+                        "henüz doğrulamaz."
+                    )
+            else:
+                st.error(
+                    "Salt okunur tablo kontrolü tamamlanamadı. "
+                    "DATABASE_URL bağlantısını kontrol edin."
+                )
+        with st.expander("PostgreSQL test şeması SQL dosyası"):
+            st.caption(
+                "Yalnızca test şeması için çevrimdışı SQL üretir. "
+                "Dosyayı indirmek veritabanını değiştirmez; "
+                "SQL'i uygulamadan önce teknik inceleme gerekir."
+            )
+            try:
+                from scripts.build_pg_schema import generate
+                staging_sql, staging_tables = generate()
+                st.download_button(
+                    f"{len(staging_tables)} test tablosu SQL dosyasını indir",
+                    data=staging_sql.encode("utf-8"),
+                    file_name="as_control_tower_ct_staging_schema.sql",
+                    mime="application/sql",
+                    key="ct_download_pg_staging_sql",
+                )
+            except (ValueError, OSError, sqlite3.Error):
+                st.error("Test şeması SQL dosyası hazırlanamadı.")
 
         tables = [
             "customers","opportunities","tasks","product_catalog","quotes",
