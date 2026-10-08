@@ -84,7 +84,7 @@ def create_table_sql(conn, table):
             continue
         cols = [r[2] for r in conn.execute("PRAGMA index_info(" + quote(index[1]) + ")")]
         lines.append("UNIQUE (" + ", ".join(quote(c) for c in cols) + ")")
-    return "CREATE TABLE " + quote(table) + " (\\n    " + ",\\n    ".join(lines) + "\\n);"
+    return "CREATE TABLE " + quote(table) + " (\n    " + ",\n    ".join(lines) + "\n);"
 
 
 def foreign_key_sql(conn, table):
