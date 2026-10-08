@@ -533,6 +533,46 @@ def render_system_admin(db_path):
                     "Salt okunur tablo kontrolü tamamlanamadı. "
                     "DATABASE_URL bağlantısını kontrol edin."
                 )
+        with st.expander("Supabase test tablolarını güvenli oluştur"):
+            st.warning(
+                "Yalnızca ct_staging test şemasında boş uygulama tabloları oluşturur. "
+                "Mevcut uygulama tabloları varsa işlemi durdurur. "
+                "SQLite verilerini taşımaz ve canlı uygulamayı PostgreSQL'e geçirmez."
+            )
+            confirm = st.checkbox(
+                "Yalnızca ct_staging test şemasında boş tablolar oluşturulmasını onaylıyorum.",
+                key="ct_pg_bootstrap_confirm",
+            )
+            if st.button(
+                "26 test tablosunu oluştur",
+                key="ct_pg_bootstrap_apply",
+                disabled=not confirm or not db_url,
+            ):
+                from scripts.staging_bootstrap import bootstrap_staging
+                status, created = bootstrap_staging(db_url)
+                if status == "created":
+                    st.success(
+                        f"{created} boş uygulama tablosu ct_staging içinde oluşturuldu. "
+                        "Gerçek veri aktarılmadı; uygulama hâlâ SQLite kullanıyor."
+                    )
+                elif status == "already_present":
+                    st.info("Beklenen tablolar zaten mevcut; hiçbir tablo değiştirilmedi.")
+                elif status == "conflict":
+                    st.error(
+                        "ct_staging içinde beklenmeyen veya kısmen kurulmuş tablolar var. "
+                        "Güvenlik nedeniyle hiçbir değişiklik yapılmadı."
+                    )
+                elif status == "schema_missing":
+                    st.error(
+                        "ct_staging şeması bulunamadı. "
+                        "Önce test şemasının varlığı doğrulanmalı."
+                    )
+                else:
+                    st.error(
+                        "Test tabloları oluşturulamadı; işlem geri alındı. "
+                        "Bağlantı, yetki ve test şeması durumunu kontrol edin."
+                    )
+
         with st.expander("PostgreSQL test şeması SQL dosyası"):
             st.caption(
                 "Yalnızca test şeması için çevrimdışı SQL üretir. "
