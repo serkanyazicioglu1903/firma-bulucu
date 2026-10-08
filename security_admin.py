@@ -380,6 +380,31 @@ def import_master_csv(db_path, table, uploaded_file):
     return added
 
 
+def test_postgres_connection(url):
+    """Check reachability without schema changes or leaking credentials."""
+    from urllib.parse import urlsplit
+
+    if not url or not str(url).strip():
+        return False, "missing"
+    url = str(url).strip()
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme not in ("postgresql", "postgres") or not parsed.hostname:
+            return False, "invalid_url"
+        if "[YOUR-PASSWORD]" in url or "SUPABASE_BAGLANTI_ADRESIN" in url:
+            return False, "placeholder"
+        import psycopg
+        with psycopg.connect(url, connect_timeout=8, sslmode="require") as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                if cur.fetchone()[0] != 1:
+                    return False, "unexpected_result"
+        return True, "ok"
+    except Exception:
+        # Do not display raw DB exceptions: they can contain host/user/URL.
+        return False, "connection_failed"
+
+
 def render_system_admin(db_path):
     init_security_tables(db_path)
     st.markdown("### ⚙️ Sistem Yönetimi")
@@ -398,6 +423,35 @@ def render_system_admin(db_path):
     )
 
     with health_tab:
+        st.markdown("#### Supabase PostgreSQL bağlantısı")
+        st.caption(
+            "Bu kontrol yalnız SELECT 1 çalıştırır; tablo oluşturmaz, "
+            "veri taşımaz ve bağlantı şifresini göstermez."
+        )
+        st.info(
+            "Uygulamanın mevcut iş veritabanı hâlâ SQLite. "
+            "Bağlantı testi başarılı olsa bile PostgreSQL'e geçiş yapılmış olmaz."
+        )
+        db_url = _secret("DATABASE_URL")
+        if not db_url:
+            st.warning("DATABASE_URL Streamlit Secrets içinde bulunamadı.")
+        if st.button("Supabase bağlantısını test et", key="ct_postgres_test"):
+            success, reason = test_postgres_connection(db_url)
+            if success:
+                st.success("Supabase PostgreSQL bağlantısı başarılı (salt okunur test).")
+            elif reason == "missing":
+                st.error("DATABASE_URL bulunamadı. Streamlit Secrets kaydını kontrol edin.")
+            elif reason == "placeholder":
+                st.error("Bağlantı adresinde [YOUR-PASSWORD] veya örnek metin kalmış.")
+            elif reason == "invalid_url":
+                st.error("DATABASE_URL geçerli bir PostgreSQL URI değil.")
+            else:
+                st.error(
+                    "Supabase bağlantısı kurulamadı. Session pooler URI, "
+                    "veritabanı şifresi, özel karakterlerin URL kodlaması "
+                    "ve projenin aktif olduğunu kontrol edin."
+                )
+
         tables = [
             "customers","opportunities","tasks","product_catalog","quotes",
             "purchase_orders","shipments","inventory_lots","receivables",
