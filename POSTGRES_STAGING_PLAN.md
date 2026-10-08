@@ -34,3 +34,14 @@ Run `python scripts/build_pg_schema.py --output postgres_staging_schema.sql` to 
 - No live Supabase DDL or data modifications.
 - No automatic production cutover.
 - No real business data migration or secrets committed to GitHub.
+
+## Stage 1: verified backup preflight (added 2026-10-08)
+- Supabase SQL Editor successfully wrote and read a single test record in `ct_staging.migration_check`. This proves only that manual PostgreSQL access works, **not** that the Streamlit application has switched databases.
+- The live Streamlit application still uses SQLite. Its hosted `as_control_tower.db` is not automatically accessible from this repository or this script. Do not mistake a local demo SQLite file for the actual live data.
+- On a trusted machine with the **actual source SQLite file**, create a private backup directory and run:
+  `python scripts/backup_sqlite.py --source /path/to/actual/as_control_tower.db --dest /private/backups/ct-YYYYMMDD.sqlite3`
+- Keep the `.sqlite3` and `.sqlite3.json` manifest off GitHub; check manifest SHA256 and row counts before importing anything. Backup alone does not make Streamlit Community Cloud SQLite durable.
+- The old `migrate_sqlite_to_postgres.py` importer is intentionally disabled: it used `if_exists='replace'`, which can destroy existing tables and constraints.
+- Next implementation: reviewed, repeatable, staging-only PostgreSQL importer, FK/identity handling, and full record reconciliation. **Do not run an importer or switch the production app yet.**
+- Rotate any database or app passwords exposed in screenshots; update Streamlit Secrets with the new values. Never share connection strings with passwords in screenshots.
+- Product catalog import from `planetgida.com.tr` and `asgidakimyasallari.com` is deferred until staging migration and product master deduplication are complete.
