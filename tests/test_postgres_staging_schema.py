@@ -21,6 +21,15 @@ class StagingSchemaTests(unittest.TestCase):
         self.assertIn('UNIQUE ("customer_id", "product_id")', ddl)
         self.assertIn('"setting_key" TEXT NOT NULL', ddl)
 
+    def test_foreign_keys_created_after_all_tables(self):
+        ddl, tables = generate()
+        last_create = max(ddl.index('CREATE TABLE "' + table + '"') for table in tables)
+        first_fk = ddl.index('ALTER TABLE "')
+        self.assertGreater(first_fk, last_create)
+        self.assertIn('ADD CONSTRAINT "fk_opportunities_', ddl)
+        self.assertIn('FOREIGN KEY ("customer_id") REFERENCES "customers" ("id")', ddl)
+        self.assertTrue(ddl.strip().endswith("COMMIT;"))
+
     def test_additional_columns_are_preserved(self):
         ddl, _ = generate()
         for column in ('"quality_hold_kg"', '"credit_limit"', '"lost_reason"'):
