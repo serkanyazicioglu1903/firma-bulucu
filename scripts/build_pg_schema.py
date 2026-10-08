@@ -84,17 +84,25 @@ def create_table_sql(conn, table):
             continue
         cols = [r[2] for r in conn.execute("PRAGMA index_info(" + quote(index[1]) + ")")]
         lines.append("UNIQUE (" + ", ".join(quote(c) for c in cols) + ")")
-    foreign_keys = defaultdict(list)
+    return "CREATE TABLE " + quote(table) + " (\\n    " + ",\\n    ".join(lines) + "\\n);"
+
+
+def foreign_key_sql(conn, table):
+    """Create foreign keys after every table exists, avoiding forward-reference errors."""
+    groups = defaultdict(list)
     for key in conn.execute("PRAGMA foreign_key_list(" + quote(table) + ")"):
-        foreign_keys[key[0]].append(key)
-    for group in foreign_keys.values():
+        groups[key[0]].append(key)
+    statements = []
+    for fk_id, group in sorted(groups.items()):
         ordered = sorted(group, key=lambda r: r[1])
-        lines.append(
-            "FOREIGN KEY (" + ", ".join(quote(r[3]) for r in ordered) + ") "
+        name = quote("fk_" + table + "_" + str(fk_id))
+        statements.append(
+            "ALTER TABLE " + quote(table) + " ADD CONSTRAINT " + name +
+            " FOREIGN KEY (" + ", ".join(quote(r[3]) for r in ordered) + ") " +
             "REFERENCES " + quote(ordered[0][2]) + " (" +
-            ", ".join(quote(r[4]) for r in ordered) + ")"
+            ", ".join(quote(r[4]) for r in ordered) + ");"
         )
-    return "CREATE TABLE " + quote(table) + " (\n    " + ",\n    ".join(lines) + "\n);"
+    return statements
 
 
 def generate(schema="ct_staging"):
@@ -113,6 +121,9 @@ def generate(schema="ct_staging"):
             "SET LOCAL search_path TO " + quote(schema) + ";",
         ]
         result.extend(create_table_sql(conn, table) for table in tables)
+        # PostgreSQL rejects inline foreign keys pointing to not-yet-created tables.
+        for table in tables:
+            result.extend(foreign_key_sql(conn, table))
         result.append("COMMIT;")
         return "\n\n".join(result) + "\n", tables
 
