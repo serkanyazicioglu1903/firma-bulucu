@@ -17,7 +17,7 @@ class SQLiteDownloadTests(unittest.TestCase):
                 conn.execute("CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT)")
                 conn.execute("INSERT INTO customers VALUES (1, 'Example')")
             data = verified_sqlite_backup_bytes(source)
-            self.assertTrue(data.startswith(b"SQLite format 3\\x00"))
+            self.assertTrue(data.startswith(bytes.fromhex("53514c69746520666f726d6174203300")))
             self.assertGreater(len(data), 100)
             destination.write_bytes(data)
             with sqlite3.connect(destination) as conn:
