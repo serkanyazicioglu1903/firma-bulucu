@@ -5,6 +5,8 @@ import json
 import re
 import sqlite3
 import zipfile
+import tempfile
+from urllib.parse import quote
 from datetime import datetime
 from pathlib import Path
 
@@ -306,6 +308,28 @@ def date_stamp():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
+def verified_sqlite_backup_bytes(db_path):
+    """Consistent SQLite backup verified before offering it for download.
+
+    Never read a live SQLite file directly: WAL/uncommitted state can make
+    a raw file copy incomplete. SQLite's online backup API creates a
+    transactionally consistent snapshot instead.
+    """
+    source = Path(db_path).resolve()
+    if not source.is_file():
+        raise FileNotFoundError("SQLite veritabanı dosyası bulunamadı.")
+    with tempfile.TemporaryDirectory(prefix="ct-sqlite-backup-") as folder:
+        backup_file = Path(folder) / "as_control_tower_snapshot.db"
+        source_uri = "file:" + quote(str(source), safe="/") + "?mode=ro"
+        with sqlite3.connect(source_uri, uri=True) as original:
+            with sqlite3.connect(backup_file) as snapshot:
+                original.backup(snapshot)
+        with sqlite3.connect(backup_file) as check:
+            if check.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise RuntimeError("SQLite yedeğinin bütünlük kontrolü başarısız.")
+        return backup_file.read_bytes()
+
+
 def export_all_tables_zip(db_path):
     buffer=io.BytesIO()
     with connect(db_path) as conn, zipfile.ZipFile(buffer,"w",zipfile.ZIP_DEFLATED) as z:
@@ -480,18 +504,36 @@ def render_system_admin(db_path):
         st.dataframe(audit,width="stretch",hide_index=True)
 
     with backup_tab:
-        db_file=Path(db_path)
+        db_file = Path(db_path)
         if db_file.exists():
-            data=db_file.read_bytes()
-            filename="as_control_tower_backup_" + date_stamp() + ".db"
-            st.download_button(
-                "Tam veritabanı yedeğini indir",
-                data=data,
-                file_name=filename,
-                mime="application/octet-stream",
-                width="stretch",
-                type="primary",
-            )
+            st.caption("Önce güvenli SQLite anlık görüntüsünü hazırla, sonra aynı oturumda indir.")
+            if st.button("Güvenli yedeği hazırla", key="ct_prepare_sqlite_backup"):
+                try:
+                    st.session_state["ct_backup_bytes"] = verified_sqlite_backup_bytes(db_path)
+                    st.session_state["ct_backup_filename"] = (
+                        "as_control_tower_backup_" + date_stamp() + ".db"
+                    )
+                except (OSError, sqlite3.Error, RuntimeError):
+                    st.session_state.pop("ct_backup_bytes", None)
+                    st.session_state.pop("ct_backup_filename", None)
+                    st.error("Yedek hazırlanamadı. Mevcut veritabanı değiştirilmedi.")
+            data = st.session_state.get("ct_backup_bytes")
+            if data:
+                st.success("Yedek hazır ve bütünlük kontrolünden geçti: " + str(len(data)) + " bayt.")
+                st.download_button(
+                    "Tam veritabanı yedeğini indir",
+                    data=data,
+                    file_name=st.session_state["ct_backup_filename"],
+                    mime="application/octet-stream",
+                    width="stretch",
+                    type="primary",
+                    key="ct_download_sqlite_backup",
+                )
+                st.caption(
+                    "İndirilen dosyanın uzantısı .db olmalı. 14 baytlık 'File not found' "
+                    "metni bir yedek değildir. Bu olursa sayfayı yenileyip "
+                    "yedek hazırlama işlemini tekrar dene."
+                )
             st.download_button(
                 "Tüm tabloları CSV ZIP olarak indir",
                 data=export_all_tables_zip(db_path),
