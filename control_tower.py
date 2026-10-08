@@ -1975,7 +1975,6 @@ def render_control_tower():
     init_security_tables(DB_PATH)
     if not login_gate():
         return
-    logout_button()
     seed_once()
     seed_product_catalog()
     seed_warehouses()
