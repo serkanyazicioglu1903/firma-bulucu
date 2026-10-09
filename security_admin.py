@@ -533,6 +533,36 @@ def render_system_admin(db_path):
                     "Salt okunur tablo kontrolü tamamlanamadı. "
                     "DATABASE_URL bağlantısını kontrol edin."
                 )
+        st.markdown("#### PostgreSQL tablo yapısı doğrulaması")
+        st.caption(
+            "26 uygulama tablosunun sütun adlarını, veri tiplerini, zorunlu alanlarını, "
+            "birincil anahtarlarını, benzersizlik ve yabancı anahtar ilişkilerini "
+            "salt okunur şekilde kontrol eder. Veri kayıtlarını okumaz veya değiştirmez."
+        )
+        if st.button("Tablo yapısı ve ilişkileri doğrula", key="ct_pg_schema_validate"):
+            from scripts.staging_validate import validate_staging_structure
+            status, issues = validate_staging_structure(db_url)
+            if status == "ok":
+                st.success(
+                    "26 uygulama tablosunun sütun tipleri, zorunlu alanları ve "
+                    "PK/UNIQUE/FK ilişkileri beklenen şemayla uyumlu. "
+                    "Bu kontrol gerçek kayıt işlemlerini veya iş kurallarını sınamaz."
+                )
+            elif status == "mismatch":
+                st.error(
+                    f"PostgreSQL test şemasında {len(issues)} yapısal uyumsuzluk bulundu. "
+                    "SQLite verilerini taşıma veya canlı sistemi değiştirme."
+                )
+                for issue in issues[:20]:
+                    st.write("• " + issue)
+                if len(issues) > 20:
+                    st.caption(f"Diğer {len(issues)-20} uyumsuzluk gösterilmedi.")
+            else:
+                st.error(
+                    "Salt okunur şema doğrulaması tamamlanamadı. "
+                    "Bağlantı ve Supabase yetkilerini kontrol edin."
+                )
+
         with st.expander("Supabase test tablolarını güvenli oluştur"):
             st.warning(
                 "Yalnızca ct_staging test şemasında boş uygulama tabloları oluşturur. "
