@@ -58,3 +58,67 @@ Run `python scripts/build_pg_schema.py --output postgres_staging_schema.sql` to 
 - All test writes run in a **single forced-rollback transaction**, with explicit negative IDs to avoid consuming identity sequences. It verifies its test IDs no longer exist afterward.
 - This is a technical database CRUD smoke test, **not** a production backend switch, full business-rule test, or import of real/demo company data.
 - Run only after explicit administrator confirmation in the System Health UI. The current SQLite-backed production app remains unchanged.
+
+
+## Stage 4: verified backup and manually authorized staging import (2026-10-09)
+
+**Prepared, not executed.** The staging CRUD test was successful, but the live
+Streamlit app **still uses SQLite**. GitHub does not contain the live database;
+a demo database file is NOT a trustworthy replacement. Only an authorized
+administrator can export the *actual* hosted SQLite database and identify the
+approved source. Do not guess its location, use a test/demo copy, or upload real
+customer/finance data to GitHub or the chat.
+
+The offline backup command (run only on a trusted machine holding the real file):
+
+    mkdir -m 700 -p /private/backups
+    python scripts/backup_sqlite.py \
+      --source /path/to/verified/actual/as_control_tower.db \
+      --dest /private/backups/control-tower-20261009.sqlite3
+
+A snapshot plus .sqlite3.json manifest is created. Keep BOTH encrypted and
+private; secure the backup and test restoring it before any switch. The backup
+is created with SQLite's consistent backup API, checked with integrity_check,
+and SHA256/row counts are saved in the manifest.
+
+The new preflight works **offline**, without a PostgreSQL connection:
+
+    python scripts/staging_import.py \
+      --source /private/backups/control-tower-20261009.sqlite3
+
+This refuses a raw live .db, wrong checksum/manifest, foreign-key violations,
+unapproved tables, missing columns/constraints, or unsupported relationship cycles.
+It prints table and row counts only, not business rows. A failure is a STOP:
+review schema differences; never bypass the checks with manual SQL.
+
+An **optional** actual staging import requires, *after security and source review*:
+- Explicit signed-off source provenance and data-classification approval. Test
+  environments may need fictional/masked data instead of actual business data.
+- Streamlit application is NOT used to run the import. On a trusted host, set
+  STAGING_DATABASE_URL privately (not the app's DATABASE_URL); credentials
+  must be least-privileged, PostgreSQL TLS is required, and the role should have
+  no write permission to public or production schemas. Never paste URLs into
+  GitHub, chats, logs, or command-line history.
+- Verify the destination really is the isolated ct_staging environment and
+  the 26 application tables are empty; existing migration_check remains intact.
+- Take/verify backups of the source and destination and confirm a rollback plan.
+
+Only once those approvals exist, a trusted operator **may** invoke:
+
+    python scripts/staging_import.py \
+      --source /private/backups/control-tower-20261009.sqlite3 \
+      --apply --confirm-target CT_STAGING_ONLY --confirm-source-reviewed
+
+There is no unattended import. The script checks destination PK/UNIQUE/FK/column
+metadata, takes exclusive locks on the 26 staging application tables, rejects
+nonempty targets, loads in FK-dependency order, preserves identity high-water
+marks, and compares **every field of every row** (including currency, quantities,
+inventory and financial fields) before a single commit. Any error rolls back
+the whole transaction. A successful import does NOT prove full application
+functionality, switch the app backend, or establish backup/restore readiness.
+
+Next steps **after** successful staging import: test backend adapter across all
+modules (CRM, finance, warehouse, reports, audit/permissions), verify isolated
+staging backup/restore and restart persistence, review actual currency/stock
+totals, and approve a separately planned production cutover. **No production
+database change is authorized by this Stage 4 PR.**
