@@ -51,3 +51,10 @@ Run `python scripts/build_pg_schema.py --output postgres_staging_schema.sql` to 
 - The business application still uses SQLite. The 18 demo records must **not** be imported into PostgreSQL as real company data.
 - This change adds **Tablo yapısı ve ilişkileri doğrula** under System Health: read-only checking of each expected column name, mapped type, nullability, identity status, PK, unique and FK metadata. No business table rows or passwords are read.
 - Before any cutover, run this check against Supabase and resolve discrepancies; then test transactions and business workflows separately.
+
+## Stage 3: structural check passed; rollback-only CRUD smoke test prepared (2026-10-09)
+- The administrator's **read-only** Supabase validator returned success for the 26 expected table schemas, including nullability, types, primary/unique and foreign key constraints. This is not evidence that Streamlit business modules work with PostgreSQL yet.
+- The new opt-in **PostgreSQL işlem testleri (geri alınır)** control uses only `ct_staging` with fictional synthetic rows. It exercises customer/product/quote joins, task insert-update-delete, purchase order/shipment/warehouse/inventory joins, quality, receivables and payables.
+- All test writes run in a **single forced-rollback transaction**, with explicit negative IDs to avoid consuming identity sequences. It verifies its test IDs no longer exist afterward.
+- This is a technical database CRUD smoke test, **not** a production backend switch, full business-rule test, or import of real/demo company data.
+- Run only after explicit administrator confirmation in the System Health UI. The current SQLite-backed production app remains unchanged.
