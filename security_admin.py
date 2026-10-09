@@ -563,6 +563,46 @@ def render_system_admin(db_path):
                     "Bağlantı ve Supabase yetkilerini kontrol edin."
                 )
 
+        with st.expander("PostgreSQL işlem testleri (geri alınır)"):
+            st.warning(
+                "Bu test yalnızca ct_staging üzerinde geçici ve tamamen kurgusal "
+                "müşteri, ürün, teklif, görev, sevkiyat, stok, kalite ve finans "
+                "kayıtlarıyla çalışır. Test sonunda bütün ekleme/güncelleme/silme "
+                "işlemleri geri alınır. Gerçek şirket verilerine dokunmaz; canlı "
+                "SQLite uygulamasını PostgreSQL'e geçirmez."
+            )
+            test_confirm = st.checkbox(
+                "Yalnızca ct_staging test ortamında geri alınacak deneme işlemlerini onaylıyorum.",
+                key="ct_pg_transaction_smoke_confirm",
+            )
+            if st.button(
+                "PostgreSQL işlem testini çalıştır",
+                key="ct_pg_transaction_smoke_run",
+                disabled=not test_confirm or not db_url,
+            ):
+                from scripts.staging_transaction_smoke import (
+                    run_transactional_staging_smoke,
+                )
+                smoke_status, tested = run_transactional_staging_smoke(db_url)
+                if smoke_status == "passed":
+                    st.success(
+                        "PostgreSQL geçici ekleme, okuma, güncelleme ve silme "
+                        "işlemleri başarılı. Tüm deneme kayıtları geri alındı. "
+                        "Kontrol edilen bağlantılar: " + ", ".join(tested) + ". "
+                        "Canlı uygulama hâlâ SQLite kullanıyor."
+                    )
+                elif smoke_status == "schema_mismatch":
+                    st.error(
+                        "Test başlamadı: PostgreSQL tablo yapısı doğrulanamadı. "
+                        "Önce salt okunur tablo yapısı testini çalıştır."
+                    )
+                else:
+                    st.error(
+                        "İşlem testi tamamlanamadı. Deneme değişiklikleri geri "
+                        "alınır; hiçbir gerçek kayıt taşınmadı. "
+                        "Supabase yetkilerini ve veritabanı bağlantısını kontrol et."
+                    )
+
         with st.expander("Supabase test tablolarını güvenli oluştur"):
             st.warning(
                 "Yalnızca ct_staging test şemasında boş uygulama tabloları oluşturur. "
