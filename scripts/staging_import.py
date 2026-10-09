@@ -211,8 +211,14 @@ def _copy_and_reconcile(pg, source, counts, order):
                     sequence = cur.fetchone()[0]
                     if not sequence:
                         raise MigrationSafetyError("Missing identity sequence.")
+                    # SQLite AUTOINCREMENT can be ahead of MAX(id) after
+                    # deletions. Preserve its high-water mark as well.
+                    previous = source.execute(
+                        "SELECT seq FROM sqlite_sequence WHERE name = ?", (table,)
+                    ).fetchone()
+                    high_water = max(max_id, previous[0] if previous else 0)
                     cur.execute("SELECT setval(%s::regclass, %s, %s)",
-                                (sequence, max(max_id, 1), max_id > 0))
+                                (sequence, max(high_water, 1), high_water > 0))
 
             # Verify every field in every record, not just table counts/totals.
             for table in order:
