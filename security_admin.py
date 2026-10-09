@@ -692,33 +692,70 @@ def render_system_admin(db_path):
     with backup_tab:
         db_file = Path(db_path)
         if db_file.exists():
-            st.caption("Önce güvenli SQLite anlık görüntüsünü hazırla, sonra aynı oturumda indir.")
+            st.caption(
+                "Güvenli bir SQLite anlık görüntüsü ve ona ait SHA256 doğrulama "
+                "raporunu aynı oturumda hazırla. İki dosyayı birlikte sakla."
+            )
             if st.button("Güvenli yedeği hazırla", key="ct_prepare_sqlite_backup"):
                 try:
-                    st.session_state["ct_backup_bytes"] = verified_sqlite_backup_bytes(db_path)
-                    st.session_state["ct_backup_filename"] = (
-                        "as_control_tower_backup_" + date_stamp() + ".db"
-                    )
-                except (OSError, sqlite3.Error, RuntimeError):
-                    st.session_state.pop("ct_backup_bytes", None)
-                    st.session_state.pop("ct_backup_filename", None)
-                    st.error("Yedek hazırlanamadı. Mevcut veritabanı değiştirilmedi.")
+                    from scripts.backup_report import build_backup_manifest
+                    data = verified_sqlite_backup_bytes(db_path)
+                    filename = "as_control_tower_backup_" + date_stamp() + ".db"
+                    report = build_backup_manifest(data, filename)
+                    st.session_state["ct_backup_bytes"] = data
+                    st.session_state["ct_backup_filename"] = filename
+                    st.session_state["ct_backup_manifest"] = report
+                except (OSError, sqlite3.Error, RuntimeError, ValueError):
+                    for key in ("ct_backup_bytes", "ct_backup_filename", "ct_backup_manifest"):
+                        st.session_state.pop(key, None)
+                    st.error("Yedek doğrulanamadı. Mevcut veritabanı değiştirilmedi.")
+
             data = st.session_state.get("ct_backup_bytes")
-            if data:
-                st.success("Yedek hazır ve bütünlük kontrolünden geçti: " + str(len(data)) + " bayt.")
+            manifest = st.session_state.get("ct_backup_manifest")
+            if data and manifest:
+                st.success(
+                    "SQLite bütünlük kontrolü başarılı: "
+                    + str(manifest["byte_size"]) + " bayt, "
+                    + str(len(manifest["table_counts"])) + " tablo, "
+                    + str(sum(manifest["table_counts"].values())) + " kayıt."
+                )
+                st.caption("SHA256: " + manifest["sha256"])
+                if manifest["foreign_key_check"] != "ok":
+                    st.warning(
+                        "Yedekte ilişki tutarsızlıkları bulundu. Yedek saklanabilir; "
+                        "ancak PostgreSQL aktarımı yapılmamalıdır."
+                    )
                 st.download_button(
                     "Tam veritabanı yedeğini indir",
                     data=data,
-                    file_name=st.session_state["ct_backup_filename"],
+                    file_name=manifest["backup_filename"],
                     mime="application/octet-stream",
                     width="stretch",
                     type="primary",
                     key="ct_download_sqlite_backup",
                 )
+                st.download_button(
+                    "Yedek doğrulama raporunu indir (JSON)",
+                    data=json.dumps(
+                        manifest, ensure_ascii=False, indent=2, sort_keys=True
+                    ).encode("utf-8"),
+                    file_name=manifest["backup_filename"] + ".json",
+                    mime="application/json",
+                    width="stretch",
+                    key="ct_download_sqlite_manifest",
+                )
+                with st.expander("Yedekteki tablo ve kayıt sayıları (yalnızca özet)"):
+                    st.dataframe(
+                        pd.DataFrame(
+                            [{"Tablo": name, "Kayıt": count}
+                             for name, count in sorted(manifest["table_counts"].items())]
+                        ), width="stretch", hide_index=True
+                    )
                 st.caption(
-                    "İndirilen dosyanın uzantısı .db olmalı. 14 baytlık 'File not found' "
-                    "metni bir yedek değildir. Bu olursa sayfayı yenileyip "
-                    "yedek hazırlama işlemini tekrar dene."
+                    "Bu rapor sadece bu oturumda hazırlanan yeni yedeğe aittir; "
+                    "daha önce indirilen farklı bir dosyayı doğruladığı anlamına gelmez. "
+                    "Her iki dosyayı iCloud Drive'da özel klasöre kaydet. "
+                    "Veritabanı dosyasını GitHub'a veya sohbete yükleme."
                 )
             st.download_button(
                 "Tüm tabloları CSV ZIP olarak indir",
