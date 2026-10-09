@@ -655,6 +655,104 @@ def render_system_admin(db_path):
                         "Supabase bağlantısını ve test yetkilerini kontrol et."
                     )
 
+        with st.expander("PostgreSQL CRM pilot ekranı (kalıcı kurgu veri)"):
+            st.warning(
+                "Bu ekran ilk kez PostgreSQL üzerinde KALICI test kayıtları "
+                "oluşturabilir. Yalnız ct_staging test şemasında tamamen "
+                "kurgusal müşteri, ürün, fırsat ve görevler kullanılır; gerçek "
+                "firma adı veya verisi girilmez. Kayıtlar siz silene kadar "
+                "test ortamında durur. Canlı SQLite ekranları değişmez."
+            )
+            from scripts.staging_crm_adapter import (
+                list_sandbox_crm, create_sandbox_crm,
+                update_sandbox_crm, delete_sandbox_crm,
+            )
+            crm_confirm = st.checkbox(
+                "Yalnızca ct_staging üzerinde kurgusal ve kalıcı CRM "
+                "kayıtlarını oluşturmaya, güncellemeye veya silmeye izin veriyorum.",
+                key="ct_pg_crm_persistent_confirm",
+            )
+            if st.button(
+                "PostgreSQL test CRM kayıtlarını listele",
+                key="ct_pg_crm_list", disabled=not db_url,
+            ):
+                list_status, listed = list_sandbox_crm(db_url)
+                if list_status == "ok":
+                    st.session_state["ct_pg_crm_listed"] = listed
+                    st.success("Yalnızca kurgusal CRM kayıtları okundu.")
+                else:
+                    st.session_state.pop("ct_pg_crm_listed", None)
+                    st.error("CRM test listesi okunamadı. Şema ve bağlantıyı kontrol et.")
+
+            if st.button(
+                "Kurgusal CRM deneme kaydı oluştur (kalıcı)",
+                key="ct_pg_crm_create",
+                disabled=not db_url or not crm_confirm,
+            ):
+                result, created_id = create_sandbox_crm(db_url)
+                if result == "created":
+                    st.success("Kurgusal CRM kayıt seti PostgreSQL test ortamına kaydedildi.")
+                    read_status, listed = list_sandbox_crm(db_url)
+                    if read_status == "ok":
+                        st.session_state["ct_pg_crm_listed"] = listed
+                else:
+                    st.error("Kurgusal CRM kaydı oluşturulamadı. Canlı SQLite değişmedi.")
+
+            listed = st.session_state.get("ct_pg_crm_listed", [])
+            if listed:
+                st.dataframe(
+                    pd.DataFrame(listed).rename(columns={
+                        "id": "Test ID", "customer": "Kurgusal müşteri",
+                        "product": "Kurgusal ürün", "stage": "Fırsat aşaması",
+                        "task_status": "Görev durumu",
+                    }), hide_index=True, width="stretch"
+                )
+                options = [int(item["id"]) for item in listed]
+                selected_id = st.selectbox(
+                    "Üzerinde işlem yapılacak kurgusal kayıt",
+                    options=options,
+                    format_func=lambda x: "Deneme kaydı " + str(-x),
+                    key="ct_pg_crm_selected",
+                )
+                left, right = st.columns(2)
+                with left:
+                    if st.button(
+                        "Kurgusal aşamayı güncelle",
+                        key="ct_pg_crm_update",
+                        disabled=not crm_confirm or not db_url,
+                    ):
+                        result = update_sandbox_crm(db_url, selected_id)
+                        if result == "updated":
+                            st.success("Test fırsatı Numune, görev Tamamlandı oldu.")
+                        else:
+                            st.error("Güncelleme tamamlanamadı; mevcut kayıtlar korundu.")
+                        _, rows = list_sandbox_crm(db_url)
+                        st.session_state["ct_pg_crm_listed"] = rows
+                with right:
+                    if st.button(
+                        "Seçili kurgusal kaydı sil",
+                        key="ct_pg_crm_delete",
+                        disabled=not crm_confirm or not db_url,
+                    ):
+                        result = delete_sandbox_crm(db_url, selected_id)
+                        if result == "deleted":
+                            st.success("Seçili kurgu CRM seti test şemasından silindi.")
+                        else:
+                            st.error("Silme tamamlanamadı; işlem geri alındı.")
+                        _, rows = list_sandbox_crm(db_url)
+                        st.session_state["ct_pg_crm_listed"] = rows
+            else:
+                st.caption(
+                    "Henüz listelenmiş kurgusal CRM seti yok. "
+                    "Varsa önce listele veya açık onayla yeni bir set oluştur."
+                )
+            st.info(
+                "Bu ekran yalnızca CRM modülünün bağımsız PostgreSQL pilotudur. "
+                "Yeniden başlatma sonrasında kayıtların kaldığını test etmek "
+                "için listeleme düğmesine yeniden bas. "
+                "Gerçek müşteri bilgilerini henüz burada kullanma."
+            )
+
         with st.expander("Supabase test tablolarını güvenli oluştur"):
             st.warning(
                 "Yalnızca ct_staging test şemasında boş uygulama tabloları oluşturur. "
