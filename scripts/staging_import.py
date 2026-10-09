@@ -110,8 +110,11 @@ def _dependency_order(conn, tables):
 def verified_snapshot(backup_path, manifest_path=None):
     """Open only a consistent, manifested SQLite backup, in read-only mode."""
     source = Path(backup_path).expanduser().resolve(strict=True)
-    if not source.is_file() or source.suffix != ".sqlite3":
-        raise MigrationSafetyError("Supply a .sqlite3 backup, not a live .db file.")
+    if not source.is_file() or source.suffix not in (".sqlite3", ".db"):
+        raise MigrationSafetyError("Supply a private SQLite backup with a matching manifest.")
+    # A .db extension alone is not evidence of a verified backup. Both
+    # formats must have a same-name manifest with the exact matching SHA256.
+
     manifest_path = (Path(manifest_path).expanduser().resolve(strict=True)
                      if manifest_path else Path(str(source) + ".json"))
     try:
