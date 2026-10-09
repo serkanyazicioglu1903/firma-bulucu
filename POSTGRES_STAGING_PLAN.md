@@ -146,3 +146,34 @@ that the snapshot contains approved production records instead of demo
 records. No hosted backup is transmitted to GitHub or ChatGPT. Do not
 activate PostgreSQL writes or upload sensitive data to staging without
 separate provenance, security and migration approval.
+
+
+## Stage 5: rollback-only cross-module PostgreSQL business flow pilot (2026-10-09)
+
+The user confirmed that **all 36 SQLite records are demo data**, not approved
+real company data. Do not migrate or treat them as production records.
+
+The separate scripts/staging_business_pilot.py module validates several first-pass
+business invariants using **fictional rows with negative IDs** in ct_staging:
+
+- CRM customer + product + opportunity + costed quotation, with the purchase
+  price converted from USD to EUR, shipment-level freight, finance days and
+  commission; validates quote contribution and customer join.
+- Purchase order for 1,000 kg; 600 kg partial delivery and receipt; 100 kg
+  quality HOLD; 500 kg net available and 400 kg remaining to receive.
+- Partial accounts receivable settlement, outstanding accounts payable in USD,
+  FX-converted payable reporting, cash bank movement and transaction linkage.
+- Safety: administrator must check the dedicated confirmation and press the
+  dedicated button. First run read-only 26-table structure validation. All
+  writes are parameterized, schema-qualified, in a single forced-rollback
+  transaction; no identity sequences consumed. Sample IDs are checked absent
+  after rollback. Raw connection errors and credentials stay hidden.
+
+The UI is at **Sistem Yönetimi → Sistem Sağlığı →
+PostgreSQL şirket iş akışı pilotu (geri alınır)**.
+
+This is not a full production implementation, full role/audit integration,
+backups, tax/currency accounting, or a cutover. Other application screens
+are still SQLite backed. Do not enable real business data until security,
+durability and end-to-end PostgreSQL backend integration are independently
+validated. The pilot itself does not populate persistent example records.
