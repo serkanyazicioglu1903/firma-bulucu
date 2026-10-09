@@ -640,6 +640,49 @@ def render_system_admin(db_path):
                         "da test başarılı sayılmadı. Canlı geçiş yapılmamalı."
                     )
 
+        with st.expander("PostgreSQL iş akışı deneme testi (geri alınır)"):
+            st.warning(
+                "Bu test sadece ct_staging şemasında geçici, tamamen kurgusal "
+                "müşteri, ürün, teklif, stok, kalite ve finans kayıtları oluşturur. "
+                "İşlemler veritabanı işlemi sonunda geri alınır. "
+                "Gerçek iş verisi taşımaz, canlı SQLite veritabanını değiştirmez. "
+                "Sadece tablo yapısı doğrulandıysa çalıştırın."
+            )
+            smoke_confirm = st.checkbox(
+                "Sadece ct_staging üzerinde geçici kayıt testi yapılmasını onaylıyorum.",
+                key="ct_pg_smoke_confirm",
+            )
+            if st.button(
+                "İş akışını test et ve geri al",
+                key="ct_pg_smoke_run",
+                disabled=not smoke_confirm or not db_url,
+            ):
+                from scripts.staging_transaction_smoke import (
+                    run_transactional_staging_smoke,
+                )
+                with st.spinner("Supabase test işlemleri sınanıyor..."):
+                    smoke_status, verified_modules = run_transactional_staging_smoke(
+                        db_url
+                    )
+                if smoke_status == "passed":
+                    st.success(
+                        "Geçici test işlemleri başarılı; test kayıtları geri alındı "
+                        "ve tabloların boş kaldığı doğrulandı. "
+                        "Sınanan alanlar: " + ", ".join(verified_modules) + ". "
+                        "Bu test canlı uygulamanın PostgreSQL'e geçtiği anlamına gelmez."
+                    )
+                elif smoke_status == "schema_mismatch":
+                    st.error(
+                        "Tablo yapısı doğrulaması geçmediği için kayıt testi durduruldu. "
+                        "Herhangi bir deneme kaydı oluşturulmadı."
+                    )
+                else:
+                    st.error(
+                        "Test işlemi tamamlanamadı veya geri alma doğrulanamadı. "
+                        "Geçici kayıt işlemi için commit yapılmadı. "
+                        "Canlı veritabanını değiştirmeyin."
+                    )
+
         with st.expander("Supabase test tablolarını güvenli oluştur"):
             st.warning(
                 "Yalnızca ct_staging test şemasında boş uygulama tabloları oluşturur. "
