@@ -177,3 +177,39 @@ backups, tax/currency accounting, or a cutover. Other application screens
 are still SQLite backed. Do not enable real business data until security,
 durability and end-to-end PostgreSQL backend integration are independently
 validated. The pilot itself does not populate persistent example records.
+
+
+## Stage 6: isolated persistent fictional PostgreSQL CRM screen
+
+After successful, explicitly approved rollback-only business workflow testing,
+the first *persistent* PostgreSQL application interface is the opt-in CRM
+sandbox at **Sistem Yönetimi > Sistem Sağlığı > PostgreSQL CRM pilot ekranı
+(kalıcı kurgu veri)**. It is ADMIN only and still uses only ct_staging.
+
+The operator can list exact marker-labeled fake CRM records and, after checking
+an explicit consent box, create a fictional customer, product, opportunity and
+task in one PostgreSQL transaction. A stage change Lead -> Numune and task status
+Açık -> Tamamlandı is atomic. Deleting one selected sandbox set checks IDs
+and the fixed fictional names before each deletion; FK violations abort the
+entire transaction. Generated negative IDs do not consume PostgreSQL identity
+sequences. Real customer names, contact details and passwords are neither
+collected by this pilot nor embedded in the fictional records.
+
+**Unlike Stage 5's rollback smoke test, the fictional CRM set is deliberately
+committed and remains until manually deleted.** The operator should refresh
+the list after a Streamlit restart to confirm persistent PostgreSQL storage,
+then delete test data after completing the experiment. No automatic cleanup of
+unrelated ct_staging rows, and no DROP/TRUNCATE is supported.
+
+Important boundaries:
+- Live operational dashboards, management reports, role portals, security
+  audit and AI manager continue to use SQLite. They are NOT migrated.
+- The existing DATABASE_URL is read only within the already authenticated
+  administrator System Health panel. Database writes are strictly qualified
+  with ct_staging and restricted to fixed fictional identifiers.
+- This is an early ORM/adapter replacement **pilot**, not a production database
+  switch or authorization to enter real data. Before a real cutover, isolate
+  the staging database principal to least-privilege ct_staging permissions,
+  unify all modules behind the database adapter, verify audit logging and
+  user authorization, persistent backups/restores, row/amount reconciliation,
+  concurrency behaviour, and controlled rollback.
