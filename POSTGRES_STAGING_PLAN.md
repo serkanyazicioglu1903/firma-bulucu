@@ -122,3 +122,27 @@ modules (CRM, finance, warehouse, reports, audit/permissions), verify isolated
 staging backup/restore and restart persistence, review actual currency/stock
 totals, and approve a separately planned production cutover. **No production
 database change is authorized by this Stage 4 PR.**
+
+
+## Stage 4a: paired Streamlit backup and JSON verification manifest
+
+In the ADMIN-only **Sistem Yönetimi → Yedekleme** tab, selecting
+**Güvenli yedeği hazırla** now prepares a *new*, consistent SQLite snapshot
+plus a JSON verification manifest for the **same exact bytes**. It displays
+SHA256, SQLite integrity status, table counts and total rows. The manifest
+records SHA256, filename, byte size, table counts, integrity check and FK
+status; it contains no customer/product/financial records. If foreign-key
+validation fails, keep the backup but STOP any migration until reviewed.
+
+Download **both** the .db backup and its matching .db.json manifest; save
+them privately together. The earlier backup taken before this feature does
+not become retroactively verified by a later manifest. Re-download a new
+paired snapshot when ready. An offline importer now accepts either
+manifest-verified .db or .sqlite3 backups, and continues to refuse an
+unmanifested raw live database and any schema or FK mismatch.
+
+This does not prove that the app's hosted database is permanent storage or
+that the snapshot contains approved production records instead of demo
+records. No hosted backup is transmitted to GitHub or ChatGPT. Do not
+activate PostgreSQL writes or upload sensitive data to staging without
+separate provenance, security and migration approval.
