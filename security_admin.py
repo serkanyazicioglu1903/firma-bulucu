@@ -603,6 +603,58 @@ def render_system_admin(db_path):
                         "Supabase yetkilerini ve veritabanı bağlantısını kontrol et."
                     )
 
+        with st.expander("PostgreSQL şirket iş akışı pilotu (geri alınır)"):
+            st.info(
+                "Yalnızca ct_staging için kurgusal verilerle CRM → teklif ve maliyet "
+                "→ satın alma → kısmi mal kabul → kalite HOLD → tahsilat → finans "
+                "bağlantılarını doğrular. Bütün işlemler geri alınır; "
+                "gerçek müşteri ve şirket kayıtlarını taşımaz. "
+                "Canlı SQLite uygulaması değişmez."
+            )
+            business_confirm = st.checkbox(
+                "Yalnızca PostgreSQL test ortamında geri alınacak kurgusal "
+                "iş akışını çalıştırmayı onaylıyorum.",
+                key="ct_pg_business_confirm",
+            )
+            if st.button(
+                "Kurgusal iş akışını test et",
+                key="ct_pg_business_pilot_run",
+                disabled=not business_confirm or not db_url,
+            ):
+                from scripts.staging_business_pilot import run_staging_business_pilot
+                status, result = run_staging_business_pilot(db_url)
+                if status == "passed":
+                    st.success(
+                        "PostgreSQL iş akışı testleri başarılı; "
+                        "bütün kurgusal kayıtlar geri alındı."
+                    )
+                    st.caption("Kontrol edilen adımlar: " + ", ".join(result["steps"]))
+                    col_a, col_b, col_c = st.columns(3)
+                    col_a.metric("Kısmi mal kabul (kg)", f'{result["received_kg"]:,.0f}')
+                    col_b.metric("Kalite HOLD (kg)", f'{result["hold_kg"]:,.0f}')
+                    col_c.metric("Kullanılabilir stok (kg)", f'{result["available_kg"]:,.0f}')
+                    st.caption(
+                        "Tamamı kurgusal sonuçlar. "
+                        f'Kalan sipariş: {result["remaining_kg"]:,.0f} kg · '
+                        f'Teklif katkısı: {result["profit_eur_total"]:,.2f} EUR · '
+                        f'Açık alacak: {result["receivable_eur"]:,.2f} EUR · '
+                        f'Kur çevrilmiş açık borç: {result["payable_eur"]:,.2f} EUR.'
+                    )
+                    st.info(
+                        "Bu test veritabanının iş kurallarını sınar; "
+                        "uygulamanın diğer modülleri hâlâ SQLite ile çalışıyor."
+                    )
+                elif status == "schema_mismatch":
+                    st.error(
+                        "Test başlamadı: PostgreSQL test tablosu yapısını "
+                        "önce salt okunur şekilde doğrula."
+                    )
+                else:
+                    st.error(
+                        "Pilot iş akışı tamamlanamadı. Kurgusal işlemler geri alındı. "
+                        "Supabase bağlantısını ve test yetkilerini kontrol et."
+                    )
+
         with st.expander("Supabase test tablolarını güvenli oluştur"):
             st.warning(
                 "Yalnızca ct_staging test şemasında boş uygulama tabloları oluşturur. "
