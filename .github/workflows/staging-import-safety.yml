@@ -1,0 +1,32 @@
+name: Offline staging import safety
+
+on:
+  pull_request:
+    paths:
+      - "scripts/staging_import.py"
+      - "scripts/backup_sqlite.py"
+      - "scripts/build_pg_schema.py"
+      - "tests/test_staging_import.py"
+      - ".github/workflows/staging-import-safety.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/staging_import.py"
+      - "scripts/backup_sqlite.py"
+      - "scripts/build_pg_schema.py"
+      - "tests/test_staging_import.py"
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test verified backups (no network credentials)
+        run: python -m unittest tests.test_staging_import -v
