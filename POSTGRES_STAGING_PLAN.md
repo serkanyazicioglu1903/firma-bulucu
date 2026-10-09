@@ -45,3 +45,9 @@ Run `python scripts/build_pg_schema.py --output postgres_staging_schema.sql` to 
 - Next implementation: reviewed, repeatable, staging-only PostgreSQL importer, FK/identity handling, and full record reconciliation. **Do not run an importer or switch the production app yet.**
 - Rotate any database or app passwords exposed in screenshots; update Streamlit Secrets with the new values. Never share connection strings with passwords in screenshots.
 - Product catalog import from `planetgida.com.tr` and `asgidakimyasallari.com` is deferred until staging migration and product master deduplication are complete.
+
+## Stage 2: empty test tables created (2026-10-09)
+- The application reported **27 tables in `ct_staging`**, including the 26 expected application table names and the existing `migration_check` table. This is verified through the administrator's read-only UI inspection; it does not establish column or foreign-key correctness.
+- The business application still uses SQLite. The 18 demo records must **not** be imported into PostgreSQL as real company data.
+- This change adds **Tablo yapısı ve ilişkileri doğrula** under System Health: read-only checking of each expected column name, mapped type, nullability, identity status, PK, unique and FK metadata. No business table rows or passwords are read.
+- Before any cutover, run this check against Supabase and resolve discrepancies; then test transactions and business workflows separately.
