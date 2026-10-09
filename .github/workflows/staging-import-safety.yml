@@ -6,13 +6,10 @@ on:
       - "scripts/staging_import.py"
       - "scripts/backup_sqlite.py"
       - "scripts/build_pg_schema.py"
+      - "scripts/backup_report.py"
+      - "security_admin.py"
       - "tests/test_staging_import.py"
       - "tests/test_backup_report.py"
-      - "scripts/backup_report.py"
-      - "security_admin.py"
-      - "tests/test_backup_report.py"
-      - "scripts/backup_report.py"
-      - "security_admin.py"
       - ".github/workflows/staging-import-safety.yml"
   push:
     branches: [main]
@@ -20,7 +17,10 @@ on:
       - "scripts/staging_import.py"
       - "scripts/backup_sqlite.py"
       - "scripts/build_pg_schema.py"
+      - "scripts/backup_report.py"
+      - "security_admin.py"
       - "tests/test_staging_import.py"
+      - "tests/test_backup_report.py"
 
 permissions:
   contents: read
