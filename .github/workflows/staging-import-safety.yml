@@ -7,6 +7,12 @@ on:
       - "scripts/backup_sqlite.py"
       - "scripts/build_pg_schema.py"
       - "tests/test_staging_import.py"
+      - "tests/test_backup_report.py"
+      - "scripts/backup_report.py"
+      - "security_admin.py"
+      - "tests/test_backup_report.py"
+      - "scripts/backup_report.py"
+      - "security_admin.py"
       - ".github/workflows/staging-import-safety.yml"
   push:
     branches: [main]
@@ -29,4 +35,4 @@ jobs:
         with:
           python-version: "3.12"
       - name: Test verified backups (no network credentials)
-        run: python -m unittest tests.test_staging_import -v
+        run: python -m unittest tests.test_staging_import tests.test_backup_report -v
