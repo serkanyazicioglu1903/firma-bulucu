@@ -753,6 +753,117 @@ def render_system_admin(db_path):
                 "Gerçek müşteri bilgilerini henüz burada kullanma."
             )
 
+        with st.expander("PostgreSQL operasyon ve finans pilotu (kalıcı kurgu veri)"):
+            st.warning(
+                "Yalnızca ct_staging üzerinde tamamen KURGUSAL satın alma, "
+                "sevkiyat, stok, kalite HOLD ve ödeme kayıtları oluşturur. "
+                "İşlemler PostgreSQL test ortamında kalıcıdır; silmek için "
+                "aşağıdaki seçili set silme işlemini kullan. "
+                "Gerçek firma verileri girilmez. Canlı SQLite değişmez."
+            )
+            from scripts.staging_ops_adapter import (
+                list_ops_pilots, create_ops_pilot, advance_ops_pilot,
+                delete_ops_pilot,
+            )
+            ops_confirm = st.checkbox(
+                "Yalnızca ct_staging içinde kurgusal, kalıcı satın alma/stok/"
+                "finans test kayıtları oluşturmaya ve yönetmeye onay veriyorum.",
+                key="ct_pg_ops_confirm",
+            )
+            if st.button(
+                "PostgreSQL operasyon kayıtlarını listele",
+                key="ct_pg_ops_list", disabled=not db_url,
+            ):
+                ops_status, ops_items = list_ops_pilots(db_url)
+                if ops_status == "ok":
+                    st.session_state["ct_pg_ops_items"] = ops_items
+                    st.success("Kurgusal operasyon kayıtları okundu.")
+                else:
+                    st.session_state.pop("ct_pg_ops_items", None)
+                    st.error("PostgreSQL test kayıtları okunamadı.")
+
+            if st.button(
+                "Kurgusal satın alma seti oluştur (kalıcı)",
+                key="ct_pg_ops_create",
+                disabled=not db_url or not ops_confirm,
+            ):
+                ops_status, _ = create_ops_pilot(db_url)
+                if ops_status == "created":
+                    st.success("Kurgusal sipariş, sevkiyat ve finans temeli oluşturuldu.")
+                else:
+                    st.error("Kurgusal operasyon seti oluşturulamadı.")
+                ls_status, ops_items = list_ops_pilots(db_url)
+                if ls_status == "ok":
+                    st.session_state["ct_pg_ops_items"] = ops_items
+
+            ops_items = st.session_state.get("ct_pg_ops_items", [])
+            if ops_items:
+                st.dataframe(
+                    pd.DataFrame(ops_items).rename(columns={
+                        "id": "Kurgusal ID", "stage": "Son aşama",
+                        "ordered_kg": "Sipariş (kg)",
+                        "received_kg": "Mal kabul (kg)",
+                        "hold_kg": "Kalite HOLD (kg)",
+                        "available_kg": "Kullanılabilir (kg)",
+                        "remaining_kg": "Sipariş kalan (kg)",
+                        "payable_eur": "Açık borç (EUR)",
+                        "bank_eur": "Kurgusal banka (EUR)",
+                    }), width="stretch", hide_index=True
+                )
+                choices = [int(x["id"]) for x in ops_items]
+                selected_ops = st.selectbox(
+                    "Kurgusal operasyon seti",
+                    options=choices,
+                    format_func=lambda x: "Deneme operasyonu " + str(-x),
+                    key="ct_pg_ops_selected",
+                )
+                selected_row = next(x for x in ops_items if x["id"] == selected_ops)
+                next_step = {
+                    "Sipariş": ("receive", "Kısmi mal kabulünü işle (600 kg)"),
+                    "Mal kabul": ("hold", "Kalite HOLD uygula (100 kg)"),
+                    "Kalite HOLD": ("pay", "Kurgusal tedarikçi ödemesi (500 EUR)"),
+                }.get(selected_row["stage"])
+                a, b = st.columns(2)
+                with a:
+                    if next_step and st.button(
+                        next_step[1], key="ct_pg_ops_advance",
+                        disabled=not ops_confirm or not db_url,
+                    ):
+                        outcome = advance_ops_pilot(db_url, selected_ops, next_step[0])
+                        if outcome == "updated":
+                            st.success("Kurgusal operasyon adımı PostgreSQL'e kaydedildi.")
+                        else:
+                            st.error("İşlem tamamlanamadı; işlem geri alındı.")
+                        list_status, new_items = list_ops_pilots(db_url)
+                        if list_status == "ok":
+                            st.session_state["ct_pg_ops_items"] = new_items
+                with b:
+                    if st.button(
+                        "Seçili kurgusal operasyonu sil",
+                        key="ct_pg_ops_delete",
+                        disabled=not ops_confirm or not db_url,
+                    ):
+                        outcome = delete_ops_pilot(db_url, selected_ops)
+                        if outcome == "deleted":
+                            st.success("Seçili kurgusal operasyon seti silindi.")
+                        else:
+                            st.error("Kurgusal set silinemedi; hiçbir kısmi silme yapılmadı.")
+                        list_status, new_items = list_ops_pilots(db_url)
+                        if list_status == "ok":
+                            st.session_state["ct_pg_ops_items"] = new_items
+            else:
+                st.caption(
+                    "Henüz listelenmiş deneme operasyonu yok. "
+                    "Önce listele veya açık onayla bir set oluştur."
+                )
+            st.info(
+                "Sıra: 1. kurgusal sipariş oluştur, 2. mal kabul, "
+                "3. kalite HOLD, 4. ödeme, 5. kayıtları yeniden listele "
+                "ve ardından test setini sil. "
+                "Uygulamayı yeniden açınca listeleyerek kalıcılığı kontrol edebilirsin. "
+                "Bu ekran canlı satın alma, stok ve finans modüllerinin yerine geçmez."
+            )
+
         with st.expander("Supabase test tablolarını güvenli oluştur"):
             st.warning(
                 "Yalnızca ct_staging test şemasında boş uygulama tabloları oluşturur. "

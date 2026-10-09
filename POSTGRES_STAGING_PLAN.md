@@ -213,3 +213,41 @@ Important boundaries:
   unify all modules behind the database adapter, verify audit logging and
   user authorization, persistent backups/restores, row/amount reconciliation,
   concurrency behaviour, and controlled rollback.
+
+
+## Stage 7: isolated PostgreSQL procurement, stock, quality and payment sandbox
+
+This is a SECOND opt-in, ADMIN-only **persistent fictional** PostgreSQL
+workflow panel under System Health, separate from the Stage 6 CRM pilot.
+The user has confirmed that existing SQLite records are **demo only**.
+The live operational screens, reports, permissions/audit and SQLite database
+are unchanged. No real company names or financial figures are entered.
+
+Stage 7's fixed fictional workflow per randomly generated negative ID:
+
+1. Create linked product, warehouse, EUR purchase order (1,000 kg,
+   EUR 2.25/kg), 600 kg planned shipment, EUR 2,250 payable, and a
+   fictional EUR 10,000 cash account.
+2. Receive the one shipment: mark it received and persist a 600 kg lot in
+   a single transaction. A second receipt must not double-count.
+3. Apply quality HOLD to 100 kg: create a linked quality complaint and
+   mark the lot. Available = 600 - 100 = 500 kg; balance to receive = 400 kg.
+4. Post a fictional EUR 500 supplier payment and matching financial transaction
+   atomically. Payable open = EUR 1,750; fictional cash account = EUR 9,500.
+5. List/reload across Streamlit sessions to verify persistence. Delete exactly
+   the selected synthetic set, in foreign-key dependency order, in one transaction.
+
+Security characteristics: explicit administrator consent for persistent writes;
+schema-qualified ct_staging and parametrized SQL; TLS; fixed marked synthetic
+names and values; no free-text business input; lock + membership checks,
+optimistic state transitions, single transaction per step, guarded deletion
+of only the selected fictional ID, and no automatic data imports or migrations.
+Unexpected data relationships or errors stop and roll back the step. Raw
+DB errors and connection credentials are never surfaced in the UI.
+
+**This is not a production purchase/stock/finance implementation**. In particular
+it does not yet support general supplier onboarding, VAT, multi-currency cash
+accounting, role-based transaction posting across live modules, persistent
+audit trails, approved real-data entry, automated backups, or cutover.
+Before production, implement a shared adapter for ALL screens, verify
+least-privilege DB credentials and restoration, and separately approve cutover.
