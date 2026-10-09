@@ -3,3 +3,12 @@ __pycache__/
 *.db
 *.db-*
 .streamlit/secrets.toml
+
+# Never commit private backups, their manifests or local exports.
+*.sqlite3
+*.sqlite3.json
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+private_backups/
+backups/
