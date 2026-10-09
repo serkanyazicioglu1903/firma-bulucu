@@ -10,6 +10,8 @@ on:
       - "security_admin.py"
       - "tests/test_staging_import.py"
       - "tests/test_backup_report.py"
+      - "scripts/staging_business_pilot.py"
+      - "tests/test_staging_business_pilot.py"
       - ".github/workflows/staging-import-safety.yml"
   push:
     branches: [main]
@@ -21,6 +23,8 @@ on:
       - "security_admin.py"
       - "tests/test_staging_import.py"
       - "tests/test_backup_report.py"
+      - "scripts/staging_business_pilot.py"
+      - "tests/test_staging_business_pilot.py"
 
 permissions:
   contents: read
@@ -35,4 +39,4 @@ jobs:
         with:
           python-version: "3.12"
       - name: Test verified backups (no network credentials)
-        run: python -m unittest tests.test_staging_import tests.test_backup_report -v
+        run: python -m unittest tests.test_staging_import tests.test_backup_report tests.test_staging_business_pilot -v
