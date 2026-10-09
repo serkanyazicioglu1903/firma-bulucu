@@ -12,6 +12,8 @@ on:
       - "tests/test_backup_report.py"
       - "scripts/staging_business_pilot.py"
       - "tests/test_staging_business_pilot.py"
+      - "scripts/staging_crm_adapter.py"
+      - "tests/test_staging_crm_adapter.py"
       - ".github/workflows/staging-import-safety.yml"
   push:
     branches: [main]
@@ -25,6 +27,8 @@ on:
       - "tests/test_backup_report.py"
       - "scripts/staging_business_pilot.py"
       - "tests/test_staging_business_pilot.py"
+      - "scripts/staging_crm_adapter.py"
+      - "tests/test_staging_crm_adapter.py"
 
 permissions:
   contents: read
@@ -39,4 +43,4 @@ jobs:
         with:
           python-version: "3.12"
       - name: Test verified backups (no network credentials)
-        run: python -m unittest tests.test_staging_import tests.test_backup_report tests.test_staging_business_pilot -v
+        run: python -m unittest tests.test_staging_import tests.test_backup_report tests.test_staging_business_pilot tests.test_staging_crm_adapter -v
