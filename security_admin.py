@@ -603,6 +603,43 @@ def render_system_admin(db_path):
                         "Supabase yetkilerini ve veritabanı bağlantısını kontrol et."
                     )
 
+        with st.expander("PostgreSQL örnek işlem testi (her zaman geri alınır)"):
+            st.info(
+                "Yalnızca ct_staging test şemasında tamamen hayali müşteri, ürün, "
+                "teklif, sevkiyat, stok ve finans kayıtlarıyla işlemleri sınar. "
+                "Tüm test kayıtları aynı işlem içinde geri alınır. "
+                "Canlı SQLite veritabanını veya gerçek şirket kayıtlarını değiştirmez."
+            )
+            smoke_confirm = st.checkbox(
+                "ct_staging içinde geçici örnek kayıtlarla test yapılmasını "
+                "ve tüm işlemlerin geri alınmasını onaylıyorum.",
+                key="ct_pg_transaction_smoke_confirm",
+            )
+            if st.button(
+                "Örnek kayıt işlemlerini test et ve geri al",
+                key="ct_pg_transaction_smoke_run",
+                disabled=not smoke_confirm or not db_url,
+            ):
+                from scripts.staging_transaction_smoke import run_transactional_staging_smoke
+                smoke_status, smoke_modules = run_transactional_staging_smoke(db_url)
+                if smoke_status == "passed":
+                    st.success(
+                        "PostgreSQL test işlemleri başarılı; tüm hayali kayıtlar "
+                        "geri alındı ve silindikleri doğrulandı. Test edilen alanlar: "
+                        + ", ".join(smoke_modules)
+                        + ". Canlı sistem hâlâ SQLite kullanıyor."
+                    )
+                elif smoke_status == "schema_mismatch":
+                    st.error(
+                        "Test yapılmadı: PostgreSQL şema doğrulaması başarılı değil. "
+                        "Önce tablo yapısını tekrar kontrol edin."
+                    )
+                else:
+                    st.error(
+                        "Test tamamlanamadı veya doğrulanamadı. İşlem geri alındıysa "
+                        "da test başarılı sayılmadı. Canlı geçiş yapılmamalı."
+                    )
+
         with st.expander("Supabase test tablolarını güvenli oluştur"):
             st.warning(
                 "Yalnızca ct_staging test şemasında boş uygulama tabloları oluşturur. "
