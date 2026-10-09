@@ -58,3 +58,9 @@ Run `python scripts/build_pg_schema.py --output postgres_staging_schema.sql` to 
 - All test writes run in a **single forced-rollback transaction**, with explicit negative IDs to avoid consuming identity sequences. It verifies its test IDs no longer exist afterward.
 - This is a technical database CRUD smoke test, **not** a production backend switch, full business-rule test, or import of real/demo company data.
 - Run only after explicit administrator confirmation in the System Health UI. The current SQLite-backed production app remains unchanged.
+
+## Stage 3: rollback-only synthetic PostgreSQL workflow smoke test (2026-10-09)
+- The administrator confirmed 26 expected ct_staging application tables pass read-only column, nullability, identity, PK, UNIQUE and FK metadata validation.
+- A new **explicit, separately confirmed** System Health action can exercise temporary fictional rows across CRM, product, quote, task, purchasing, shipment, inventory, quality, receivables, and payables.
+- The test uses a single PostgreSQL transaction and **forces ROLLBACK on success or failure**, then queries that the temporary IDs are absent. It does not import the 18 SQLite demo records or alter the active application backend.
+- Pending: run this test using the app, inspect the result, implement the shared PostgreSQL data adapter for the normal UI, and validate restart persistence and a backup/restore procedure before cutover.
