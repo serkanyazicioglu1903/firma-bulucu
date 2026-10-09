@@ -42,6 +42,8 @@ class FakeCursor:
         if sql.startswith(("INSERT ", "UPDATE ", "DELETE ")):
             if not self.connection.in_tx:
                 raise AssertionError("DML outside rollback transaction")
+            if self.connection.simulate_write_failure:
+                raise RuntimeError("simulated DB write failure")
         if sql.startswith('INSERT INTO "ct_staging"."customers"'):
             self.connection.marker = params[1].removesuffix("_CUSTOMER")
         if sql.startswith('DELETE FROM "ct_staging"."tasks"'):
@@ -74,6 +76,7 @@ class FakeConnection:
         self.rolled_back = False
         self.deleted_task = False
         self.marker = None
+        self.simulate_write_failure = False
 
     def __enter__(self):
         return self
@@ -143,6 +146,23 @@ class PostgresSmokeTests(unittest.TestCase):
         for sql, params, _ in conn.sql:
             if sql.startswith("INSERT INTO"):
                 self.assertEqual(params[0] < 0, True)
+
+    def test_failed_write_rolls_back_without_reporting_success(self):
+        conn = FakeConnection()
+        conn.simulate_write_failure = True
+        with patch(
+            "scripts.staging_transaction_smoke.validate_staging_structure",
+            return_value=("ok", []),
+        ), patch.dict(
+            sys.modules,
+            {"psycopg": types.SimpleNamespace(connect=lambda *_a, **_k: conn)},
+        ):
+            result = run_transactional_staging_smoke(
+                "postgresql://user:hidden-password@example.org/db"
+            )
+        self.assertEqual(result, ("failed", []))
+        self.assertTrue(conn.rolled_back)
+        self.assertFalse(conn.in_tx)
 
     def test_exception_is_sanitized(self):
         def fail(*_args, **_kwargs):
