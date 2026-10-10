@@ -68,6 +68,33 @@ class ControlTowerSqliteIntegrationTests(unittest.TestCase):
             status = conn.execute("SELECT status FROM purchase_orders WHERE id=1").fetchone()[0]
         self.assertEqual(status, "Kısmi Sevk")
 
+    def test_quality_hold_reduces_sellable_stock_without_changing_physical_quantity(self):
+        self.prepare_order()
+        self.assertTrue(ct.receive_shipment_to_stock(1)[0])
+        self.sql(
+            "INSERT INTO quality_cases "
+            "(id,case_no,opened_date,supplier,product_id,product_name,"
+            "inventory_lot_id,purchase_order_id,shipment_id,affected_quantity_kg,description)"
+            " VALUES (1,'TEST-QA','2026-10-10','TEST SUPPLIER',1,'TEST PRODUCT',"
+            "1,1,1,100,'isolated quality hold test')"
+        )
+        self.sql(
+            "UPDATE inventory_lots SET quality_status='HOLD',"
+            "quality_case_id=1,quality_hold_kg=100 WHERE id=1"
+        )
+        stock = ct.stock_snapshot().iloc[0]
+        self.assertEqual(float(stock["available_kg"]), 600)
+        self.assertEqual(float(stock["quality_hold_kg"]), 100)
+        self.assertEqual(float(stock["net_available_kg"]), 500)
+        self.assertEqual(float(stock["projected_stock_kg"]), 900)
+        self.assertEqual(len(ct.quality_case_summary()), 1)
+        self.sql(
+            "UPDATE inventory_lots SET quality_status='Released',"
+            "quality_hold_kg=0 WHERE id=1"
+        )
+        released = ct.stock_snapshot().iloc[0]
+        self.assertEqual(float(released["net_available_kg"]), 600)
+
     def test_payable_payment_updates_bank_and_ledger_once(self):
         self.prepare_order()
         self.assertTrue(ct.receive_shipment_to_stock(1)[0])
