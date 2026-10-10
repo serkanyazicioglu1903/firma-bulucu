@@ -32,6 +32,8 @@ class SecurePostgresTransportTests(unittest.TestCase):
                 "postgresql://admin:pw@127.0.0.1:5432/ct_ci_control_tower",
                 "postgresql://ct_ci:pw@127.0.0.1:6543/ct_ci_control_tower",
                 "postgresql://ct_ci:pw@192.168.1.1:5432/ct_ci_control_tower",
+                "postgresql://ct_ci:pw@127.0.0.1:5432/ct_ci_control_tower?host=remote.example.com",
+                "postgresql://ct_ci:pw@127.0.0.1:5432/ct_ci_control_tower?hostaddr=192.168.5.1",
                 "not-a-db",
             ):
                 with self.subTest(url=url):
