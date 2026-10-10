@@ -268,8 +268,9 @@ def advance_ops_pilot(url, identifier, step):
                         _one(cur,
                              'SELECT id FROM "ct_staging"."quality_cases" '
                              'WHERE id=%s AND case_no=%s '
-                             'AND inventory_lot_id=%s FOR UPDATE',
-                             (identifier,n["QUALITY"],identifier),"quality")
+                             'AND inventory_lot_id=%s '
+                             'AND affected_quantity_kg=%s FOR UPDATE',
+                             (identifier,n["QUALITY"],identifier,HOLD_KG),"quality")
                         _one(cur,
                              'UPDATE "ct_staging"."payables" SET paid_amount=%s,'
                              'status=%s WHERE id=%s AND purchase_order_id=%s '
