@@ -1,4 +1,7 @@
 """Every pytest test gets an isolated database, never the user's application file."""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 import control_tower
 
