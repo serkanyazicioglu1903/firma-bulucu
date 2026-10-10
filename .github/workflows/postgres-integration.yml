@@ -1,0 +1,61 @@
+name: Isolated real PostgreSQL integration
+
+on:
+  pull_request:
+    paths:
+      - "scripts/postgres_connection.py"
+      - "scripts/postgres_operational_write.py"
+      - "scripts/postgres_operational_read.py"
+      - "scripts/postgres_live_schema.py"
+      - "scripts/staging_validate.py"
+      - "scripts/build_pg_schema.py"
+      - "tests/test_postgres_live_integration.py"
+      - ".github/workflows/postgres-integration.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/postgres_connection.py"
+      - "scripts/postgres_operational_write.py"
+      - "scripts/postgres_operational_read.py"
+      - "scripts/postgres_live_schema.py"
+      - "scripts/staging_validate.py"
+      - "scripts/build_pg_schema.py"
+      - "tests/test_postgres_live_integration.py"
+      - ".github/workflows/postgres-integration.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  disposable-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ct_ci
+          POSTGRES_PASSWORD: ci-dummy-only
+          POSTGRES_DB: ct_ci_control_tower
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ct_ci -d ct_ci_control_tower"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CT_LOCAL_POSTGRES_TEST: "1"
+      AS_CONTROL_TOWER_PG_WRITES_ENABLED: "1"
+      CT_TEST_DATABASE_URL: "postgresql://ct_ci:ci-dummy-only@127.0.0.1:5432/ct_ci_control_tower"
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install application dependencies
+        run: pip install -r requirements.txt
+      - name: Execute real PostgreSQL end-to-end test on disposable CI database
+        run: python -m unittest tests.test_postgres_live_integration -v
