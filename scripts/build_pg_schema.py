@@ -110,7 +110,7 @@ def foreign_key_sql(conn, table):
 # in reports while keeping all parameter values bound by the driver.
 DATE_HELPER_SQL = """
 CREATE OR REPLACE FUNCTION ct_julianday(value text) RETURNS double precision
-LANGUAGE plpgsql IMMUTABLE STRICT SET search_path TO pg_catalog AS $$
+LANGUAGE plpgsql STABLE STRICT SET search_path TO pg_catalog AS $$
 BEGIN
     IF value = '' THEN RETURN NULL; END IF;
     RETURN EXTRACT(EPOCH FROM value::timestamp) / 86400.0 + 2440587.5;

@@ -37,8 +37,13 @@ def postgres_sql(sql):
     """Parse SQL rather than replacing question marks inside literals/comments."""
     import sqlglot
     from sqlglot import exp
-    tree = sqlglot.parse_one(sql, read='sqlite')
+    statements = sqlglot.parse(sql, read='sqlite')
+    if len(statements) != 1 or not isinstance(statements[0], (exp.Select, exp.Union, exp.Insert, exp.Update, exp.Delete)):
+        raise ValueError('Application queries must be a single SELECT/INSERT/UPDATE/DELETE statement.')
+    tree = statements[0]
     def adapt(node):
+        if isinstance(node, exp.Round) and node.args.get("decimals") is not None:
+            node.set("this", exp.Cast(this=node.this, to=exp.DataType.build("DECIMAL")))
         if isinstance(node, exp.Date) and node.this == exp.Literal.string('now'):
             return exp.Cast(this=exp.CurrentDate(), to=exp.DataType.build('TEXT'))
         if isinstance(node, exp.Anonymous) and node.name.upper() == 'JULIANDAY':
@@ -158,7 +163,7 @@ def connect(db_path):
 
 def frame(conn, sql, params=()):
     cur = conn.execute(sql, params)
-    return pd.DataFrame.from_records([dict(row) for row in cur.fetchall()], columns=[c[0] for c in cur.description])
+    return pd.DataFrame.from_records([dict(row) for row in cur.fetchall()], coerce_float=True, columns=[c[0] for c in cur.description])
 
 
 def query_df(db_path, sql, params=()):
@@ -173,14 +178,23 @@ def table_names(conn):
 
 
 def validate_schema(db_path):
-    """Read-only check, including all current columns; no fallback or auto-seed."""
-    from scripts.build_pg_schema import sqlite_schema
-    with connect(db_path) as conn, sqlite_schema() as expected:
-        actual = {(r['table_name'], r['column_name']) for r in conn.execute(
-            'SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=current_schema()').fetchall()}
-        tables = [r[0] for r in expected.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
-        missing = [(t, r[1]) for t in tables for r in expected.execute(f'PRAGMA table_info("{t}")') if (t, r[1]) not in actual]
-        if missing:
-            raise RuntimeError('PostgreSQL şeması hazır değil. İncelenen şema/migrasyon ayrı uygulanmalı; otomatik değişiklik yapılmadı.')
-        if not conn.execute("SELECT to_regprocedure('ct_julianday(text)') AS helper").fetchone()['helper']:
-            raise RuntimeError('PostgreSQL tarih yardımcı işlevi eksik; şema güncellemesi gerekli.')
+    """Read-only structural check; no fallback or automatic migrations."""
+    from psycopg.rows import tuple_row
+    from scripts.staging_validate import expected_structure, read_structure, compare_structure
+    _, schema = pg_config()
+    with connect(db_path) as conn:
+        with conn.conn.cursor(row_factory=tuple_row) as cur:
+            cur.execute('SET TRANSACTION READ ONLY')
+            columns, constraints = read_structure(cur, schema)
+            differences = compare_structure(expected_structure(), columns, constraints)
+            if differences:
+                raise RuntimeError('PostgreSQL şeması hazır değil: ' + '; '.join(differences[:5]) +
+                                   '. Otomatik değişiklik yapılmadı.')
+            cur.execute("SELECT to_regprocedure('ct_julianday(text)')")
+            if not cur.fetchone()[0]:
+                raise RuntimeError('PostgreSQL tarih yardımcı işlevi eksik; şema güncellemesi gerekli.')
+            cur.execute("""SELECT COUNT(*) FROM pg_trigger
+                WHERE tgrelid='quotes'::regclass AND tgname='workflow_quote_frozen'
+                AND tgenabled IN ('O','A')""")
+            if cur.fetchone()[0] != 1:
+                raise RuntimeError('Siparişe bağlı teklif kilidi eksik veya devre dışı.')

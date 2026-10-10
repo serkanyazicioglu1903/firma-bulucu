@@ -96,6 +96,50 @@ def compare_structure(expected, actual_columns, actual_constraints):
     return sorted(differences)
 
 
+def read_structure(cur, schema):
+    """Read metadata using a native tuple-row PostgreSQL cursor."""
+    actual_columns = defaultdict(dict)
+    actual_constraints = defaultdict(list)
+    cur.execute(
+        "SELECT table_name, column_name, data_type, is_nullable, is_identity "
+        "FROM information_schema.columns WHERE table_schema = %s "
+        "ORDER BY table_name, ordinal_position",
+        (schema,),
+    )
+    for table, col, kind, nullable, identity in cur.fetchall():
+        actual_columns[table][col] = (
+            kind.lower(), nullable, identity
+        )
+    cur.execute(
+        "SELECT tbl.relname, con.contype, "
+        "(SELECT array_agg(att.attname ORDER BY k.ord) "
+        " FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) "
+        " JOIN pg_catalog.pg_attribute AS att "
+        " ON att.attrelid = con.conrelid AND att.attnum = k.attnum), "
+        "ref.relname, "
+        "(SELECT array_agg(att.attname ORDER BY k.ord) "
+        " FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord) "
+        " JOIN pg_catalog.pg_attribute AS att "
+        " ON att.attrelid = con.confrelid AND att.attnum = k.attnum) "
+        "FROM pg_catalog.pg_constraint AS con "
+        "JOIN pg_catalog.pg_class AS tbl ON tbl.oid = con.conrelid "
+        "JOIN pg_catalog.pg_namespace AS ns ON ns.oid = tbl.relnamespace "
+        "LEFT JOIN pg_catalog.pg_class AS ref ON ref.oid = con.confrelid "
+        "WHERE ns.nspname = %s AND con.contype IN ('p', 'u', 'f')",
+        (schema,),
+    )
+    for table, kind, columns, referenced, reference_columns in cur.fetchall():
+        actual_constraints[table].append(
+            (
+                kind,
+                tuple(columns or ()),
+                referenced if kind == "f" else None,
+                tuple(reference_columns or ()) if kind == "f" else (),
+            )
+        )
+    return actual_columns, actual_constraints
+
+
 def validate_staging_structure(url):
     """Read-only metadata check with safe, bounded public diagnostic messages."""
     if not url or not str(url).strip():
@@ -118,43 +162,7 @@ def validate_staging_structure(url):
         ) as conn:
             with conn.cursor() as cur:
                 cur.execute("SET TRANSACTION READ ONLY")
-                cur.execute(
-                    "SELECT table_name, column_name, data_type, is_nullable, is_identity "
-                    "FROM information_schema.columns WHERE table_schema = %s "
-                    "ORDER BY table_name, ordinal_position",
-                    (SCHEMA,),
-                )
-                for table, col, kind, nullable, identity in cur.fetchall():
-                    actual_columns[table][col] = (
-                        kind.lower(), nullable, identity
-                    )
-                cur.execute(
-                    "SELECT tbl.relname, con.contype, "
-                    "(SELECT array_agg(att.attname ORDER BY k.ord) "
-                    " FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) "
-                    " JOIN pg_catalog.pg_attribute AS att "
-                    " ON att.attrelid = con.conrelid AND att.attnum = k.attnum), "
-                    "ref.relname, "
-                    "(SELECT array_agg(att.attname ORDER BY k.ord) "
-                    " FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord) "
-                    " JOIN pg_catalog.pg_attribute AS att "
-                    " ON att.attrelid = con.confrelid AND att.attnum = k.attnum) "
-                    "FROM pg_catalog.pg_constraint AS con "
-                    "JOIN pg_catalog.pg_class AS tbl ON tbl.oid = con.conrelid "
-                    "JOIN pg_catalog.pg_namespace AS ns ON ns.oid = tbl.relnamespace "
-                    "LEFT JOIN pg_catalog.pg_class AS ref ON ref.oid = con.confrelid "
-                    "WHERE ns.nspname = %s AND con.contype IN ('p', 'u', 'f')",
-                    (SCHEMA,),
-                )
-                for table, kind, columns, referenced, reference_columns in cur.fetchall():
-                    actual_constraints[table].append(
-                        (
-                            kind,
-                            tuple(columns or ()),
-                            referenced if kind == "f" else None,
-                            tuple(reference_columns or ()) if kind == "f" else (),
-                        )
-                    )
+                actual_columns, actual_constraints = read_structure(cur, SCHEMA)
         differences = compare_structure(expected, actual_columns, actual_constraints)
         return ("mismatch", differences) if differences else ("ok", [])
     except Exception:

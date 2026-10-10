@@ -169,3 +169,18 @@ def test_postgres_dates_literals_and_connection_reuse(pg_order):
         assert conn.execute('SELECT name FROM customers WHERE id=?',(1,)).fetchone()[0]=='Postgres Test Customer'
         conn.rollback()
         assert conn.execute("SELECT COUNT(*) FROM customers WHERE name LIKE '%Postgres%'").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize('damage', [
+    'ALTER TABLE workflow_orders DROP CONSTRAINT workflow_orders_quote_id_key',
+    'ALTER TABLE quotes DISABLE TRIGGER workflow_quote_frozen',
+    'ALTER TABLE customers DROP COLUMN phone',
+])
+def test_postgres_startup_rejects_incomplete_schema(pg_order, damage):
+    with psycopg.connect(URL) as conn:
+        conn.execute('SET search_path TO ct_staging')
+        conn.execute(damage)
+    with pytest.raises(RuntimeError):
+        ct.init_db()
+    # Validation is read-only and never silently rebuilds damaged structures.
+    assert scalar('SELECT COUNT(*) FROM customers') == 1

@@ -35,3 +35,13 @@ def test_pg_schema_validation(monkeypatch,schema):
     monkeypatch.setenv('AS_CONTROL_TOWER_POSTGRES_SCHEMA',schema)
     with pytest.raises(ValueError):
         database.pg_config()
+
+
+@pytest.mark.parametrize('sql', ['SELECT 1; DELETE FROM customers', 'DROP TABLE customers', 'PRAGMA table_info(customers)'])
+def test_application_parser_rejects_schema_changes_and_multiple_statements(sql):
+    with pytest.raises(ValueError):
+        database.postgres_sql(sql)
+
+
+def test_postgres_round_uses_numeric_overload():
+    assert 'CAST(SUM(amount) AS DECIMAL)' in database.postgres_sql('SELECT ROUND(SUM(amount),2) FROM payables')
