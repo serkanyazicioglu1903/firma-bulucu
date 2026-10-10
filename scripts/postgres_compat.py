@@ -96,6 +96,13 @@ def translate_sql(sql):
     statement = _nested_call(statement, "min")
     statement = _nested_call(statement, "max")
     statement = _nested_call(statement, "round")
+    # SQLite preserves uppercase aliases such as PO / SKT, PostgreSQL folds
+    # unquoted aliases to lowercase and breaks UI dataframe column access.
+    statement = re.sub(
+        r"\\bAS\\s+(PO|SKT)\\b",
+        lambda match: 'AS "' + match.group(1) + '"',
+        statement, flags=re.I,
+    )
     statement = re.sub(r"\bdate\('now'\)", "CURRENT_DATE::text", statement, flags=re.I)
     # Input is checked-in SQL, not caller data. Replace positional '?' only
     # outside SQL string and double-quoted identifier literals.
