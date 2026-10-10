@@ -20,6 +20,7 @@ from security_admin import (
     authorize_write,
     can_access,
     current_role,
+    current_user,
     init_security_tables,
     login_gate,
     logout_button,
@@ -1269,7 +1270,37 @@ def stock_snapshot():
     return df
 
 
+
+def _postgres_transaction_message(status, label):
+    explanations = {
+        "ok": label + " PostgreSQL'e kaydedildi.",
+        "already_received_or_cancelled": "Sevkiyat zaten stoğa alındı veya iptal edilmiş.",
+        "over_receipt": "Sevkiyat miktarı kalan siparişi aşıyor.",
+        "overpayment": "Ödeme açık borç miktarını aşıyor.",
+        "over_collection": "Tahsilat açık alacak miktarını aşıyor.",
+        "duplicate_payment": "Bu banka ödeme referansı daha önce işlendi.",
+        "duplicate_collection": "Bu banka tahsilat referansı daha önce işlendi.",
+        "quality_hold_blocks_payment": "Açık kalite HOLD nedeniyle ödeme durduruldu.",
+        "currency_mismatch": "Para birimleri eşleşmiyor.",
+        "insufficient_funds": "Banka bakiyesi yetersiz.",
+        "forbidden": "Bu işlem için yetkiniz yok.",
+        "disabled": "PostgreSQL canlı yazma işlemi etkin değil.",
+        "invalid_id": "Önce geçerli bir banka / kayıt seçin.",
+        "reference_required": "Tekrarlı işlem riskini önlemek için banka referansı zorunlu.",
+        "failed": "PostgreSQL işleminde hata oluştu, işlem geri alındı.",
+    }
+    return status == "ok", explanations.get(status, "İşlem güvenli biçimde tamamlanamadı.")
+
 def receive_shipment_to_stock(shipment_id):
+    if postgres_url():
+        from scripts.postgres_operational_write import receive_shipment
+        user = current_user() or {}
+        result, _ = receive_shipment(
+            postgres_url(), current_role(), int(shipment_id),
+            actor=user.get("username"),
+        )
+        return _postgres_transaction_message(result, "Sevkiyat")
+
     with get_conn() as conn:
         row = conn.execute(
             """SELECT s.*, po.product_id, po.product_name, po.unit_price, po.currency,
@@ -1490,6 +1521,15 @@ def cash_forecast(base_currency="EUR", horizons=(30,60,90)):
 
 def record_receivable_payment(receivable_id, amount, transaction_date,
                               account_id, reference, notes):
+    if postgres_url():
+        from scripts.postgres_operational_write import collect_customer_payment
+        user = current_user() or {}
+        result, _ = collect_customer_payment(
+            postgres_url(), current_role(), int(receivable_id),
+            int(account_id) if account_id else 0, amount,
+            reference, str(transaction_date), actor=user.get("username"),
+        )
+        return _postgres_transaction_message(result, "Tahsilat")
     amount = float(amount or 0)
     if amount <= 0:
         return False, "Tahsilat tutarı sıfırdan büyük olmalı."
@@ -1565,6 +1605,15 @@ def record_receivable_payment(receivable_id, amount, transaction_date,
 
 def record_payable_payment(payable_id, amount, transaction_date,
                            account_id, reference, notes):
+    if postgres_url():
+        from scripts.postgres_operational_write import pay_supplier
+        user = current_user() or {}
+        result, _ = pay_supplier(
+            postgres_url(), current_role(), int(payable_id),
+            int(account_id) if account_id else 0, amount,
+            reference, str(transaction_date), actor=user.get("username"),
+        )
+        return _postgres_transaction_message(result, "Tedarikçi ödemesi")
     amount = float(amount or 0)
     if amount <= 0:
         return False, "Ödeme tutarı sıfırdan büyük olmalı."
