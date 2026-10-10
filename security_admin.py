@@ -573,6 +573,53 @@ def render_system_admin(db_path):
                     "Bağlantı ve Supabase yetkilerini kontrol edin."
                 )
 
+        with st.expander("🧪 PostgreSQL toplu kabul testi (geri alınır)"):
+            st.caption(
+                "Tek işlemde şema doğrulaması, geçici PostgreSQL kayıt testleri "
+                "ve CRM → teklif → satın alma → stok → kalite → finans "
+                "kurgusal iş akışını kontrol eder. Yalnız ct_staging "
+                "kullanılır; tüm kurgusal kayıt işlemleri geri alınır."
+            )
+            acceptance_confirm = st.checkbox(
+                "Sadece ct_staging içinde geri alınacak kurgusal test "
+                "kayıtlarını çalıştırmayı onaylıyorum.",
+                key="ct_pg_full_acceptance_confirm",
+            )
+            if st.button(
+                "Tüm PostgreSQL pilot testlerini çalıştır",
+                key="ct_pg_full_acceptance_run",
+                disabled=not acceptance_confirm or not db_url,
+            ):
+                from scripts.staging_acceptance import (
+                    ACKNOWLEDGEMENT, run_staging_acceptance,
+                )
+                with st.spinner("İzole PostgreSQL kabul testleri çalışıyor..."):
+                    acceptance = run_staging_acceptance(db_url, ACKNOWLEDGEMENT)
+                status = acceptance["status"]
+                if status == "passed":
+                    st.success(
+                        "PostgreSQL test şeması, geri alınan kayıt işlemleri "
+                        "ve kurgusal uçtan uca iş akışı başarılı."
+                    )
+                else:
+                    st.error(
+                        "PostgreSQL toplu testi tamamlanamadı: " + {
+                            "schema_failed": "tablo yapısı doğrulanamadı.",
+                            "transaction_failed": "geri alınan kayıt testi başarısız.",
+                            "business_failed": "kurgusal iş akışı başarısız.",
+                            "invalid_url": "bağlantı adresi geçersiz.",
+                            "confirmation_required": "açık onay gerekli.",
+                        }.get(status, "bağlantıyı ve test yetkilerini kontrol edin.")
+                    )
+                st.caption(
+                    "Başarılı aşamalar: " +
+                    (", ".join(acceptance["completed"]) or "henüz yok")
+                )
+                st.info(
+                    "Bu testler iş verilerini PostgreSQL'e taşımadı. "
+                    "AS Control Tower iş ekranları hâlâ SQLite kullanıyor."
+                )
+
         with st.expander("PostgreSQL işlem testleri (geri alınır)"):
             st.warning(
                 "Bu test yalnızca ct_staging üzerinde geçici ve tamamen kurgusal "
