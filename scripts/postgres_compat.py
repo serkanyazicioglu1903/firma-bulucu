@@ -46,6 +46,29 @@ def _nested_call(sql, function):
                     "(EXTRACT(EPOCH FROM NULLIF(CAST(" + argument +
                     " AS TEXT),'')::date::timestamp)/86400.0)"
                 )
+        elif function.lower() == "round":
+            # SQLite accepts ROUND(double precision, digits), PostgreSQL only
+            # supports the two-argument variant with NUMERIC input.
+            split, nested, in_quote = -1, 0, False
+            for index, c in enumerate(argument):
+                if c == "'":
+                    in_quote = not in_quote
+                if not in_quote:
+                    if c == "(": nested += 1
+                    elif c == ")": nested -= 1
+                    elif c == "," and nested == 0:
+                        split = index
+                        break
+            if split >= 0:
+                number = argument[:split]
+                digits = argument[split + 1:]
+                replacement = (
+                    "(ROUND(CAST(" + number + " AS NUMERIC), " +
+                    digits + "))::double precision"
+                )
+            else:
+                offset = pos
+                continue
         else:
             # SQLite MIN(x,y) and MAX(x,y) are scalar; PostgreSQL uses
             # LEAST/GREATEST, but one-argument MIN/MAX must stay aggregate.
@@ -72,6 +95,7 @@ def translate_sql(sql):
     statement = _nested_call(statement, "julianday")
     statement = _nested_call(statement, "min")
     statement = _nested_call(statement, "max")
+    statement = _nested_call(statement, "round")
     statement = re.sub(r"\bdate\('now'\)", "CURRENT_DATE::text", statement, flags=re.I)
     # Input is checked-in SQL, not caller data. Replace positional '?' only
     # outside SQL string and double-quoted identifier literals.
