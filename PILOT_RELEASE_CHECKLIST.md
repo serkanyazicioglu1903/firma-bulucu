@@ -60,6 +60,23 @@ customer rows, or alter the existing SQLite business screens. Authentication
 and the full transaction/write adapter must still be completed before any
 real customer or finance data enters PostgreSQL via the main app.
 
+## Transactional PostgreSQL core (code-only, NOT enabled)
+
+A new `scripts/postgres_operational_write.py` defines PostgreSQL `ct_app`
+operations for authenticated, role-restricted customer/product creation, PO
+creation, shipment planning and stock receipt, quality HOLD, AP invoice creation
+and supplier settlement. These use parametrized SQL, row-level locks, a
+single atomic PostgreSQL transaction per action, stock/amount checks, quality
+payment guard and replay-reference checks. Every unexpected DB failure is
+sanitized; tests use mocks, never the connected Supabase database.
+
+**Server-side writes are OFF by default:** every operation returns
+`disabled` unless `AS_CONTROL_TOWER_PG_WRITES_ENABLED=1` is explicitly set.
+Do **not** enable this until real PostgreSQL integration tests, bank/quality
+business-rule approval, multi-user permission audit, persistent backup/restore
+and all remaining modules are migrated. No application UI calls these write
+functions yet. There is no automatic dual-write, demo seed or backend switch.
+
 ## Release blockers (do not skip)
 
 1. Validate real PostgreSQL schema and integration against an **isolated, non-production** database. The offline adapter test is not a live PostgreSQL test.
