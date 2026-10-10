@@ -56,6 +56,28 @@ back to SQLite**, preventing silent split-brain records.
    substantial financial records. Confirm provider-managed encrypted backup
    and restore policy separately.
 
+## PostgreSQL operasyon mutabakatı — salt okunur
+
+**Sistem → 🔍 Operasyon Mutabakatı** runs ten fixed aggregate-only checks against
+the same `ct_app` data in one PostgreSQL REPEATABLE READ / READ ONLY
+transaction. The controls flag:
+
+- Received shipments without stock lots and unreceived shipments with lots;
+- Non-cancelled shipments over the PO quantity;
+- Invalid stock quantity/reservation/HOLD combinations;
+- HOLD lots without a matching quality case or inconsistent HOLD status;
+- Overpaid supplier invoices and overcollected customer receivables;
+- Reused bank-account transfer references and negative cash balances.
+
+The UI displays only safe counts, descriptions and severity to authenticated
+ADMINs on an explicit button click. It never returns customer identifiers or
+finance record details and never alters a ledger, quality case or lot. A
+zero-issue result validates **only these ten rules**; it is not a complete
+accounting reconciliation, authorization assessment or a backup restore drill.
+A finding requires manual investigation by the responsible business team.
+The checks are also tested on a disposable local PostgreSQL CI service, with
+fictional bad-stock input to establish that anomalies are detected.
+
 ## Critical limitations and rollback
 
 - The GitHub CI test verifies the code against PostgreSQL 16 but **does not

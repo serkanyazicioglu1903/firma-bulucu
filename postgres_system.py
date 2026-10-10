@@ -79,6 +79,7 @@ def render_postgres_system(url):
         [
             "💾 Yedekleme",
             "🩺 Sistem Sağlığı",
+            "🔍 Operasyon Mutabakatı",
             "🧾 Audit Log",
             "👥 Rol Yapısı",
         ],
@@ -110,6 +111,76 @@ def render_postgres_system(url):
                 )
             else:
                 st.error("PostgreSQL sağlık kontrolü başarısız; SQLite'a geçilmedi.")
+
+    elif section == "🔍 Operasyon Mutabakatı":
+        st.markdown("#### 🔍 Satın Alma, Stok, Kalite ve Finans Kontrolü")
+        st.caption(
+            "Supabase ct_app üzerinde 10 farklı tutarlılık kuralını "
+            "yalnızca okuyarak denetler. Sipariş veya finans kaydı oluşturmaz, "
+            "değiştirmez ve silmez. Firma detayları gösterilmez."
+        )
+        if st.button(
+            "İş akışlarının tutarlılığını kontrol et",
+            key="ct_pg_reconciliation_run",
+        ):
+            from scripts.postgres_reconciliation import (
+                check_operational_consistency,
+            )
+            with st.spinner("İş akışları salt okunur kontrol ediliyor..."):
+                result = check_operational_consistency(url)
+            status = result["status"]
+            if status not in ("ok", "issues_found"):
+                st.error(
+                    "Kontrol tamamlanamadı. PostgreSQL bağlantısı ve "
+                    "ct_app şemasını doğrulayın. Hiçbir kayıt değiştirilmedi."
+                )
+            else:
+                checks = result["checks"]
+                total_critical = sum(
+                    item["count"] for item in checks
+                    if item["severity"] == "critical"
+                )
+                total_warnings = sum(
+                    item["count"] for item in checks
+                    if item["severity"] == "warning"
+                )
+                if total_critical:
+                    st.error(
+                        f"{total_critical} kritik tutarsızlık tespit edildi. "
+                        "Gerçek stok ve finans işlemlerine devam etmeden "
+                        "kayıtları yetkili kullanıcıyla inceleyin."
+                    )
+                elif total_warnings:
+                    st.warning(
+                        f"{total_warnings} uyarı bulundu. Örneğin kredili "
+                        "banka hesabında negatif bakiye normal olabilir."
+                    )
+                else:
+                    st.success(
+                        "10 kontrolde tutarsızlık bulunmadı. Bu sonuç yalnızca "
+                        "incelenen kuralları doğrular; tam muhasebe mutabakatı "
+                        "veya yedekten geri yükleme testi değildir."
+                    )
+                st.dataframe(
+                    pd.DataFrame([
+                        {
+                            "Bölüm": item["area"],
+                            "Kontrol": item["label"],
+                            "Seviye": (
+                                "Kritik" if item["severity"] == "critical"
+                                else "Uyarı"
+                            ),
+                            "Sorun sayısı": item["count"],
+                        }
+                        for item in checks
+                    ]),
+                    width="stretch",
+                    hide_index=True,
+                )
+        st.info(
+            "Yalnızca özet adetler gösterilir. Sorun bulunursa bu araç "
+            "otomatik düzeltme yapmaz; kayıtların yetkili incelemesi gerekir."
+        )
 
     elif section == "🧾 Audit Log":
         st.caption("Yalnızca PostgreSQL ct_app denetim kayıtları gösterilir.")
