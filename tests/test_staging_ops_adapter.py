@@ -284,6 +284,36 @@ class OperationsPilotTests(unittest.TestCase):
         self.assertEqual(delete_ops_pilot(self.dsn,ident),"not_ready")
         self.assertEqual(self.store.tables,before)
 
+    def test_cleanup_at_each_intermediate_stage(self):
+        for stage in ("created", "received", "held", "paid"):
+            with self.subTest(stage=stage):
+                self.setUp()
+                ident=self.create()
+                if stage in ("received", "held", "paid"):
+                    self.assertEqual(advance_ops_pilot(self.dsn,ident,"receive"),"updated")
+                if stage in ("held", "paid"):
+                    self.assertEqual(advance_ops_pilot(self.dsn,ident,"hold"),"updated")
+                if stage=="paid":
+                    self.assertEqual(advance_ops_pilot(self.dsn,ident,"pay"),"updated")
+                self.assertEqual(delete_ops_pilot(self.dsn,ident),"deleted")
+                self.assertTrue(all(not rows for rows in self.store.tables.values()))
+
+    def test_repeated_payment_never_debits_cash_twice(self):
+        ident=self.create()
+        for step in ("receive", "hold", "pay"):
+            self.assertEqual(advance_ops_pilot(self.dsn,ident,step),"updated")
+        before=deepcopy(self.store.tables)
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"pay"),"not_ready")
+        self.assertEqual(self.store.tables,before)
+
+    def test_failed_hold_rolls_back_inventory_mutation(self):
+        ident=self.create()
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"receive"),"updated")
+        before=deepcopy(self.store.tables)
+        self.store.fail_sql='INSERT INTO "ct_staging"."quality_cases"'
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"hold"),"failed")
+        self.assertEqual(self.store.tables,before)
+
     def test_schema_failure_does_not_write(self):
         with patch("scripts.staging_ops_adapter.validate_staging_structure",
                    return_value=("mismatch",[])):
