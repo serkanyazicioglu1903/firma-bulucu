@@ -23,6 +23,7 @@ SCHEMA = "ct_app"
 _ALLOWED_ROLES = {
     "create_customer": frozenset(("ADMIN", "SALES")),
     "create_product": frozenset(("ADMIN", "PURCHASING")),
+    "create_warehouse": frozenset(("ADMIN", "PURCHASING")),
     "create_purchase_order": frozenset(("ADMIN", "PURCHASING")),
     "create_shipment": frozenset(("ADMIN", "PURCHASING")),
     "receive_shipment": frozenset(("ADMIN", "PURCHASING")),
@@ -157,6 +158,29 @@ def create_product(url, role, name, supplier, category=""):
         )
         return int(cur.fetchone()[0])
     return _execute(url, role, "create_product", action)
+
+
+
+def create_warehouse(url, role, name, city="", warehouse_type="Normal Depo"):
+    """Create a unique warehouse in ct_app; validated, atomic and role-gated."""
+    allowed_types = frozenset(("Normal Depo", "Antrepo", "Soğuk Depo"))
+    def action(cur):
+        warehouse = _text(name, label="invalid_warehouse", max_length=200)
+        if len(str(city or "")) > 120 or warehouse_type not in allowed_types:
+            raise OperationRejected("invalid_warehouse")
+        cur.execute(
+            'SELECT id FROM "ct_app"."warehouses" WHERE name=%s LIMIT 1',
+            (warehouse,),
+        )
+        if cur.fetchone() is not None:
+            raise OperationRejected("duplicate_warehouse")
+        cur.execute(
+            'INSERT INTO "ct_app"."warehouses" '
+            '(name,city,warehouse_type) VALUES (%s,%s,%s) RETURNING id',
+            (warehouse, str(city or "").strip(), warehouse_type),
+        )
+        return int(cur.fetchone()[0])
+    return _execute(url, role, "create_warehouse", action)
 
 
 def create_purchase_order(url, role, po_number, supplier, product_id,
