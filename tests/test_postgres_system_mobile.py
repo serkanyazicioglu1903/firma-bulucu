@@ -153,7 +153,12 @@ class MobileSystemTests(unittest.TestCase):
         st.button.return_value = True
         system.render_postgres_system(URL)
         check.assert_called_once_with(URL)
-        st.success.assert_called_once()
+        # The page shows its existing PostgreSQL-connected success banner
+        # as well as the separate ten-check reconciliation result.
+        self.assertTrue(any(
+            "10 kontrolde tutarsızlık bulunmadı" in str(call.args[0])
+            for call in st.success.call_args_list
+        ))
         st.error.assert_not_called()
 
 
