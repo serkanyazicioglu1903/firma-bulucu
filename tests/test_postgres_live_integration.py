@@ -258,5 +258,42 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
 
 
 
+    def test_control_tower_postgres_live_streamlit_smoke(self):
+        """Real 26-table PostgreSQL backend exercised through all Streamlit tabs."""
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from streamlit.testing.v1 import AppTest
+        import control_tower as ct
+        import security_admin as auth
+
+        def fake_secret(name, default=""):
+            return "ci-only-password" if name == "CONTROL_TOWER_PASSWORD" else default
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"DATABASE_URL": self.url}):
+                with patch.object(ct, "DB_PATH", Path(tmp) / "sqlite-never-created.db"):
+                    with patch.object(auth, "_secret", side_effect=fake_secret):
+                        app = AppTest.from_file(
+                            str(Path(__file__).resolve().parents[1] / "app.py"),
+                            default_timeout=110,
+                        )
+                        app.session_state["ct_user"] = {
+                            "username": "ci-admin",
+                            "display_name": "CI Admin",
+                            "role": "ADMIN",
+                        }
+                        app.session_state["ct_session_id"] = "ci-session"
+                        app.run()
+                        self.assertFalse(
+                            app.exception, str(app.exception),
+                        )
+                        # The cutover must not open a new SQLite file.
+                        self.assertFalse(ct.DB_PATH.exists())
+                        self.assertTrue(
+                            any("PostgreSQL" in t.label for t in app.tabs)
+                        )
+
+
 if __name__ == "__main__":
     unittest.main()
