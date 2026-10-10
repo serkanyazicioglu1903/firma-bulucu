@@ -86,13 +86,16 @@ def render_postgres_workspace():
                 width="stretch", hide_index=True,
             )
 
-    # Write UI is only mounted after BOTH independent server-side flags are
-    # deliberately enabled. Default release remains completely read-only.
-    if postgres_master_write_enabled():
+    # The standard business tabs are now canonical when PostgreSQL cutover
+    # is active. Keep this 360 view read-only to avoid duplicate entry paths.
+    if postgres_url():
+        st.caption(
+            "Kalıcı kayıt işlemleri için üstteki CRM, Ürün Kataloğu, "
+            "Satın Alma, Stok ve Finans sekmelerini kullanın. "
+            "PostgreSQL 360 kayıt görüntüleme ekranıdır."
+        )
+    elif postgres_master_write_enabled():
         with st.expander("🔒 PostgreSQL kayıt yönetimi — kalıcı kayıt"):
             render_postgres_master_forms(url)
     else:
-        st.caption(
-            "PostgreSQL müşteri, ürün ve depo formları geliştirme olarak hazır; "
-            "tam güvenlik ve geçiş onayına kadar kayıt işlevi kapalıdır."
-        )
+        st.caption("PostgreSQL salt okunur; pilot yazma formları kapalı.")
