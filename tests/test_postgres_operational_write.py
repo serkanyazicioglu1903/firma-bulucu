@@ -103,6 +103,52 @@ class OperationalWriteTests(unittest.TestCase):
             'INSERT INTO "ct_app"."product_catalog"' in s for s in self.statements()
         ))
 
+    def test_create_warehouse_writes_atomic_audit_with_actor(self):
+        self.rows(None, (52,))
+        status, ident = op.create_warehouse(
+            URL, "PURCHASING", "CI FAKE WAREHOUSE",
+            city="London", warehouse_type="Normal Depo",
+            actor="ci-purchaser",
+        )
+        self.assertEqual((status, ident), ("ok", 52))
+        calls = self.cur.execute.call_args_list
+        self.assertTrue(any(
+            'INSERT INTO "ct_app"."warehouses"' in call.args[0]
+            for call in calls
+        ))
+        audit = [call for call in calls if
+                 'INSERT INTO "ct_app"."audit_log"' in call.args[0]]
+        self.assertEqual(len(audit), 1)
+        self.assertEqual(
+            audit[0].args[1],
+            ("ci-purchaser", "PURCHASING", "create_warehouse", "warehouses"),
+        )
+
+    def test_duplicate_warehouse_has_no_mutation_or_audit(self):
+        self.rows((55,))
+        self.assertEqual(
+            op.create_warehouse(
+                URL, "ADMIN", "CI EXISTING WAREHOUSE", actor="ci-admin"
+            ),
+            ("duplicate_warehouse", None),
+        )
+        self.assertFalse(any(
+            stmt.startswith("INSERT ") for stmt in self.statements()
+        ))
+
+    def test_audit_failure_rejects_operation_and_keeps_atomic_scope(self):
+        self.rows(None, (9,))
+        def maybe_fail(sql, *args):
+            if 'INSERT INTO "ct_app"."audit_log"' in sql:
+                raise RuntimeError("sensitive database exception")
+        self.cur.execute.side_effect = maybe_fail
+        result = op.create_customer(
+            URL, "ADMIN", "CI ROLLBACK CUSTOMER", actor="ci-admin"
+        )
+        self.assertEqual(result, ("failed", None))
+        self.assertTrue(self.conn.transaction.called)
+        self.assertNotIn("sensitive", str(result))
+
     def test_new_purchase_order_checks_active_product_and_warehouse(self):
         self.rows(("Sugar",), (9,), None, (66,))
         self.assertEqual(

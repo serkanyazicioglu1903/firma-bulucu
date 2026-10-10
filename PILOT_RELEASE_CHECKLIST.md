@@ -119,6 +119,30 @@ PostgreSQL write forms or real company data: verify role and row-level access,
 backup/restore, audit, financial calculations, concurrency, and an intentional
 full-application cutover plan.
 
+## PostgreSQL master-data entry rollout (OFF by default)
+
+The new optional PostgreSQL 360 forms support three master records:
+`customers`, `product_catalog`, and `warehouses`. All form submissions
+call the existing `ct_app` transactional writer with the ADMIN role from the
+server session. A new **atomic audit-log insert** records the initiating actor,
+role, operation, and table in the same PostgreSQL transaction; if writing the
+audit record fails, the underlying business change is also rolled back.
+
+**The forms and write engine remain disabled by default.** They are mounted
+only when BOTH independent **server environment** settings are `1`:
+`AS_CONTROL_TOWER_PG_UI_WRITES_ENABLED` and
+`AS_CONTROL_TOWER_PG_WRITES_ENABLED`, and only for logged-in ADMINs. An
+additional explicit per-form confirmation is required. The special local
+PostgreSQL CI test mode cannot enable this Streamlit writer interface.
+Do **not** set these variables on the connected Streamlit service until
+security, backups, audit, multi-user and operational acceptance are complete.
+
+The existing SQLite business screens still cannot see data written to
+`ct_app`. These first PostgreSQL forms do not cover updates, deletes,
+opportunities, quotations, stock allocations, invoice imports, accounts or
+full financial reconciliation. A live feature-flag activation is a **separate
+cutover decision**, not implied by merging this PR.
+
 ## Release blockers (do not skip)
 
 1. Disposable PostgreSQL 16 CI integration now exercises the actual ct_app transactional code with fictional records. Still independently verify the user's Supabase deployment permissions, TLS, concurrency, and same-schema functionality before activating any writes.
