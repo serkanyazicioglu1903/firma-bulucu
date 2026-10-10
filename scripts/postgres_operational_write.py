@@ -5,11 +5,12 @@ inert until the application uses its functions under authenticated server-side
 roles. Each operation validates the full ct_app schema and commits *one* atomic
 transaction; unexpected errors are sanitized and rolled back.
 
-The Streamlit app must not expose these write functions to customers until
+Writes are disabled by default (AS_CONTROL_TOWER_PG_WRITES_ENABLED != 1).\nThe Streamlit app must not expose these write functions to customers until
 security, backup/restore, real-database integration and feature-parity testing
 are complete. ct_staging is never touched by this module.
 """
 from datetime import date
+import os
 from decimal import Decimal, InvalidOperation
 
 from scripts.staging_transaction_smoke import validate_test_url
@@ -79,6 +80,9 @@ def _execute(url, role, operation, action):
     """Fail closed on schema/role/config errors; do not leak DB exceptions."""
     if role not in _ALLOWED_ROLES[operation]:
         return "forbidden", None
+    # Preparation-only by default; full cutover requires explicit opt-in.
+    if os.environ.get("AS_CONTROL_TOWER_PG_WRITES_ENABLED") != "1":
+        return "disabled", None
     if not validate_test_url(url):
         return "invalid_url", None
     try:
