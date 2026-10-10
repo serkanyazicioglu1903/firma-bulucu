@@ -416,5 +416,59 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                         self.assertFalse(ct.DB_PATH.exists())
 
 
+    def test_operational_reconciliation_reads_actual_disposable_pg(self):
+        """Detect a fictional stock anomaly and verify no data is repaired."""
+        from scripts.postgres_reconciliation import check_operational_consistency
+
+        healthy = check_operational_consistency(self.url)
+        self.assertIn(healthy["status"], ("ok", "issues_found"))
+        self.assertEqual(len(healthy["checks"]), 10)
+        self.assertTrue(all(
+            isinstance(check["count"], int)
+            for check in healthy["checks"]
+        ))
+        with self.conn.cursor() as cur:
+            cur.execute(
+                'INSERT INTO "ct_app"."warehouses" (name) VALUES (%s) RETURNING id',
+                ("CI RECON ONLY WAREHOUSE",),
+            )
+            warehouse = int(cur.fetchone()[0])
+            cur.execute(
+                'INSERT INTO "ct_app"."inventory_lots" '
+                '(product_name,warehouse_id,quantity_received_kg,'
+                'quantity_available_kg,quantity_reserved_kg,quality_hold_kg) '
+                'VALUES (%s,%s,%s,%s,%s,%s) RETURNING id',
+                ("CI FICTIONAL NEGATIVE STOCK", warehouse, 20, 20, 60, 0),
+            )
+            stock_id = int(cur.fetchone()[0])
+        try:
+            anomalous = check_operational_consistency(self.url)
+            self.assertEqual(anomalous["status"], "issues_found")
+            invalid = next(
+                item for item in anomalous["checks"]
+                if item["id"] == "invalid_stock_quantities"
+            )
+            self.assertGreaterEqual(invalid["count"], 1)
+            # Read-only audit must never repair the bogus stock reservation.
+            reserved = self.execute(
+                'SELECT quantity_reserved_kg FROM "ct_app"."inventory_lots" '
+                'WHERE id=%s', (stock_id,),
+            )[0]
+            self.assertEqual(float(reserved), 60.0)
+        finally:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    'DELETE FROM "ct_app"."inventory_lots" WHERE id=%s',
+                    (stock_id,),
+                )
+                cur.execute(
+                    'DELETE FROM "ct_app"."warehouses" WHERE id=%s',
+                    (warehouse,),
+                )
+        healthy_again = check_operational_consistency(self.url)
+        self.assertEqual(healthy_again["status"], healthy["status"])
+        self.assertEqual(healthy_again["checks"], healthy["checks"])
+
+
 if __name__ == "__main__":
     unittest.main()
