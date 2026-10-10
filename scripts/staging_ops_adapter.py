@@ -305,7 +305,40 @@ def delete_ops_pilot(url, identifier):
             with conn.transaction():
                 with conn.cursor() as cur:
                     _settings(cur)
-                    _guard(cur, identifier)
+                    parent = _guard(cur, identifier)
+                    # Never clean a partially altered pilot: check its exact
+                    # expected lifecycle before deleting any related rows.
+                    cur.execute(
+                        'SELECT l.quantity_received_kg,l.quantity_available_kg,'
+                        'l.quality_hold_kg,l.quality_status,'
+                        'q.id,ft.id,ft.amount '
+                        'FROM "ct_staging"."inventory_lots" l '
+                        'LEFT JOIN "ct_staging"."quality_cases" q '
+                        'ON q.id=l.id AND q.inventory_lot_id=l.id '
+                        'LEFT JOIN "ct_staging"."finance_transactions" ft '
+                        'ON ft.id=l.id AND ft.payable_id=l.id AND ft.account_id=l.id '
+                        'WHERE l.id=%s AND l.product_id=%s AND l.shipment_id=%s '
+                        'FOR UPDATE OF l',
+                        (identifier,identifier,identifier))
+                    lot = cur.fetchone()
+                    received, paid, bank = parent[2], parent[4], parent[5]
+                    if received == 0:
+                        if lot is not None or paid != 0 or bank != 10000:
+                            raise PilotSafetyError("Unexpected pilot state.")
+                    else:
+                        if lot is None or lot[0] != SHIPMENT_KG or lot[1] != SHIPMENT_KG:
+                            raise PilotSafetyError("Inventory mismatch.")
+                        held, status, case_id, tx_id, tx_amount = lot[2:]
+                        if (held, status, case_id is not None) not in (
+                                (0, "Released", False),
+                                (HOLD_KG, "HOLD", True)):
+                            raise PilotSafetyError("Quality mismatch.")
+                        if (paid, bank, tx_id is not None, tx_amount) not in (
+                                (0, 10000, False, None),
+                                (PAYMENT_EUR, 10000-PAYMENT_EUR, True, PAYMENT_EUR)):
+                            raise PilotSafetyError("Finance mismatch.")
+                        if paid and case_id is None:
+                            raise PilotSafetyError("Payment without quality HOLD.")
                     # Optional downstream records, then required parent records.
                     statements=[
                         ("finance_transactions",
