@@ -131,6 +131,11 @@ class Cursor:
                     ident if finance else None
                 ))
             return
+        if sql.startswith('SELECT id FROM "ct_staging"."inventory_lots"') and "quality_status=%s" in sql:
+            ident=params[0]
+            lot=tables["inventory_lots"].get(ident)
+            self.answer=(ident,) if lot and lot["hold"]==100.0 and lot["available"]==600.0 else None
+            return
         if sql.startswith("SELECT id FROM"):
             ident=params[0]
             self.answer=(ident,) if ident in tables[table] else None
@@ -215,6 +220,15 @@ class OperationsPilotTests(unittest.TestCase):
         self.assertEqual(advance_ops_pilot(self.dsn,ident,"receive"),"not_ready")
         self.assertEqual(advance_ops_pilot(self.dsn,ident,"pay"),"not_ready")
         self.assertEqual(self.store.tables["payables"][ident]["paid"],0)
+
+    def test_payment_rejects_missing_or_changed_hold(self):
+        ident=self.create()
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"receive"),"updated")
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"hold"),"updated")
+        self.store.tables["inventory_lots"][ident]["hold"]=0.0
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"pay"),"not_ready")
+        self.assertEqual(self.store.tables["payables"][ident]["paid"],0)
+        self.assertEqual(self.store.tables["cash_accounts"][ident]["balance"],10000)
 
     def test_failure_rolling_back_payment_and_cash(self):
         ident=self.create()
