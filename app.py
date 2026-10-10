@@ -72,8 +72,35 @@ st.markdown(
         border-radius: 12px !important;
     }
 
+    /* Long multi-level navigation must remain reachable on a narrow phone.
+       Keep the native Streamlit tab controls; do not hide inaccessible tabs. */
     div[data-baseweb="tab-list"] {
         gap: .25rem;
+        flex-wrap: wrap !important;
+        overflow-x: visible !important;
+        height: auto !important;
+        max-height: none !important;
+    }
+    div[data-testid="stTabs"] [data-baseweb="tab-list"] {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        align-items: stretch !important;
+    }
+    div[data-testid="stTabs"] [data-baseweb="tab"] {
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+        height: auto !important;
+        min-height: 2.5rem !important;
+        line-height: 1.25 !important;
+    }
+    @media (max-width: 768px) {
+        div[data-testid="stTabs"] [data-baseweb="tab-list"] {
+            gap: .2rem !important;
+        }
+        div[data-testid="stTabs"] [data-baseweb="tab"] {
+            font-size: .78rem !important;
+            padding: .4rem .5rem !important;
+        }
     }
 
     button[data-baseweb="tab"] {
