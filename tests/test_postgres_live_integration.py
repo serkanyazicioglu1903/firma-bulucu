@@ -350,6 +350,15 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                         self.assertTrue(
                             any("PostgreSQL" in t.label for t in app.tabs)
                         )
+                        # Backup entry must be reachable on a phone without
+                        # opening the nested System tab.
+                        self.assertTrue(
+                            any(
+                                "PostgreSQL yedekleme" in e.label
+                                for e in app.get("expander")
+                            ),
+                            "Mobile quick-access PostgreSQL backup is missing.",
+                        )
 
 
     def test_postgres_live_backup_has_26_tables_and_hash_manifest(self):
