@@ -83,3 +83,24 @@ jobs:
           print("Streamlit app loaded successfully.")
           print("Top-level tabs:", [t.label for t in app.tabs])
           PY
+
+  browser-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install app and browser test dependencies
+        run: |
+          pip install -r requirements.txt playwright==1.51.0
+          python -m playwright install --with-deps chromium
+      - name: Desktop and phone viewport acceptance
+        run: python scripts/browser_acceptance.py
+      - name: Save screenshots and server log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-acceptance
+          path: browser-artifacts/
