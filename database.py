@@ -96,6 +96,7 @@ class PostgresConnection:
         import psycopg
         from psycopg import sql
         self.conn = psycopg.connect(url, row_factory=row_factory, connect_timeout=5)
+        self._write_locked = False
         try:
             # Session settings survive explicit commit() calls in existing services.
             self.conn.execute(sql.SQL('SET search_path TO {}, pg_catalog').format(sql.Identifier(schema)))
@@ -115,7 +116,12 @@ class PostgresConnection:
             self.conn.close()
     def execute(self, statement, params=()):
         if statement.strip().upper() == 'BEGIN IMMEDIATE':
+            self._write_locked = True
             return Cursor(self.conn.execute('SELECT pg_advisory_xact_lock(26061028)'))
+        if not self._write_locked and re.match(r'\s*(INSERT|UPDATE|DELETE)\b', statement, re.I):
+            # Ordinary CRUD and compound services share the same write lock.
+            self.conn.execute('SELECT pg_advisory_xact_lock(26061028)')
+            self._write_locked = True
         translated = postgres_sql(statement)
         match = re.match(r'\s*INSERT\s+INTO\s+([a-z_]+)', statement, re.I)
         returning = bool(match and match.group(1).lower() in identity_tables() and 'RETURNING' not in statement.upper())
@@ -126,8 +132,10 @@ class PostgresConnection:
         return Cursor(cur, row['id'] if row else None)
     def commit(self):
         self.conn.commit()
+        self._write_locked = False
     def rollback(self):
         self.conn.rollback()
+        self._write_locked = False
     def close(self):
         self.conn.close()
 

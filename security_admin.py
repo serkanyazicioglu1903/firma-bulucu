@@ -319,6 +319,8 @@ def verified_sqlite_backup_bytes(db_path):
     a raw file copy incomplete. SQLite's online backup API creates a
     transactionally consistent snapshot instead.
     """
+    if database.is_postgres():
+        raise ValueError("PostgreSQL için SQLite dosya yedeği oluşturulamaz.")
     source = Path(db_path).resolve()
     if not source.is_file():
         raise FileNotFoundError("SQLite veritabanı dosyası bulunamadı.")
@@ -337,6 +339,8 @@ def verified_sqlite_backup_bytes(db_path):
 def export_all_tables_zip(db_path):
     buffer=io.BytesIO()
     with connect(db_path) as conn, zipfile.ZipFile(buffer,"w",zipfile.ZIP_DEFLATED) as z:
+        if database.is_postgres():
+            conn.conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         tables = database.table_names(conn)
         for table in tables:
             df=database.frame(conn, 'SELECT * FROM "' + table.replace('"', '""') + '"')

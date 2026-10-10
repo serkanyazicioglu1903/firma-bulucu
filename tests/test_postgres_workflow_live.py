@@ -1,5 +1,6 @@
 """Real local PostgreSQL service tests, explicitly skipped without the dedicated DSN."""
 import os
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
@@ -9,7 +10,7 @@ import control_tower as ct
 import integrated_workflow as flow
 import workflow_adjustments as adj
 from scripts.build_pg_schema import generate
-from scripts.postgres_workflow import Connection,query_df,validate_test_url
+from scripts.postgres_workflow import validate_test_url
 
 URL=os.environ.get('AS_CT_TEST_POSTGRES_URL','')
 pytestmark=pytest.mark.skipif(not URL,reason='Dedicated local PostgreSQL service not configured')
@@ -82,9 +83,9 @@ def test_postgres_concurrent_receive_payment_and_reversal(pg_order):
 def test_postgres_delivery_failure_rolls_back(pg_order):
     assert ct.receive_shipment_to_stock(1)[0]
     with ct.get_conn() as c:
-        c.execute("""CREATE FUNCTION ct_staging.reject_stock() RETURNS trigger LANGUAGE plpgsql AS $$
+        c.conn.execute("""CREATE FUNCTION ct_staging.reject_stock() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN RAISE EXCEPTION 'forced test rollback'; END; $$""")
-        c.execute('CREATE TRIGGER reject_stock BEFORE UPDATE ON inventory_lots FOR EACH ROW EXECUTE FUNCTION ct_staging.reject_stock()')
+        c.conn.execute('CREATE TRIGGER reject_stock BEFORE UPDATE ON inventory_lots FOR EACH ROW EXECUTE FUNCTION ct_staging.reject_stock()')
     with pytest.raises(psycopg.Error):
         flow.deliver(1,1,100,'PG-FAIL',date.today())
     assert scalar('SELECT COUNT(*) FROM receivables')==0
@@ -133,7 +134,7 @@ def test_all_postgres_role_screens(pg_order, role):
     assert adj.add_cost(1,'UI-GOODS','Mal bedeli',2000,'EUR',1,date.today(),'Test')[0]
     # All module tabs execute during the same Streamlit run, including reporting,
     # system admin/export and role-specific portals, without monkeypatched SQL.
-    app = AppTest.from_file('app.py', default_timeout=90)
+    app = AppTest.from_file(Path(__file__).resolve().parents[1]/'app.py', default_timeout=90)
     app.session_state['ct_user'] = {'username':'pg-test','display_name':'PG Test','role':role}
     app.session_state['ct_session_id'] = 'pg-app-test'
     app.run()
@@ -151,9 +152,20 @@ def test_empty_postgres_application(pg_order):
     with psycopg.connect(URL,autocommit=True) as conn:
         conn.execute('DROP SCHEMA ct_staging CASCADE')
         conn.execute(generate()[0])
-    app = AppTest.from_file('app.py',default_timeout=90)
+    app = AppTest.from_file(Path(__file__).resolve().parents[1]/'app.py',default_timeout=90)
     app.session_state['ct_user'] = {'username':'pg-test','display_name':'PG Test','role':'ADMIN'}
     app.run()
     assert not app.exception, [e.message for e in app.exception]
     assert scalar('SELECT COUNT(*) FROM customers') == 0
     assert scalar('SELECT COUNT(*) FROM product_catalog') == 0
+
+
+def test_postgres_dates_literals_and_connection_reuse(pg_order):
+    with ct.get_conn() as conn:
+        row = conn.execute("SELECT '?' AS literal, ? AS bound, julianday('invalid') AS bad, julianday('') AS blank, julianday('2026-10-10')-julianday('2026-10-09') AS days", ('100% ?',)).fetchone()
+        assert row['literal'] == '?' and row['bound'] == '100% ?'
+        assert row['bad'] is None and row['blank'] is None and row['days'] == 1
+        conn.commit()
+        assert conn.execute('SELECT name FROM customers WHERE id=?',(1,)).fetchone()[0]=='Postgres Test Customer'
+        conn.rollback()
+        assert conn.execute("SELECT COUNT(*) FROM customers WHERE name LIKE '%Postgres%'").fetchone()[0] == 1
