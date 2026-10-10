@@ -1975,9 +1975,13 @@ def render_control_tower():
     init_security_tables(DB_PATH)
     if not login_gate():
         return
-    seed_once()
-    seed_product_catalog()
-    seed_warehouses()
+    # Do not silently populate a real workspace with fictional records.
+    # Existing data is retained; demo setup requires explicit opt-in.
+    import os
+    if os.environ.get("AS_CONTROL_TOWER_DEMO_SEED", "").strip() == "1":
+        seed_once()
+        seed_product_catalog()
+        seed_warehouses()
 
     if current_role() != "ADMIN":
         render_role_portal(DB_PATH, current_role())
@@ -3200,6 +3204,14 @@ def render_control_tower():
                 warehouses_po=query_df("""
                     SELECT id,name FROM warehouses WHERE active=1 ORDER BY name
                 """)
+                # Keep empty workspaces usable without writing fictional rows.
+                missing_master_data = products_po.empty or warehouses_po.empty
+                if missing_master_data:
+                    st.info("PO oluşturmadan önce Ürün Kataloğu ve Depolar bölümüne gerçek kayıtları ekleyin.")
+                    if products_po.empty:
+                        products_po = pd.DataFrame([{"id": 0, "name": "Önce ürün ekleyin", "supplier": "", "default_currency": "EUR"}])
+                    if warehouses_po.empty:
+                        warehouses_po = pd.DataFrame([{"id": 0, "name": "Önce depo ekleyin"}])
                 with st.form("proc_new_po",clear_on_submit=True):
                     po_number=st.text_input("PO numarası *",placeholder="Örn: 20260004")
                     p_name=st.selectbox("Ürün",products_po["name"].tolist())
@@ -3220,7 +3232,7 @@ def render_control_tower():
                     warehouse_id=int(warehouses_po.loc[warehouses_po["name"]==wh_name,"id"].iloc[0])
                     status=st.selectbox("Durum",["Sipariş Verildi","Teyit Bekliyor","Teyitli","Üretimde","Hazır","Kısmi Sevk","Tamamlandı","İptal"])
                     notes=st.text_area("Not")
-                    if st.form_submit_button("PO kaydet",type="primary"):
+                    if st.form_submit_button("PO kaydet",type="primary",disabled=missing_master_data):
                         if not po_number.strip() or not supplier.strip():
                             st.error("PO numarası ve tedarikçi zorunlu.")
                         else:
