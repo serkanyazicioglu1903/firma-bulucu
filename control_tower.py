@@ -1975,9 +1975,13 @@ def render_control_tower():
     init_security_tables(DB_PATH)
     if not login_gate():
         return
-    seed_once()
-    seed_product_catalog()
-    seed_warehouses()
+    # Do not silently populate a real workspace with fictional records.
+    # Existing data is retained; demo setup requires explicit opt-in.
+    import os
+    if os.environ.get("AS_CONTROL_TOWER_DEMO_SEED", "").strip() == "1":
+        seed_once()
+        seed_product_catalog()
+        seed_warehouses()
 
     if current_role() != "ADMIN":
         render_role_portal(DB_PATH, current_role())
