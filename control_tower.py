@@ -4296,6 +4296,10 @@ def render_control_tower():
                 st.dataframe(regs,width="stretch",hide_index=True)
             with st.expander("Yeni regülasyon / izin konusu aç",expanded=regs.empty):
                 products_r=query_df("SELECT id,name FROM product_catalog WHERE active=1 ORDER BY name")
+                missing_reg_products = products_r.empty
+                if missing_reg_products:
+                    st.info("Regülasyon kaydı açmadan önce Ürün Kataloğu'na ürün ekleyin.")
+                    products_r = pd.DataFrame([{"id": 0, "name": "Önce ürün ekleyin"}])
                 with st.form("quality_new_reg",clear_on_submit=True):
                     pname=st.selectbox("Ürün",products_r["name"].tolist())
                     pid=int(products_r.loc[products_r["name"]==pname,"id"].iloc[0])
@@ -4311,7 +4315,7 @@ def render_control_tower():
                     responsible=st.text_input("Sorumlu",key="reg_responsible")
                     source_ref=st.text_input("Resmî kaynak / dosya linki")
                     notes=st.text_area("Not",key="reg_notes")
-                    if st.form_submit_button("Regülasyon konusunu kaydet",type="primary"):
+                    if st.form_submit_button("Regülasyon konusunu kaydet",type="primary",disabled=missing_reg_products):
                         if not country.strip() or not requirement.strip():
                             st.error("Ülke ve gereklilik zorunlu.")
                         else:
