@@ -20,7 +20,9 @@ def sslmode_for(url):
                     and parsed.hostname in ("localhost", "127.0.0.1")
                     and parsed.path == "/" + CI_DATABASE
                     and parsed.username == CI_USER
-                    and parsed.port == 5432):
+                    and parsed.port == 5432
+                    and not parsed.query
+                    and not parsed.fragment):
                 return "disable"
         except (ValueError, TypeError):
             pass
