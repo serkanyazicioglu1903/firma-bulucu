@@ -10,8 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 class DemoSeedSafetyTests(unittest.TestCase):
     def test_render_requires_explicit_opt_in_for_all_demo_seeders(self):
         tree = ast.parse((ROOT / "control_tower.py").read_text(encoding="utf-8"))
+        # The live backend delegates to a separate legacy interface. Demo
+        # seed calls must remain guarded there and impossible in PG mode.
         render = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
-                      and n.name == "render_control_tower")
+                      and n.name == "_render_control_tower_interface")
         seeds = {"seed_once", "seed_product_catalog", "seed_warehouses"}
         found = set()
         for node in ast.walk(render):
@@ -31,6 +33,7 @@ class DemoSeedSafetyTests(unittest.TestCase):
         guard = guards[0]
         self.assertIn("AS_CONTROL_TOWER_DEMO_SEED", ast.unparse(guard.test))
         self.assertIn('== \'1\'', ast.unparse(guard.test))
+        self.assertIn("not live_postgres", ast.unparse(guard.test))
 
 
 if __name__ == "__main__":
