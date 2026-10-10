@@ -107,6 +107,10 @@ class ControlTowerSqliteIntegrationTests(unittest.TestCase):
             1, 500, "2026-10-10", 1, "TEST-TRANSFER", "isolated test"
         )
         self.assertTrue(ok)
+        self.assertFalse(ct.record_payable_payment(
+            1, 100, "2026-10-10", 1, "TEST-TRANSFER", "duplicate replay"
+        )[0])
+        self.assertEqual(self.count("finance_transactions"), 1)
         self.assertEqual(self.count("finance_transactions"), 1)
         with sqlite3.connect(self.db) as conn:
             paid, status = conn.execute(
@@ -137,6 +141,29 @@ class ControlTowerSqliteIntegrationTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual((paid, status, balance), (2250, "Kapandı", 7750))
         self.assertEqual(self.count("finance_transactions"), 2)
+
+    def test_receivable_reference_replay_is_blocked(self):
+        self.sql("INSERT INTO customers (id,name) VALUES (1,'TEST CUSTOMER')")
+        self.sql("INSERT INTO cash_accounts (id,name,currency,balance) "
+                 "VALUES (1,'TEST EUR BANK','EUR',100)")
+        self.sql("INSERT INTO receivables "
+                 "(id,customer_id,due_date,amount,currency) "
+                 "VALUES (1,1,'2026-12-01',1000,'EUR')")
+        self.assertTrue(ct.record_receivable_payment(
+            1, 200, "2026-10-10", 1, "BANK-RECEIPT-1", "first"
+        )[0])
+        self.assertFalse(ct.record_receivable_payment(
+            1, 200, "2026-10-10", 1, "BANK-RECEIPT-1", "duplicate"
+        )[0])
+        with sqlite3.connect(self.db) as conn:
+            paid = conn.execute(
+                "SELECT paid_amount FROM receivables WHERE id=1"
+            ).fetchone()[0]
+            balance = conn.execute(
+                "SELECT balance FROM cash_accounts WHERE id=1"
+            ).fetchone()[0]
+        self.assertEqual((paid, balance), (200, 300))
+        self.assertEqual(self.count("finance_transactions"), 1)
 
     def test_currency_mismatch_cannot_debit_account(self):
         self.sql("INSERT INTO cash_accounts (id,name,currency,balance) "
