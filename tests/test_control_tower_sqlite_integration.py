@@ -68,6 +68,65 @@ class ControlTowerSqliteIntegrationTests(unittest.TestCase):
             status = conn.execute("SELECT status FROM purchase_orders WHERE id=1").fetchone()[0]
         self.assertEqual(status, "Kısmi Sevk")
 
+    def test_payable_payment_updates_bank_and_ledger_once(self):
+        self.prepare_order()
+        self.assertTrue(ct.receive_shipment_to_stock(1)[0])
+        self.sql("INSERT INTO cash_accounts (id,name,currency,balance) "
+                 "VALUES (1,'TEST EUR BANK','EUR',10000)")
+        self.sql("INSERT INTO payables "
+                 "(id,supplier,purchase_order_id,due_date,amount,currency) "
+                 "VALUES (1,'TEST SUPPLIER',1,'2026-12-01',2250,'EUR')")
+        ok, _ = ct.record_payable_payment(
+            1, 500, "2026-10-10", 1, "TEST-TRANSFER", "isolated test"
+        )
+        self.assertTrue(ok)
+        self.assertEqual(self.count("finance_transactions"), 1)
+        with sqlite3.connect(self.db) as conn:
+            paid, status = conn.execute(
+                "SELECT paid_amount,status FROM payables WHERE id=1"
+            ).fetchone()
+            balance = conn.execute(
+                "SELECT balance FROM cash_accounts WHERE id=1"
+            ).fetchone()[0]
+        self.assertAlmostEqual(paid, 500)
+        self.assertEqual(status, "Kısmi")
+        self.assertAlmostEqual(balance, 9500)
+        self.assertFalse(ct.record_payable_payment(
+            1, 1800, "2026-10-10", 1, "OVERPAY", "test"
+        )[0])
+        self.assertEqual(self.count("finance_transactions"), 1)
+        self.assertTrue(ct.record_payable_payment(
+            1, 1750, "2026-10-10", 1, "FINAL", "test"
+        )[0])
+        self.assertFalse(ct.record_payable_payment(
+            1, 1, "2026-10-10", 1, "REPLAY", "test"
+        )[0])
+        with sqlite3.connect(self.db) as conn:
+            paid, status = conn.execute(
+                "SELECT paid_amount,status FROM payables WHERE id=1"
+            ).fetchone()
+            balance = conn.execute(
+                "SELECT balance FROM cash_accounts WHERE id=1"
+            ).fetchone()[0]
+        self.assertEqual((paid, status, balance), (2250, "Kapandı", 7750))
+        self.assertEqual(self.count("finance_transactions"), 2)
+
+    def test_currency_mismatch_cannot_debit_account(self):
+        self.sql("INSERT INTO cash_accounts (id,name,currency,balance) "
+                 "VALUES (1,'TEST USD BANK','USD',10000)")
+        self.sql("INSERT INTO payables "
+                 "(id,supplier,due_date,amount,currency) "
+                 "VALUES (1,'TEST SUPPLIER','2026-12-01',100,'EUR')")
+        self.assertFalse(ct.record_payable_payment(
+            1, 50, "2026-10-10", 1, "MISMATCH", "test"
+        )[0])
+        self.assertEqual(self.count("finance_transactions"), 0)
+        with sqlite3.connect(self.db) as conn:
+            balance = conn.execute(
+                "SELECT balance FROM cash_accounts WHERE id=1"
+            ).fetchone()[0]
+        self.assertEqual(balance, 10000)
+
     def test_over_receipt_rejected_without_inventory_mutation(self):
         self.prepare_order(quantity=500, shipment=600)
         self.assertEqual(ct.receive_shipment_to_stock(1)[0], False)
