@@ -573,6 +573,65 @@ def render_system_admin(db_path):
                     "Bağlantı ve Supabase yetkilerini kontrol edin."
                 )
 
+        with st.expander("🏢 Kalıcı PostgreSQL şirket şeması (ayrı ct_app)"):
+            st.info(
+                "ct_staging yalnızca test içindir. Gerçek şirket kayıtları için "
+                "ayrı ct_app şeması gerekir. Bu bölüm yalnızca 26 BOŞ tablo "
+                "oluşturabilir; SQLite kayıtlarını taşımaz, var olan "
+                "şemalara veya firma kayıtlarına dokunmaz."
+            )
+            if st.button(
+                "Kalıcı PostgreSQL şemasını kontrol et",
+                key="ct_pg_live_schema_status", disabled=not db_url,
+            ):
+                from scripts.postgres_live_schema import read_live_schema_status
+                status = read_live_schema_status(db_url)
+                if status == "ready":
+                    st.success("ct_app şeması mevcut ve 26 tablo yapısı doğrulandı.")
+                elif status == "not_created":
+                    st.warning("ct_app şeması henüz oluşturulmamış.")
+                elif status == "schema_mismatch":
+                    st.error(
+                        "ct_app şeması mevcut ama yapısı beklenenden farklı. "
+                        "Mevcut kayıtlar korunur; otomatik düzeltme yapılmaz."
+                    )
+                else:
+                    st.error("Şema kontrolü yapılamadı. Supabase bağlantısını kontrol edin.")
+            live_confirm = st.checkbox(
+                "Yalnızca yeni, ayrı ct_app şemasında 26 boş tablo oluşturulmasını "
+                "onaylıyorum; mevcut sistem kayıtları değiştirilmesin.",
+                key="ct_pg_live_schema_confirm",
+            )
+            if st.button(
+                "Yeni boş ct_app tablolarını oluştur",
+                key="ct_pg_live_schema_create",
+                disabled=not live_confirm or not db_url,
+            ):
+                from scripts.postgres_live_schema import (
+                    EXPLICIT_CONFIRMATION, provision_live_schema,
+                )
+                status = provision_live_schema(db_url, EXPLICIT_CONFIRMATION)
+                if status == "created":
+                    st.success(
+                        "Ayrı ct_app şemasında 26 boş tablo oluşturuldu "
+                        "ve yapısı kontrol edildi."
+                    )
+                elif status == "exists":
+                    st.warning(
+                        "ct_app zaten var; güvenlik nedeniyle değiştirilmedi. "
+                        "Yukarıdaki salt okunur kontrolü çalıştırın."
+                    )
+                else:
+                    st.error(
+                        "Şema oluşturulamadı veya doğrulanamadı. "
+                        "Hiçbir eski şirket kaydı silinmedi."
+                    )
+            st.caption(
+                "Önemli: Yeni PostgreSQL şeması oluşturulsa bile mevcut CRM, "
+                "stok, kalite ve finans ekranları SQLite kullanır. "
+                "Tam uygulama geçişi ayrıca geliştirilip test edilmelidir."
+            )
+
         with st.expander("🔄 SQLite → PostgreSQL geçiş ön kontrolü (salt okunur)"):
             st.caption(
                 "Mevcut SQLite yapısı ve bütünlüğü ile PostgreSQL ct_staging "
