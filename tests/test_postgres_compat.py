@@ -30,6 +30,11 @@ class SqlTranslationTests(unittest.TestCase):
         self.assertIn("MAX(t.amount)", q)
         self.assertIn("MAX(CASE", q)
 
+    def test_postgres_retains_legacy_uppercase_ui_aliases(self):
+        sql = translate_sql("SELECT po.po_number AS PO, expiry_date AS SKT FROM shipments")
+        self.assertIn('AS "PO"', sql)
+        self.assertIn('AS "SKT"', sql)
+
     def test_round_two_argument_double_precision_sql(self):
         translated = translate_sql(
             "SELECT ROUND(SUM(value*probability/100.0),0),ROUND(value),"
