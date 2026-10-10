@@ -99,7 +99,7 @@ def translate_sql(sql):
     # SQLite preserves uppercase aliases such as PO / SKT, PostgreSQL folds
     # unquoted aliases to lowercase and breaks UI dataframe column access.
     statement = re.sub(
-        r"\\bAS\\s+(PO|SKT)\\b",
+        r"\bAS\s+(PO|SKT)\b",
         lambda match: 'AS "' + match.group(1) + '"',
         statement, flags=re.I,
     )
