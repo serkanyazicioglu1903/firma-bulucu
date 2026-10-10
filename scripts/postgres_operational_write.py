@@ -27,6 +27,7 @@ _ALLOWED_ROLES = {
     "create_shipment": frozenset(("ADMIN", "PURCHASING")),
     "receive_shipment": frozenset(("ADMIN", "PURCHASING")),
     "hold_inventory_lot": frozenset(("ADMIN", "QUALITY")),
+    "release_inventory_lot": frozenset(("ADMIN", "QUALITY")),
     "create_payable": frozenset(("ADMIN", "FINANCE")),
     "pay_supplier": frozenset(("ADMIN", "FINANCE")),
 }
@@ -352,6 +353,47 @@ def hold_inventory_lot(url, role, lot_id, case_no, hold_kg, reason):
         )
         return case_id
     return _execute(url, role, "hold_inventory_lot", action)
+
+
+
+def release_inventory_lot(url, role, lot_id, resolution):
+    """Close a linked quality case and atomically unblock held inventory.
+
+    The case relationship must match the locked lot. Replaying a release cannot
+    reopen or silently modify an already released or unrelated case.
+    """
+    def action(cur):
+        lot = _id(lot_id)
+        reason = _text(resolution, label="resolution_required", max_length=1500)
+        cur.execute(
+            'SELECT quality_status,quality_case_id FROM '
+            '"ct_app"."inventory_lots" WHERE id=%s FOR UPDATE', (lot,),
+        )
+        stock = cur.fetchone()
+        if stock is None:
+            raise OperationRejected("unknown_lot")
+        if stock[0] != "HOLD" or stock[1] is None:
+            raise OperationRejected("lot_not_on_hold")
+        case_id = int(stock[1])
+        cur.execute(
+            'SELECT inventory_lot_id,status FROM "ct_app"."quality_cases" '
+            'WHERE id=%s FOR UPDATE', (case_id,),
+        )
+        claim = cur.fetchone()
+        if claim is None or claim[0] != lot or claim[1] == "Kapandı":
+            raise OperationRejected("case_mismatch")
+        cur.execute(
+            'UPDATE "ct_app"."quality_cases" SET '
+            'status=%s,final_resolution=%s,closed_date=%s WHERE id=%s',
+            ("Kapandı", reason, date.today().isoformat(), case_id),
+        )
+        cur.execute(
+            'UPDATE "ct_app"."inventory_lots" SET '
+            'quality_status=%s,quality_hold_kg=0 WHERE id=%s',
+            ("Released", lot),
+        )
+        return case_id
+    return _execute(url, role, "release_inventory_lot", action)
 
 
 def create_payable(url, role, supplier, purchase_order_id, invoice_no,
