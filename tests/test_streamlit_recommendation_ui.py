@@ -11,7 +11,10 @@ def find_by_key(elements, key):
     raise AssertionError(f"Widget not found: {key}")
 
 
-def test_product_customer_selector_does_not_keep_stale_customer():
+def test_product_customer_selector_does_not_keep_stale_customer(monkeypatch):
+    # This UI regression test deliberately uses fictional demo master data.
+    # Production startup must not seed those records implicitly.
+    monkeypatch.setenv("AS_CONTROL_TOWER_DEMO_SEED", "1")
     db_path = Path("as_control_tower.db")
     if db_path.exists():
         db_path.unlink()
