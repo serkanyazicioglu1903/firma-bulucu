@@ -474,6 +474,16 @@ def render_system_admin(db_path):
     )
 
     with health_tab:
+        # Show a safe status summary immediately, without requiring screenshots
+        # of database credentials or attempting any network write.
+        configured_db = _secret("DATABASE_URL")
+        st.markdown("#### Veri saklama durumu")
+        st.warning("Aktif iş veritabanı: SQLite (pilot). PostgreSQL iş kayıtlarına bağlı değil.")
+        if configured_db:
+            st.caption("PostgreSQL bağlantı ayarı mevcut; bağlantı ve şema ayrıca doğrulanmalı.")
+        else:
+            st.caption("PostgreSQL bağlantı ayarı bulunamadı. Streamlit Secrets içinde DATABASE_URL gerekli.")
+        st.caption("Gizli bağlantı adresi ve parola bu ekranda gösterilmez.")
         st.markdown("#### Supabase PostgreSQL bağlantısı")
         st.caption(
             "Bu kontrol yalnız SELECT 1 çalıştırır; tablo oluşturmaz, "
