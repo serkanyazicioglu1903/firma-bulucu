@@ -103,7 +103,7 @@ is still not wired into the main Streamlit UI.
 
 ## Release blockers (do not skip)
 
-1. Validate real PostgreSQL schema and integration against an **isolated, non-production** database. The offline adapter test is not a live PostgreSQL test.
+1. Disposable PostgreSQL 16 CI integration now exercises the actual ct_app transactional code with fictional records. Still independently verify the user's Supabase deployment permissions, TLS, concurrency, and same-schema functionality before activating any writes.
 2. Confirm persistent storage/backups. The default Control Tower uses a local SQLite file. To use a pre-mounted persistent disk, set `AS_CONTROL_TOWER_DB_PATH=/mount/persistent/as_control_tower.db` before startup; the target directory must already exist and be writable. A Streamlit cloud instance's ephemeral local filesystem is not an adequate durable production database. Changing the path does not migrate old data.
 3. Perform manual phone and MacBook browser testing, including narrow viewport and authentication/role restrictions. Streamlit AppTest is not a physical device test.
 4. Check real import duties, exchange rates, credit terms and margin calculations against approved sample invoices before financial decisions.
