@@ -1,4 +1,9 @@
-"""PostgreSQL-only administration, audit and manually initiated backup tools."""
+"""Admin-only PostgreSQL maintenance with simple mobile-friendly navigation.
+
+Avoid nested Streamlit tabs inside the already deeply nested Control Tower
+navigation. A separate quick backup shortcut is accessible above the main tabs
+when the mobile System tab fails to display its body.
+"""
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -7,6 +12,55 @@ import streamlit as st
 from scripts.postgres_compat import pg_query_df
 from scripts.postgres_operational_read import read_operational_counts
 from security_admin import current_role, current_user
+
+
+def _render_backup(url, key_prefix):
+    st.warning(
+        "Bu yedek müşteri ve finans kayıtlarını içerebilir. "
+        "İndirilen ZIP şifreli değildir; yalnızca güvenli ve şifreli "
+        "bir depoda saklayın. Supabase otomatik yedek ve geri yükleme "
+        "ayarlarını ayrıca doğrulayın."
+    )
+    if st.button(
+        "Tutarlı PostgreSQL yedeği hazırla",
+        key=f"{key_prefix}_prepare",
+    ):
+        from scripts.postgres_backup import export_postgres_backup
+
+        with st.spinner("26 PostgreSQL tablosu salt okunur yedekleniyor..."):
+            status, archive = export_postgres_backup(url)
+        if status != "ok":
+            st.error("Yedek hazırlanamadı; şema, bağlantı veya boyut sınırını kontrol edin.")
+            return
+        filename = (
+            "AS_Control_Tower_ct_app_"
+            + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            + ".zip"
+        )
+        st.success("Yedek hazır. Aşağıdaki düğmeden hemen indirin.")
+        st.download_button(
+            "💾 PostgreSQL yedeğini indir (özel şirket verisi)",
+            data=archive,
+            file_name=filename,
+            mime="application/zip",
+            key=f"{key_prefix}_download",
+        )
+        st.caption(
+            "Dosya yalnızca bu işlem sırasında oturum belleğinde tutulur. "
+            "Yedek dosyasını sohbet veya açık paylaşım bağlantısıyla göndermeyin."
+        )
+
+
+def render_postgres_quick_backup(url):
+    """Secondary ADMIN-only maintenance entry independent of nested tabs."""
+    if current_role() != "ADMIN":
+        return
+    with st.expander("💾 PostgreSQL yedekleme — hızlı erişim", expanded=False):
+        st.caption(
+            "Sistem sekmesi telefonda boş görünürse yedeği doğrudan "
+            "buradan hazırlayıp indirebilirsiniz."
+        )
+        _render_backup(url, "ct_pg_quick_backup")
 
 
 def render_postgres_system(url):
@@ -18,15 +72,32 @@ def render_postgres_system(url):
     st.caption(f"Aktif kullanıcı: {username} · veritabanı: Supabase ct_app")
     st.success("PostgreSQL kalıcı kayıt modu. SQLite iş verileri kullanılmıyor.")
 
-    health, audit, backup, roles = st.tabs(
-        ["🩺 Sistem Sağlığı", "🧾 Audit Log", "💾 Yedekleme", "👥 Rol Yapısı"]
+    # A plain selectbox is intentionally more reliable than nested st.tabs
+    # inside a 15-tab application on the narrow iPhone browser.
+    section = st.selectbox(
+        "Sistem bölümü",
+        [
+            "💾 Yedekleme",
+            "🩺 Sistem Sağlığı",
+            "🧾 Audit Log",
+            "👥 Rol Yapısı",
+        ],
+        key="ct_pg_system_section",
     )
-    with health:
+
+    if section == "💾 Yedekleme":
+        st.markdown("#### 💾 PostgreSQL Yedekleme")
+        _render_backup(url, "ct_pg_system_backup")
+
+    elif section == "🩺 Sistem Sağlığı":
         st.info(
-            "PostgreSQL bağlantısı şifreli TLS kullanır; iş verileri ct_app "
+            "PostgreSQL bağlantısı TLS kullanır; iş kayıtları ct_app "
             "şemasında tutulur. Bağlantı parolası görüntülenmez."
         )
-        if st.button("Canlı PostgreSQL sayımlarını doğrula", key="pg_live_health"):
+        if st.button(
+            "Canlı PostgreSQL sayımlarını doğrula",
+            key="ct_pg_system_health",
+        ):
             status, counts = read_operational_counts(url)
             if status == "ok":
                 st.success("PostgreSQL şeması ve operasyon tabloları okunuyor.")
@@ -34,17 +105,18 @@ def render_postgres_system(url):
                     pd.DataFrame(
                         [{"Tablo": name, "Kayıt": n} for name, n in counts.items()]
                     ),
-                    width="stretch", hide_index=True,
+                    width="stretch",
+                    hide_index=True,
                 )
             else:
-                st.error(
-                    "PostgreSQL sağlık kontrolü başarısız. "
-                    "Uygulama SQLite'a geçiş yapmadı."
-                )
+                st.error("PostgreSQL sağlık kontrolü başarısız; SQLite'a geçilmedi.")
 
-    with audit:
-        st.caption("Yalnızca PostgreSQL ct_app audit kayıtları gösterilir.")
-        if st.button("Son denetim kayıtlarını getir", key="pg_audit_refresh"):
+    elif section == "🧾 Audit Log":
+        st.caption("Yalnızca PostgreSQL ct_app denetim kayıtları gösterilir.")
+        if st.button(
+            "Son denetim kayıtlarını getir",
+            key="ct_pg_system_audit_refresh",
+        ):
             try:
                 audits = pg_query_df(
                     url,
@@ -55,36 +127,7 @@ def render_postgres_system(url):
             except Exception:
                 st.error("PostgreSQL denetim kayıtları okunamadı.")
 
-    with backup:
-        st.warning(
-            "Supabase otomatik yedekleme ve geri yükleme ayarlarını ayrıca "
-            "doğrulayın. Aşağıdaki manuel yedek yalnızca indirilir; "
-            "şifreli saklama sorumluluğu kullanıcıdadır."
-        )
-        if st.button("Tutarlı PostgreSQL yedeği hazırla", key="pg_backup_prepare"):
-            from scripts.postgres_backup import export_postgres_backup
-            status, archive = export_postgres_backup(url)
-            if status != "ok":
-                st.error(
-                    "Yedek hazırlanamadı veya güvenli boyut limiti aşıldı."
-                )
-            else:
-                filename = (
-                    "AS_Control_Tower_ct_app_"
-                    + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-                    + ".zip"
-                )
-                st.download_button(
-                    "Yedeği indir (özel şirket verisi içerir)",
-                    data=archive, file_name=filename,
-                    mime="application/zip", key="pg_backup_download",
-                )
-                st.caption(
-                    "Yedek yalnızca oturum belleğinde oluşturuldu. "
-                    "Dosyayı güvenli, şifrelenmiş depoda saklayın."
-                )
-
-    with roles:
+    elif section == "👥 Rol Yapısı":
         st.markdown(
             "**ADMIN:** Yönetim ve tüm iş modülleri.  "
             "**SALES:** CRM ve satış.  "
@@ -94,6 +137,6 @@ def render_postgres_system(url):
             "**VIEWER:** Salt okunur yönetim."
         )
         st.caption(
-            "Kullanıcı yetkileri Streamlit'in sunucu tarafındaki "
-            "APP_USERS_JSON / CONTROL_TOWER_PASSWORD ayarından gelir."
+            "Kullanıcı yetkileri sunucudaki APP_USERS_JSON "
+            "veya CONTROL_TOWER_PASSWORD ayarlarından gelir."
         )
