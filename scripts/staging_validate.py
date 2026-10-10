@@ -96,8 +96,10 @@ def compare_structure(expected, actual_columns, actual_constraints):
     return sorted(differences)
 
 
-def validate_staging_structure(url):
-    """Read-only metadata check with safe, bounded public diagnostic messages."""
+def validate_staging_structure(url, schema=SCHEMA):
+    """Read-only structural audit of ct_staging or ct_app (no business rows)."""
+    if schema not in (SCHEMA, "ct_app"):
+        return "invalid_schema", []
     if not url or not str(url).strip():
         return "missing", []
     try:
@@ -122,7 +124,7 @@ def validate_staging_structure(url):
                     "SELECT table_name, column_name, data_type, is_nullable, is_identity "
                     "FROM information_schema.columns WHERE table_schema = %s "
                     "ORDER BY table_name, ordinal_position",
-                    (SCHEMA,),
+                    (schema,),
                 )
                 for table, col, kind, nullable, identity in cur.fetchall():
                     actual_columns[table][col] = (
@@ -144,7 +146,7 @@ def validate_staging_structure(url):
                     "JOIN pg_catalog.pg_namespace AS ns ON ns.oid = tbl.relnamespace "
                     "LEFT JOIN pg_catalog.pg_class AS ref ON ref.oid = con.confrelid "
                     "WHERE ns.nspname = %s AND con.contype IN ('p', 'u', 'f')",
-                    (SCHEMA,),
+                    (schema,),
                 )
                 for table, kind, columns, referenced, reference_columns in cur.fetchall():
                     actual_constraints[table].append(
