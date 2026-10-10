@@ -3322,6 +3322,10 @@ def render_control_tower():
                         y6,y7=st.columns(2)
                         etd=y6.date_input("ETD / çıkış",value=date.today()+timedelta(days=7))
                         eta=y7.date_input("ETA / varış",value=date.today()+timedelta(days=14))
+                        missing_shipment_warehouses = warehouses_s.empty
+                        if missing_shipment_warehouses:
+                            st.info("Sevkiyat için önce Depolar bölümünden depo ekleyin.")
+                            warehouses_s = pd.DataFrame([{"id": 0, "name": "Önce depo ekleyin"}])
                         wh_names=warehouses_s["name"].tolist()
                         default_wh=0
                         if po_row["destination_warehouse_id"]:
@@ -3334,7 +3338,7 @@ def render_control_tower():
                         expiry=st.date_input("SKT",value=date.today()+timedelta(days=365))
                         status=st.selectbox("Durum",["Planlandı","Yükleme Bekliyor","Yüklendi","Yolda","Limanda / Sınırda","Gümrükte","Dağıtımda","Teslim Edildi","İptal"])
                         notes=st.text_area("Not")
-                        if st.form_submit_button("Sevkiyat kaydet",type="primary"):
+                        if st.form_submit_button("Sevkiyat kaydet",type="primary",disabled=missing_shipment_warehouses):
                             execute("""INSERT INTO shipments
                                 (purchase_order_id,shipment_ref,quantity_kg,transport_mode,carrier,
                                  container_vehicle,etd,eta,status,destination_warehouse_id,
@@ -3477,6 +3481,10 @@ def render_control_tower():
 
                 st.markdown("##### Ürün stok politikası")
                 products_pol=query_df("SELECT id,name FROM product_catalog WHERE active=1 ORDER BY name")
+                missing_policy_products = products_pol.empty
+                if missing_policy_products:
+                    st.info("Stok politikası için önce Ürün Kataloğu'na ürün ekleyin.")
+                    products_pol = pd.DataFrame([{"id": 0, "name": "Önce ürün ekleyin"}])
                 pol_name=st.selectbox("Ürün",products_pol["name"].tolist(),key="proc_policy_product")
                 pid=int(products_pol.loc[products_pol["name"]==pol_name,"id"].iloc[0])
                 current=query_df("SELECT * FROM inventory_policy WHERE product_id=?",(pid,))
@@ -3492,7 +3500,7 @@ def render_control_tower():
                 lead_new=p3.number_input("Tedarik süresi (gün)",min_value=0,value=lead,step=5,key="proc_policy_lead")
                 review_new=p4.number_input("Sipariş gözden geçirme (gün)",min_value=0,value=review,step=1,key="proc_policy_review")
                 pnotes_new=st.text_input("Politika notu",value=pnotes,key="proc_policy_notes")
-                if st.button("Stok politikasını kaydet",type="primary"):
+                if st.button("Stok politikasını kaydet",type="primary",disabled=missing_policy_products):
                     execute("""INSERT INTO inventory_policy
                         (product_id,monthly_usage_kg,safety_stock_days,lead_time_days,reorder_review_days,notes,updated_at)
                         VALUES (?,?,?,?,?,?,?)
