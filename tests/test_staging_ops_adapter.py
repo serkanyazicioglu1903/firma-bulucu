@@ -96,6 +96,7 @@ class Cursor:
             if table=="payables":entry["paid"]=0.0
             if table=="cash_accounts":entry["balance"]=10000.0
             if table=="inventory_lots":entry["available"]=600.0;entry["hold"]=0.0
+            if table=="quality_cases":entry["affected"]=100.0
             tables[table][ident]=entry
             return
         if sql.startswith("SELECT po.quantity_kg"):
@@ -147,6 +148,11 @@ class Cursor:
             ident=params[0]
             lot=tables["inventory_lots"].get(ident)
             self.answer=(ident,) if lot and lot["hold"]==100.0 and lot["available"]==600.0 else None
+            return
+        if sql.startswith('SELECT id FROM "ct_staging"."quality_cases"') and "affected_quantity_kg=%s" in sql:
+            ident=params[0]
+            case=tables["quality_cases"].get(ident)
+            self.answer=(ident,) if case and case["affected"]==100.0 else None
             return
         if sql.startswith("SELECT id FROM"):
             ident=params[0]
@@ -238,6 +244,15 @@ class OperationsPilotTests(unittest.TestCase):
         self.assertEqual(advance_ops_pilot(self.dsn,ident,"receive"),"updated")
         self.assertEqual(advance_ops_pilot(self.dsn,ident,"hold"),"updated")
         self.store.tables["inventory_lots"][ident]["hold"]=0.0
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"pay"),"not_ready")
+        self.assertEqual(self.store.tables["payables"][ident]["paid"],0)
+        self.assertEqual(self.store.tables["cash_accounts"][ident]["balance"],10000)
+
+    def test_payment_rejects_inconsistent_quality_case_quantity(self):
+        ident=self.create()
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"receive"),"updated")
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"hold"),"updated")
+        self.store.tables["quality_cases"][ident]["affected"]=75.0
         self.assertEqual(advance_ops_pilot(self.dsn,ident,"pay"),"not_ready")
         self.assertEqual(self.store.tables["payables"][ident]["paid"],0)
         self.assertEqual(self.store.tables["cash_accounts"][ident]["balance"],10000)
