@@ -59,7 +59,7 @@ class OperationalWriteTests(unittest.TestCase):
         self.connect.assert_not_called()
 
     def test_new_customer_serializes_duplicate_name_check(self):
-        self.rows(None, None, (41,))
+        self.rows(None, (41,))
         status, ident = op.create_customer(URL, "SALES", "Example Customer")
         self.assertEqual((status, ident), ("ok", 41))
         statements = self.statements()
@@ -69,7 +69,7 @@ class OperationalWriteTests(unittest.TestCase):
         self.conn.transaction.assert_called_once()
 
     def test_duplicate_customer_rejected_without_insert(self):
-        self.rows(None, (8,))
+        self.rows((8,))
         self.assertEqual(
             op.create_customer(URL, "ADMIN", "Existing"), ("duplicate_customer", None)
         )
@@ -241,7 +241,6 @@ class OperationalWriteTests(unittest.TestCase):
         self.assertNotIn("private-secret", str(answer))
 
     def test_validation_limits_nan_and_invalid_ids(self):
-        self.assertEqual(op._positive("Inf") if False else "tested", "tested")
         with self.assertRaises(op.OperationRejected):
             op._positive("-1")
         with self.assertRaises(op.OperationRejected):
