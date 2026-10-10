@@ -4004,6 +4004,10 @@ def render_control_tower():
                 pos_q=query_df("SELECT id,po_number,supplier,product_id,product_name FROM purchase_orders ORDER BY id DESC")
                 ships_q=query_df("SELECT id,purchase_order_id,shipment_ref,lot_number FROM shipments ORDER BY id DESC")
 
+                missing_quality_products = products_q.empty
+                if missing_quality_products:
+                    st.info("Kalite dosyası açmadan önce Ürün Kataloğu'na gerçek ürün ekleyin.")
+                    products_q = pd.DataFrame([{"id": 0, "name": "Önce ürün ekleyin", "supplier": ""}])
                 with st.form("quality_new_case",clear_on_submit=True):
                     c1,c2,c3=st.columns(3)
                     case_no=c1.text_input("Dosya no *",placeholder="Q-2026-001")
@@ -4057,7 +4061,7 @@ def render_control_tower():
                     target_close=c10.date_input("Hedef kapanış",value=date.today()+timedelta(days=14))
                     hold_lot=st.checkbox("Seçili lotu HOLD'a al",value=bool(lot_id))
 
-                    if st.form_submit_button("Kalite dosyasını aç",type="primary"):
+                    if st.form_submit_button("Kalite dosyasını aç",type="primary",disabled=missing_quality_products):
                         if not case_no.strip() or not description.strip():
                             st.error("Dosya no ve problem açıklaması zorunlu.")
                         else:
