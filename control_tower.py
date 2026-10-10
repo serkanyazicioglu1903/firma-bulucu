@@ -9,6 +9,7 @@ import streamlit as st
 from ai_manager import render_ai_manager
 from sales_matching import normalize, matched_sectors
 from management_reports import render_management_reports
+from postgres_workspace import render_postgres_workspace
 from role_portal import render_role_portal
 from security_admin import (
     audit_sql_write,
@@ -2055,7 +2056,7 @@ def render_control_tower():
         "PostgreSQL/Supabase geçişi tamamlanmadan kritik production verisi girmeyin."
     )
 
-    dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, quality_tab, pipeline_tab, followup_tab, tasks_tab, ai_tab, reports_tab, ceo_tab, system_tab = st.tabs(
+    dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, quality_tab, pipeline_tab, followup_tab, tasks_tab, ai_tab, reports_tab, ceo_tab, system_tab, postgres_tab = st.tabs(
         [
             "📊 Yönetici Paneli",
             "👥 CRM / Müşteri 360",
@@ -2071,6 +2072,7 @@ def render_control_tower():
             "📈 Raporlar",
             "🎯 Serkan Ekranı",
             "⚙️ Sistem",
+            "🗄️ PostgreSQL 360",
         ]
     )
 
@@ -4927,3 +4929,6 @@ def render_control_tower():
 
     with system_tab:
         render_system_admin(DB_PATH)
+
+    with postgres_tab:
+        render_postgres_workspace()

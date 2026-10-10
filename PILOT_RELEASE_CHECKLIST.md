@@ -101,6 +101,24 @@ drills, concurrent-user load tests, auditing, and mobile browser verification.
 The operational write engine remains explicitly **disabled by default** and
 is still not wired into the main Streamlit UI.
 
+## PostgreSQL 360 operational read panel (ADMIN only)
+
+A separate **🗄️ PostgreSQL 360** tab is now added to the existing Control Tower
+navigation. This tab is **not a backend switch**. It uses audited, hard-coded
+queries against the dedicated `ct_app` PostgreSQL schema to show up to 100
+recent records per area: customers, product catalog, purchase orders, shipments,
+inventory, quality, receivables, payables, bank/cash and financial transactions.
+The main existing Control Tower and non-ADMIN role pages remain SQLite-backed.
+No arbitrary SQL, demo data, dual-writes or PostgreSQL writes are allowed by the
+new panel. Query attempts are on explicit user clicks only and require ADMIN
+authentication; errors and credentials are sanitized.
+
+The read queries are also exercised on a disposable PostgreSQL service in CI.
+This is a **read-only acceptance milestone**. Before enabling any new
+PostgreSQL write forms or real company data: verify role and row-level access,
+backup/restore, audit, financial calculations, concurrency, and an intentional
+full-application cutover plan.
+
 ## Release blockers (do not skip)
 
 1. Disposable PostgreSQL 16 CI integration now exercises the actual ct_app transactional code with fictional records. Still independently verify the user's Supabase deployment permissions, TLS, concurrency, and same-schema functionality before activating any writes.
