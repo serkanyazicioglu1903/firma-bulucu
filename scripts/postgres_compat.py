@@ -179,7 +179,7 @@ class CompatConnection:
         from security_admin import current_user, WRITE_TABLE_PERMISSIONS
         statement = str(sql).strip()
         match = re.match(
-            r"^(INSERT\\s+INTO|UPDATE|DELETE\\s+FROM)\\s+([a-z_]+)\\b",
+            r"^(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+([a-z_]+)\b",
             statement, re.I,
         )
         role = str((current_user() or {}).get("role", "")).upper()
