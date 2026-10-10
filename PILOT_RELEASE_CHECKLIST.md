@@ -14,6 +14,23 @@ This is an **integration candidate**, not a production deployment.
 - Separate offline fake-PostgreSQL staging tests cover procurement/stock/quality/payment guard and rollback logic.
 - System Health offers a single explicitly confirmed PostgreSQL acceptance action: schema audit, rollback-only CRUD, and rollback-only fictional CRM/quote/purchase/stock/HOLD/finance workflow. The coordinator fails closed and does not reveal credentials. The action must be run in the target Streamlit environment; successful CI mocks **do not** prove connectivity to the user's Supabase instance.
 
+## SQLite → PostgreSQL migration preparation
+
+System Health now provides **SQLite → PostgreSQL geçiş ön kontrolü**, a read-only
+check of the active SQLite file's integrity, foreign keys and expected 26-table
+schema, plus PostgreSQL `ct_staging` row counts (no row contents). A successful
+readiness result means the target **test schema is empty and eligible for an
+explicit, separately approved staging import**, not that the app has changed
+storage backends. Nonempty targets are blocked; no records are deleted.
+
+The existing `scripts/staging_import.py` requires a consistent verified SQLite
+snapshot + SHA256 manifest and a dedicated staging connection before it can
+copy data. The imported data may include sensitive financial, customer and
+audit records; do not perform an import unless staging access controls and a
+retained source backup are verified. The active Streamlit application remains
+SQLite-backed even after staging import, pending full backend replacement and
+parallel/reconciliation acceptance.
+
 ## Release blockers (do not skip)
 
 1. Validate real PostgreSQL schema and integration against an **isolated, non-production** database. The offline adapter test is not a live PostgreSQL test.
