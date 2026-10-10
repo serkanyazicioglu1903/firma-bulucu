@@ -352,5 +352,27 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                         )
 
 
+    def test_postgres_live_backup_has_26_tables_and_hash_manifest(self):
+        """Export a consistent, real, read-only backup of fictional Docker data."""
+        import io
+        import json
+        import zipfile
+        import hashlib
+        from scripts.postgres_backup import export_postgres_backup
+
+        status, archive = export_postgres_backup(self.url)
+        self.assertEqual(status, "ok")
+        self.assertIsInstance(archive, bytes)
+        with zipfile.ZipFile(io.BytesIO(archive)) as z:
+            manifest = json.loads(z.read("manifest.json"))
+            self.assertEqual(manifest["schema"], "ct_app")
+            self.assertEqual(len(manifest["tables"]), 26)
+            for table, item in manifest["tables"].items():
+                contents = z.read("tables/" + table + ".json")
+                self.assertEqual(hashlib.sha256(contents).hexdigest(), item["sha256"])
+                self.assertEqual(len(json.loads(contents)), item["row_count"])
+            self.assertGreaterEqual(manifest["tables"]["customers"]["row_count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
