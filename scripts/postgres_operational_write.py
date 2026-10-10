@@ -5,7 +5,8 @@ inert until the application uses its functions under authenticated server-side
 roles. Each operation validates the full ct_app schema and commits *one* atomic
 transaction; unexpected errors are sanitized and rolled back.
 
-Writes are disabled by default (AS_CONTROL_TOWER_PG_WRITES_ENABLED != 1).\nThe Streamlit app must not expose these write functions to customers until
+Writes are disabled by default (AS_CONTROL_TOWER_PG_WRITES_ENABLED != 1).
+The Streamlit app must not expose these write functions to customers until
 security, backup/restore, real-database integration and feature-parity testing
 are complete. ct_staging is never touched by this module.
 """
@@ -13,6 +14,7 @@ from datetime import date
 import os
 from decimal import Decimal, InvalidOperation
 
+from scripts.postgres_connection import sslmode_for
 from scripts.staging_transaction_smoke import validate_test_url
 from scripts.staging_validate import validate_staging_structure
 
@@ -25,6 +27,7 @@ _ALLOWED_ROLES = {
     "create_shipment": frozenset(("ADMIN", "PURCHASING")),
     "receive_shipment": frozenset(("ADMIN", "PURCHASING")),
     "hold_inventory_lot": frozenset(("ADMIN", "QUALITY")),
+    "release_inventory_lot": frozenset(("ADMIN", "QUALITY")),
     "create_payable": frozenset(("ADMIN", "FINANCE")),
     "pay_supplier": frozenset(("ADMIN", "FINANCE")),
 }
@@ -91,7 +94,7 @@ def _execute(url, role, operation, action):
             return "schema_mismatch", None
         import psycopg
         with psycopg.connect(
-            str(url).strip(), connect_timeout=8, sslmode="require",
+            str(url).strip(), connect_timeout=8, sslmode=sslmode_for(url),
             autocommit=True,
         ) as conn:
             with conn.transaction():
@@ -352,6 +355,47 @@ def hold_inventory_lot(url, role, lot_id, case_no, hold_kg, reason):
     return _execute(url, role, "hold_inventory_lot", action)
 
 
+
+def release_inventory_lot(url, role, lot_id, resolution):
+    """Close a linked quality case and atomically unblock held inventory.
+
+    The case relationship must match the locked lot. Replaying a release cannot
+    reopen or silently modify an already released or unrelated case.
+    """
+    def action(cur):
+        lot = _id(lot_id)
+        reason = _text(resolution, label="resolution_required", max_length=1500)
+        cur.execute(
+            'SELECT quality_status,quality_case_id FROM '
+            '"ct_app"."inventory_lots" WHERE id=%s FOR UPDATE', (lot,),
+        )
+        stock = cur.fetchone()
+        if stock is None:
+            raise OperationRejected("unknown_lot")
+        if stock[0] != "HOLD" or stock[1] is None:
+            raise OperationRejected("lot_not_on_hold")
+        case_id = int(stock[1])
+        cur.execute(
+            'SELECT inventory_lot_id,status FROM "ct_app"."quality_cases" '
+            'WHERE id=%s FOR UPDATE', (case_id,),
+        )
+        claim = cur.fetchone()
+        if claim is None or claim[0] != lot or claim[1] == "Kapandı":
+            raise OperationRejected("case_mismatch")
+        cur.execute(
+            'UPDATE "ct_app"."quality_cases" SET '
+            'status=%s,final_resolution=%s,closed_date=%s WHERE id=%s',
+            ("Kapandı", reason, date.today().isoformat(), case_id),
+        )
+        cur.execute(
+            'UPDATE "ct_app"."inventory_lots" SET '
+            'quality_status=%s,quality_hold_kg=0 WHERE id=%s',
+            ("Released", lot),
+        )
+        return case_id
+    return _execute(url, role, "release_inventory_lot", action)
+
+
 def create_payable(url, role, supplier, purchase_order_id, invoice_no,
                    due_date, amount, currency):
     """Create an AP invoice with advisory-locked duplicate detection."""
@@ -413,7 +457,9 @@ def pay_supplier(url, role, payable_id, account_id, amount, reference,
         if invoice[0] is not None:
             cur.execute(
                 'SELECT EXISTS (SELECT 1 FROM "ct_app"."inventory_lots" '
-                'WHERE purchase_order_id=%s AND quality_hold_kg>0)',
+                "WHERE purchase_order_id=%s AND "
+                "(COALESCE(quality_hold_kg,0)>0 OR "
+                "COALESCE(quality_status,'Released')!='Released'))",
                 (invoice[0],),
             )
             if cur.fetchone()[0]:
@@ -430,11 +476,14 @@ def pay_supplier(url, role, payable_id, account_id, amount, reference,
             raise OperationRejected("currency_mismatch")
         if Decimal(str(account[1] or 0)) < paid_now:
             raise OperationRejected("insufficient_funds")
+        # Guard bank-transfer identity across both this payable and other
+        # supplier invoices drawn from the same account. The payable and bank
+        # FOR UPDATE locks serialize competing payments before this check.
         cur.execute(
             'SELECT 1 FROM "ct_app"."finance_transactions" '
-            "WHERE payable_id=%s AND transaction_type='Ödeme' "
-            "AND reference=%s LIMIT 1",
-            (payable,reference_id),
+            "WHERE transaction_type='Ödeme' AND reference=%s "
+            "AND (payable_id=%s OR account_id=%s) LIMIT 1",
+            (reference_id,payable,bank),
         )
         if cur.fetchone() is not None:
             raise OperationRejected("duplicate_payment")

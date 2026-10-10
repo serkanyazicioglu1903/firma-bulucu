@@ -5,6 +5,7 @@ path; the existing Streamlit CRM, stock, quality and finance screens remain
 SQLite-backed until full transactional write and security parity is verified.
 No SQL writes, source SQLite access, or credentials are exposed.
 """
+from scripts.postgres_connection import sslmode_for
 from scripts.staging_transaction_smoke import validate_test_url
 from scripts.staging_validate import validate_staging_structure
 
@@ -32,7 +33,7 @@ def read_operational_counts(url):
         from psycopg import sql
         counts = {}
         with psycopg.connect(
-            str(url).strip(), connect_timeout=8, sslmode="require",
+            str(url).strip(), connect_timeout=8, sslmode=sslmode_for(url),
         ) as connection:
             with connection.cursor() as cur:
                 cur.execute("SET TRANSACTION READ ONLY")
