@@ -1,30 +1,44 @@
-"""Smoke-test a brand-new empty Control Tower workspace with no demo seed.
+"""Streamlit smoke test against an isolated, initially empty SQLite database."""
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
 
-The app is executed through Streamlit's test harness, not a live service.
-All SQLite writes are redirected to a temporary test-only path.
-"""
 from streamlit.testing.v1 import AppTest
 import control_tower as ct
 
 
-def test_empty_workspace_starts_without_seed_or_crash(monkeypatch, tmp_path):
-    monkeypatch.delenv("AS_CONTROL_TOWER_DEMO_SEED", raising=False)
-    test_db = tmp_path / "empty_workspace.db"
-    monkeypatch.setattr(ct, "DB_PATH", test_db)
+class EmptyWorkspaceUITests(unittest.TestCase):
+    def test_empty_workspace_starts_without_seed_or_crash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            test_db = Path(directory) / "empty_workspace.db"
+            with patch.dict(os.environ, {"AS_CONTROL_TOWER_DEMO_SEED": ""}):
+                with patch.object(ct, "DB_PATH", test_db):
+                    app = AppTest.from_file(
+                        Path(__file__).resolve().parents[1] / "app.py",
+                        default_timeout=60,
+                    )
+                    app.session_state["ct_user"] = {
+                        "username": "isolated-admin",
+                        "display_name": "Isolated Admin",
+                        "role": "ADMIN",
+                    }
+                    app.session_state["ct_session_id"] = "isolated-session"
+                    app.run()
+                    self.assertFalse(app.exception, str(app.exception))
+                    with ct.get_conn() as conn:
+                        for table in (
+                            "customers", "product_catalog", "warehouses",
+                            "purchase_orders",
+                        ):
+                            with self.subTest(table=table):
+                                self.assertEqual(
+                                    conn.execute(
+                                        f"SELECT COUNT(*) FROM {table}"
+                                    ).fetchone()[0], 0
+                                )
 
-    app = AppTest.from_file(
-        str(__import__("pathlib").Path(__file__).resolve().parents[1] / "app.py"),
-        default_timeout=60,
-    )
-    app.session_state["ct_user"] = {
-        "username": "isolated-admin",
-        "display_name": "Isolated Admin",
-        "role": "ADMIN",
-    }
-    app.session_state["ct_session_id"] = "isolated-session"
-    app.run()
-    assert not app.exception, str(app.exception)
 
-    with ct.get_conn() as conn:
-        for table in ("customers", "product_catalog", "warehouses", "purchase_orders"):
-            assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+if __name__ == "__main__":
+    unittest.main()
