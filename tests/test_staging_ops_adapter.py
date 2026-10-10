@@ -287,7 +287,7 @@ class OperationsPilotTests(unittest.TestCase):
     def test_cleanup_at_each_intermediate_stage(self):
         for stage in ("created", "received", "held", "paid"):
             with self.subTest(stage=stage):
-                self.setUp()
+                self.store=Store()
                 ident=self.create()
                 if stage in ("received", "held", "paid"):
                     self.assertEqual(advance_ops_pilot(self.dsn,ident,"receive"),"updated")
