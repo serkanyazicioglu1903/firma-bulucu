@@ -15,7 +15,7 @@ from scripts.postgres_connection import sslmode_for, CI_DATABASE, CI_USER
 from scripts.postgres_live_schema import schema_ddl_steps
 from scripts.staging_validate import validate_staging_structure
 from scripts.postgres_operational_write import (
-    create_customer, create_product, create_purchase_order, create_shipment,
+    create_customer, create_product, create_warehouse, create_purchase_order, create_shipment,
     receive_shipment, hold_inventory_lot, release_inventory_lot,
     create_payable, pay_supplier,
 )
@@ -95,14 +95,18 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
             self.url, "PURCHASING", "CI FAKE INGREDIENT", "CI FAKE SUPPLIER"
         )
         self.assertEqual(product[0], "ok", product[0])
-        self.execute(
-            'INSERT INTO "ct_app"."warehouses" (name) VALUES (%s)',
-            ("CI FICTIONAL WAREHOUSE",),
+        status, warehouse = create_warehouse(
+            self.url, "PURCHASING", "CI FICTIONAL WAREHOUSE",
+            city="London", actor="ci-purchaser",
         )
-        warehouse = self.execute(
-            'SELECT id FROM "ct_app"."warehouses" WHERE name=%s',
-            ("CI FICTIONAL WAREHOUSE",),
-        )[0]
+        self.assertEqual(status, "ok")
+        self.assertEqual(
+            create_warehouse(
+                self.url, "PURCHASING", "CI FICTIONAL WAREHOUSE",
+                actor="ci-purchaser",
+            )[0],
+            "duplicate_warehouse",
+        )
         self.execute(
             'INSERT INTO "ct_app"."cash_accounts" (name,currency,balance) '
             'VALUES (%s,%s,%s)',
@@ -225,6 +229,17 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
         self.assertEqual(counts["inventory_lots"], 1)
         self.assertEqual(counts["quality_cases"], 1)
         self.assertEqual(counts["finance_transactions"], 2)
+        actor_audits = self.execute(
+            'SELECT COUNT(*) FROM "ct_app"."audit_log" '
+            "WHERE username=%s AND action=%s",
+            ("ci-purchaser", "create_warehouse"),
+        )[0]
+        self.assertEqual(actor_audits, 1)
+        self.assertGreaterEqual(
+            self.execute('SELECT COUNT(*) FROM "ct_app"."audit_log"')[0],
+            10,
+        )
+
         # PostgreSQL 360 reads real relational records, not SQLite snapshots.
         for section, wanted_key in (
             ("Müşteriler", "name"), ("Ürün Kataloğu", "supplier"),
