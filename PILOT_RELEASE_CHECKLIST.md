@@ -31,6 +31,24 @@ retained source backup are verified. The active Streamlit application remains
 SQLite-backed even after staging import, pending full backend replacement and
 parallel/reconciliation acceptance.
 
+## Dedicated future operational schema (not cut over)
+
+`ct_staging` is a sandbox for fictional test records. Do **not** enter real
+company records there. System Health now has an opt-in **ct_app** setup for a
+separate, new, empty 26-table PostgreSQL schema. It checks the schema status
+read-only and refuses to modify an existing ct_app. The optional create action
+requires an explicit admin checkbox, is transactional, uses the checked-in
+schema definitions, and never copies or deletes rows. It is not invoked
+implicitly by app startup.
+
+**Crucial:** All existing CRM, purchasing, inventory, quality, finance, audit,
+reporting and security operations remain SQLite-backed. Creating ct_app does
+not move any of those modules. Before real company data is entered, implement
+and test authenticated PostgreSQL CRUD and transactional business rules for
+**all** modules, migrate/reconcile any retained SQLite data, validate backup
+and restore, and intentionally activate the fully reviewed backend. Avoid
+silently running some modules against SQLite and others against PostgreSQL.
+
 ## Release blockers (do not skip)
 
 1. Validate real PostgreSQL schema and integration against an **isolated, non-production** database. The offline adapter test is not a live PostgreSQL test.
