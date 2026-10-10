@@ -80,7 +80,21 @@ def _currency(value):
     return currency
 
 
-def _execute(url, role, operation, action):
+_AUDIT_TABLE = {
+    "create_customer": "customers",
+    "create_product": "product_catalog",
+    "create_warehouse": "warehouses",
+    "create_purchase_order": "purchase_orders",
+    "create_shipment": "shipments",
+    "receive_shipment": "inventory_lots",
+    "hold_inventory_lot": "quality_cases",
+    "release_inventory_lot": "quality_cases",
+    "create_payable": "payables",
+    "pay_supplier": "finance_transactions",
+}
+
+
+def _execute(url, role, operation, action, actor=None):
     """Fail closed on schema/role/config errors; do not leak DB exceptions."""
     if role not in _ALLOWED_ROLES[operation]:
         return "forbidden", None
@@ -104,6 +118,18 @@ def _execute(url, role, operation, action):
                     cur.execute("SET LOCAL lock_timeout = '3s'")
                     cur.execute('SET LOCAL search_path TO "ct_app", pg_catalog')
                     payload = action(cur)
+                    # Write the audit trail within the SAME PostgreSQL
+                    # transaction. Any audit failure also rolls back the
+                    # associated customer/stock/financial mutation.
+                    # No business values, SQL literals or credentials logged.
+                    safe_actor = _text(
+                        actor or "backend-service", label="invalid_actor", max_length=80
+                    )
+                    cur.execute(
+                        'INSERT INTO "ct_app"."audit_log" '
+                        '(username,role,action,table_name) VALUES (%s,%s,%s,%s)',
+                        (safe_actor, role, operation, _AUDIT_TABLE[operation]),
+                    )
         return "ok", payload
     except OperationRejected as exc:
         return exc.code, None
@@ -112,7 +138,7 @@ def _execute(url, role, operation, action):
         return "failed", None
 
 
-def create_customer(url, role, name, country="Türkiye", sector=""):
+def create_customer(url, role, name, country="Türkiye", sector="", actor=None):
     """Create one authenticated customer; serialize duplicate-name checks."""
     def action(cur):
         customer = _text(name, label="invalid_customer")
@@ -135,10 +161,10 @@ def create_customer(url, role, name, country="Türkiye", sector=""):
             (customer, str(country or "").strip(), str(sector or "").strip()),
         )
         return int(cur.fetchone()[0])
-    return _execute(url, role, "create_customer", action)
+    return _execute(url, role, "create_customer", action, actor=actor)
 
 
-def create_product(url, role, name, supplier, category=""):
+def create_product(url, role, name, supplier, category="", actor=None):
     """Insert a verified product; name is unique in the PostgreSQL schema."""
     def action(cur):
         product = _text(name, label="invalid_product")
@@ -157,11 +183,11 @@ def create_product(url, role, name, supplier, category=""):
             (product, vendor, str(category or "").strip()),
         )
         return int(cur.fetchone()[0])
-    return _execute(url, role, "create_product", action)
+    return _execute(url, role, "create_product", action, actor=actor)
 
 
 
-def create_warehouse(url, role, name, city="", warehouse_type="Normal Depo"):
+def create_warehouse(url, role, name, city="", warehouse_type="Normal Depo", actor=None):
     """Create a unique warehouse in ct_app; validated, atomic and role-gated."""
     allowed_types = frozenset(("Normal Depo", "Antrepo", "Soğuk Depo"))
     def action(cur):
@@ -180,7 +206,7 @@ def create_warehouse(url, role, name, city="", warehouse_type="Normal Depo"):
             (warehouse, str(city or "").strip(), warehouse_type),
         )
         return int(cur.fetchone()[0])
-    return _execute(url, role, "create_warehouse", action)
+    return _execute(url, role, "create_warehouse", action, actor=actor)
 
 
 def create_purchase_order(url, role, po_number, supplier, product_id,
