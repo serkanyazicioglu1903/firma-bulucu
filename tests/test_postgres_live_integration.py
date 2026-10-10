@@ -19,7 +19,7 @@ from scripts.postgres_operational_write import (
     receive_shipment, hold_inventory_lot, release_inventory_lot,
     create_payable, pay_supplier,
 )
-from scripts.postgres_operational_read import read_operational_counts
+from scripts.postgres_operational_read import read_operational_counts, read_operational_workspace
 
 
 def validated_ci_url():
@@ -225,6 +225,22 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
         self.assertEqual(counts["inventory_lots"], 1)
         self.assertEqual(counts["quality_cases"], 1)
         self.assertEqual(counts["finance_transactions"], 2)
+        # PostgreSQL 360 reads real relational records, not SQLite snapshots.
+        for section, wanted_key in (
+            ("Müşteriler", "name"), ("Ürün Kataloğu", "supplier"),
+            ("Satın Alma", "po_number"), ("Sevkiyat", "shipment_ref"),
+            ("Stok", "quality_status"), ("Kalite", "case_no"),
+            ("Borçlar", "invoice_no"), ("Banka / Kasa", "balance"),
+            ("Finans Hareketleri", "reference"),
+        ):
+            with self.subTest(section=section):
+                workspace_status, rows = read_operational_workspace(
+                    self.url, section,
+                )
+                self.assertEqual(workspace_status, "ok")
+                self.assertTrue(rows)
+                self.assertIn(wanted_key, rows[0])
+
 
 
 if __name__ == "__main__":
