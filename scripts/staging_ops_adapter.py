@@ -256,6 +256,15 @@ def advance_ops_pilot(url, identifier, step):
                     elif step == "pay":
                         if parent[2] != 1 or parent[4] != 0:
                             raise PilotSafetyError("Receive first or payment already posted.")
+                        # Refuse settlement unless the exact synthetic HOLD remains intact.
+                        _one(cur,
+                             'SELECT id FROM "ct_staging"."inventory_lots" '
+                             'WHERE id=%s AND shipment_id=%s AND product_id=%s '
+                             'AND quantity_received_kg=%s AND quantity_available_kg=%s '
+                             'AND quality_hold_kg=%s AND quality_status=%s '
+                             'FOR UPDATE',
+                             (identifier,identifier,identifier,SHIPMENT_KG,
+                              SHIPMENT_KG,HOLD_KG,"HOLD"),"stock HOLD")
                         _one(cur,
                              'SELECT id FROM "ct_staging"."quality_cases" '
                              'WHERE id=%s AND case_no=%s '
