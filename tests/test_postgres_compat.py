@@ -30,6 +30,15 @@ class SqlTranslationTests(unittest.TestCase):
         self.assertIn("MAX(t.amount)", q)
         self.assertIn("MAX(CASE", q)
 
+    def test_round_two_argument_double_precision_sql(self):
+        translated = translate_sql(
+            "SELECT ROUND(SUM(value*probability/100.0),0),ROUND(value),"
+            "ROUND(CASE WHEN value>0 THEN value ELSE 0 END,2) FROM x"
+        )
+        self.assertIn("(ROUND(CAST(SUM(value*probability/100.0) AS NUMERIC), 0))::double precision", translated)
+        self.assertIn("ROUND(value)", translated)
+        self.assertIn("(ROUND(CAST(CASE WHEN value>0 THEN value ELSE 0 END AS NUMERIC), 2))::double precision", translated)
+
     def test_julianday_nested_and_now(self):
         sql = translate_sql(
             "SELECT CAST(julianday(date('now'))-julianday(NULLIF(o.due_date,'')) "
