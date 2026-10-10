@@ -141,3 +141,108 @@ def test_integrated_ui_can_deliver_order(order):
     assert not app.exception
     assert scalar('SELECT quantity_available_kg FROM inventory_lots') == 900
     assert scalar('SELECT amount FROM receivables') == 300
+
+
+def test_actual_cost_requires_reconciliation_and_reverses(order):
+    import workflow_adjustments as a
+    assert a.add_cost(1,'GOODS','Mal bedeli',2000,'EUR',1,date.today(),'Fatura')[0]
+    assert a.add_cost(1,'FREIGHT','Navlun',200,'USD',.9,date.today(),'Navlun faturası')[0]
+    assert not a.add_cost(1,'FREIGHT','Navlun',200,'USD',.9,date.today(),'Tekrar')[0]
+    assert not a.add_cost(1,'BADFX','Navlun',200,'EUR',2,date.today(),'Yanlış kur')[0]
+    assert flow.deliver(1,1,400,'D1',date.today())[0]
+    assert a.cost_report().iloc[0]['gerçekleşen_katkı'] is None
+    assert a.reconcile(1,True,'Tüm masraflar tamam')[0]
+    report=a.cost_report().iloc[0]
+    assert report['gerçek_birim_maliyet'] == 2.18
+    assert report['gerçekleşen_katkı'] == pytest.approx(328)
+    assert not a.reverse_cost(2,'COST-REVERSE','Hatalı fatura')[0]
+    assert a.reconcile(1,False,'Navlun düzeltilecek')[0]
+    assert a.reverse_cost(2,'COST-REVERSE','Hatalı fatura')[0]
+    assert not a.reverse_cost(2,'SECOND-REVERSE','Tekrar')[0]
+    assert a.reconcile(1,True,'Düzeltildi')[0]
+    assert a.cost_report().iloc[0]['gerçekleşen_katkı']==400
+    assert scalar('SELECT balance FROM cash_accounts') == 10000
+
+
+def test_unpaid_customer_return_creates_hold_and_reduces_receivable(order):
+    import workflow_adjustments as a
+    assert flow.deliver(1,1,400,'D1',date.today())[0]
+    assert a.return_delivery(1,100,'R1',date.today(),'Ambalaj hasarı')[0]
+    assert scalar('SELECT credit_amount FROM receivables')==300
+    assert ct.outstanding_receivables().iloc[0]['outstanding']==900
+    assert scalar("SELECT quality_hold_kg FROM inventory_lots WHERE lot_number='RETURN-R1'")==100
+    assert scalar('SELECT COUNT(*) FROM payables')==1
+    assert not flow.deliver(1,2,100,'BLOCKED-RETURN',date.today())[0]
+    assert flow.overview().iloc[0]['sevk_kg']==300
+    assert flow.overview().iloc[0]['net_satış']==900
+    assert flow.overview().iloc[0]['tahmini_kâr']==150
+    assert not a.return_delivery(1,100,'R1',date.today(),'Tekrar')[0]
+    assert not a.return_delivery(1,301,'R2',date.today(),'Fazla')[0]
+    assert not ct.record_receivable_payment(1,1000,date.today(),1,'OVER','')[0]
+    assert ct.record_receivable_payment(1,900,date.today(),1,'COLLECT','')[0]
+    assert ct.outstanding_receivables().empty
+
+
+def test_paid_return_creates_refund_payable_and_preserves_bank_until_payment(order):
+    import workflow_adjustments as a
+    assert flow.deliver(1,1,400,'D1',date.today())[0]
+    assert ct.record_receivable_payment(1,1200,date.today(),1,'REC','')[0]
+    assert a.return_delivery(1,100,'R1',date.today(),'Müşteri iadesi')[0]
+    assert scalar('SELECT amount FROM payables WHERE id=2')==300
+    assert scalar('SELECT balance FROM cash_accounts')==11200
+    assert ct.record_payable_payment(2,300,date.today(),1,'REFUND','')[0]
+    assert scalar('SELECT balance FROM cash_accounts')==10900
+    assert ct.outstanding_receivables().empty
+    assert not a.reverse_payment(1,'INVALID-REVERSE','İade sonrası')[0]
+
+
+def test_part_paid_return_splits_credit_and_refund(order):
+    import workflow_adjustments as a
+    assert flow.deliver(1,1,400,'D1',date.today())[0]
+    assert ct.record_receivable_payment(1,1000,date.today(),1,'REC','')[0]
+    assert a.return_delivery(1,100,'R1',date.today(),'İade')[0]
+    assert scalar('SELECT amount FROM payables WHERE id=2')==100
+    assert ct.outstanding_receivables().empty
+    assert a.return_delivery(1,100,'R2',date.today(),'İkinci iade')[0]
+    assert scalar('SELECT amount FROM payables WHERE id=3')==300
+
+
+def test_finance_reversal_is_atomic_and_idempotent(order):
+    import workflow_adjustments as a
+    assert ct.record_payable_payment(1,400,date.today(),1,'PAY','')[0]
+    assert a.reverse_payment(1,'UNDO-PAY','Yanlış tutar')[0]
+    assert scalar('SELECT paid_amount FROM payables')==0
+    assert scalar('SELECT balance FROM cash_accounts')==10000
+    assert scalar('SELECT SUM(amount) FROM finance_transactions')==0
+    assert not a.reverse_payment(1,'AGAIN','Tekrar')[0]
+    assert not a.reverse_payment(2,'UNDO-UNDO','Ters kaydın tersi')[0]
+
+
+def test_return_rolls_back_on_credit_failure(order):
+    import workflow_adjustments as a
+    assert flow.deliver(1,1,400,'D1',date.today())[0]
+    with ct.get_conn() as c:
+        c.execute("CREATE TRIGGER credit_failure BEFORE UPDATE ON receivables BEGIN SELECT RAISE(ABORT,'test'); END")
+    with pytest.raises(sqlite3.IntegrityError):
+        a.return_delivery(1,100,'FAIL',date.today(),'Test rollback')
+    assert scalar('SELECT COUNT(*) FROM workflow_returns')==0
+    assert scalar('SELECT COUNT(*) FROM inventory_lots')==1
+    assert scalar('SELECT COUNT(*) FROM payables')==1
+
+
+def test_parallel_returns_cannot_exceed_delivered_quantity(order):
+    import workflow_adjustments as a
+    assert flow.deliver(1,1,400,'D1',date.today())[0]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results=list(pool.map(lambda ref:a.return_delivery(1,300,ref,date.today(),'İade'),['R1','R2']))
+    assert sum(ok for ok,_ in results)==1
+    assert scalar('SELECT SUM(quantity_kg) FROM workflow_returns')==300
+
+
+def test_viewer_cannot_adjust_costs_or_returns(order,monkeypatch):
+    import workflow_adjustments as a
+    monkeypatch.setattr(ct,'current_role',lambda:'VIEWER')
+    assert not a.add_cost(1,'X','Mal bedeli',10,'EUR',1,date.today(),'X')[0]
+    assert not a.reconcile(1,True,'X')[0]
+    assert not a.return_delivery(1,10,'X',date.today(),'X')[0]
+    assert not a.reverse_payment(1,'X','X')[0]

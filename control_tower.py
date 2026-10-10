@@ -518,6 +518,7 @@ def init_db():
         ensure_column(conn, "customers", "product_profile", "TEXT DEFAULT ''")
         ensure_column(conn, "customers", "priority_tier", "TEXT DEFAULT 'B'")
         ensure_column(conn, "customers", "credit_limit", "REAL DEFAULT 0")
+        ensure_column(conn, "receivables", "credit_amount", "REAL DEFAULT 0")
         ensure_column(conn, "customers", "default_payment_days", "INTEGER DEFAULT 90")
         ensure_column(conn, "inventory_lots", "quality_status", "TEXT DEFAULT 'Released'")
         ensure_column(conn, "inventory_lots", "quality_case_id", "INTEGER")
@@ -1358,12 +1359,12 @@ def outstanding_receivables():
     df = query_df("""
         SELECT r.id,r.customer_id,c.name AS customer,r.invoice_no,r.invoice_date,
                r.due_date,r.amount,r.paid_amount,
-               CASE WHEN r.amount-r.paid_amount < 0 THEN 0 ELSE r.amount-r.paid_amount END AS outstanding,
+               CASE WHEN r.amount-r.paid_amount-COALESCE(r.credit_amount,0) < 0 THEN 0 ELSE r.amount-r.paid_amount-COALESCE(r.credit_amount,0) END AS outstanding,
                r.currency,r.fx_to_base,r.base_currency,r.status,r.opportunity_id,r.notes,
                c.credit_limit,c.default_payment_days
         FROM receivables r
         JOIN customers c ON c.id=r.customer_id
-        WHERE (r.amount-r.paid_amount) > 0.0001
+        WHERE (r.amount-r.paid_amount-COALESCE(r.credit_amount,0)) > 0.0001
           AND r.status != 'İptal'
         ORDER BY r.due_date ASC,r.id ASC
     """)
@@ -1498,7 +1499,7 @@ def record_receivable_payment(receivable_id, amount, transaction_date,
         ).fetchone():
             return False, "Bu işlem referansı daha önce kaydedilmiş."
 
-        outstanding = max(float(row["amount"] or 0)-float(row["paid_amount"] or 0),0)
+        outstanding = max(float(row["amount"] or 0)-float(row["paid_amount"] or 0)-float(row["credit_amount"] or 0),0)
         if amount > outstanding + 0.0001:
             return False, "Tahsilat kalan alacaktan büyük olamaz."
 
@@ -1517,7 +1518,7 @@ def record_receivable_payment(receivable_id, amount, transaction_date,
                 )
 
         new_paid = float(row["paid_amount"] or 0)+amount
-        status = "Kapandı" if new_paid + 0.0001 >= float(row["amount"] or 0) else "Kısmi"
+        status = "Kapandı" if new_paid + float(row["credit_amount"] or 0) + 0.0001 >= float(row["amount"] or 0) else "Kısmi"
 
         try:
             conn.execute(
@@ -3669,16 +3670,16 @@ def render_control_tower():
                 SELECT c.id,c.name AS müşteri,c.credit_limit AS kredi_limiti,
                        c.currency AS limit_para,r.base_currency AS risk_para,
                        COALESCE(SUM(CASE
-                         WHEN r.status!='İptal' AND r.amount-r.paid_amount>0
-                         THEN (r.amount-r.paid_amount)*r.fx_to_base
+                         WHEN r.status!='İptal' AND r.amount-r.paid_amount-COALESCE(r.credit_amount,0)>0
+                         THEN (r.amount-r.paid_amount-COALESCE(r.credit_amount,0))*r.fx_to_base
                          ELSE 0 END),0) AS açık_risk_yönetim,
                        MAX(CASE
-                         WHEN r.due_date < date('now') AND r.amount-r.paid_amount>0
+                         WHEN r.due_date < date('now') AND r.amount-r.paid_amount-COALESCE(r.credit_amount,0)>0
                          THEN CAST(julianday(date('now'))-julianday(r.due_date) AS INTEGER)
                          ELSE 0 END) AS maks_gecikme_gün
                 FROM customers c
                 JOIN receivables r ON r.customer_id=c.id
-                WHERE r.status!='İptal' AND r.amount-r.paid_amount>0
+                WHERE r.status!='İptal' AND r.amount-r.paid_amount-COALESCE(r.credit_amount,0)>0
                 GROUP BY c.id,c.name,c.credit_limit,c.currency,r.base_currency
                 ORDER BY maks_gecikme_gün DESC,açık_risk_yönetim DESC
             """)
@@ -4807,11 +4808,11 @@ def render_control_tower():
                    c.currency AS limit_para,
                    COALESCE(SUM(CASE
                      WHEN r.status!='İptal' AND r.base_currency='EUR'
-                      AND r.amount-r.paid_amount>0
-                     THEN (r.amount-r.paid_amount)*r.fx_to_base ELSE 0 END),0) AS açık_risk_eur,
+                      AND r.amount-r.paid_amount-COALESCE(r.credit_amount,0)>0
+                     THEN (r.amount-r.paid_amount-COALESCE(r.credit_amount,0))*r.fx_to_base ELSE 0 END),0) AS açık_risk_eur,
                    MAX(CASE
                      WHEN r.base_currency='EUR' AND r.due_date<date('now')
-                      AND r.amount-r.paid_amount>0
+                      AND r.amount-r.paid_amount-COALESCE(r.credit_amount,0)>0
                      THEN CAST(julianday(date('now'))-julianday(r.due_date) AS INTEGER)
                      ELSE 0 END) AS gecikme_gün
             FROM customers c

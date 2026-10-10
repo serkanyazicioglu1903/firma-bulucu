@@ -146,7 +146,7 @@ def render_finance(db_path):
     with ar:
         st.dataframe(query_df(db_path,"""
             SELECT c.name AS müşteri,r.invoice_no AS fatura,r.due_date AS vade,
-                   r.amount-r.paid_amount AS kalan,r.currency AS para,r.status AS durum
+                   CASE WHEN r.amount-r.paid_amount-COALESCE(r.credit_amount,0)<0 THEN 0 ELSE r.amount-r.paid_amount-COALESCE(r.credit_amount,0) END AS kalan,r.currency AS para,r.status AS durum
             FROM receivables r JOIN customers c ON c.id=r.customer_id
             WHERE r.status!='İptal' ORDER BY r.due_date
         """),width="stretch",hide_index=True)

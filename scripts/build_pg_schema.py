@@ -10,7 +10,8 @@ import re
 import sqlite3
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = (ROOT / "control_tower.py", ROOT / "security_admin.py")
+SOURCES = (ROOT / "control_tower.py", ROOT / "security_admin.py",
+           ROOT / "integrated_workflow.py", ROOT / "workflow_adjustments.py")
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -124,6 +125,19 @@ def generate(schema="ct_staging"):
         # PostgreSQL rejects inline foreign keys pointing to not-yet-created tables.
         for table in tables:
             result.extend(foreign_key_sql(conn, table))
+        result.append("""
+CREATE FUNCTION protect_workflow_quote() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM workflow_orders WHERE quote_id=OLD.id) THEN
+        RAISE EXCEPTION 'Quote is locked by an integrated order';
+    END IF;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER workflow_quote_frozen BEFORE UPDATE OR DELETE ON quotes
+FOR EACH ROW EXECUTE FUNCTION protect_workflow_quote();
+""")
         result.append("COMMIT;")
         return "\n\n".join(result) + "\n", tables
 

@@ -16,7 +16,7 @@ def core():
 
 def init_workflow():
     with core().get_conn() as conn:
-        conn.executescript('''
+        conn.executescript("""
         CREATE TABLE IF NOT EXISTS workflow_orders (
             id INTEGER PRIMARY KEY,
             quote_id INTEGER NOT NULL UNIQUE,
@@ -43,7 +43,9 @@ def init_workflow():
         CREATE TRIGGER IF NOT EXISTS workflow_quote_no_delete BEFORE DELETE ON quotes
         WHEN EXISTS (SELECT 1 FROM workflow_orders WHERE quote_id=OLD.id)
         BEGIN SELECT RAISE(ABORT,'Siparişe bağlı teklif silinemez.'); END;
-        ''')
+        """)
+    from workflow_adjustments import init_adjustments
+    init_adjustments()
 
 
 def positive(value):
@@ -136,6 +138,8 @@ def deliver(workflow_id, lot_id, quantity, reference, delivery_date):
         if conn.execute("SELECT 1 FROM regulatory_items WHERE product_id=? AND status='Bloke'", (q['product_id'],)).fetchone():
             return False, 'Ürün için bloke regülasyon kaydı var.'
         sent = conn.execute('SELECT COALESCE(SUM(quantity_kg),0) FROM workflow_deliveries WHERE workflow_id=?', (workflow_id,)).fetchone()[0]
+        returned = conn.execute('SELECT COALESCE(SUM(r.quantity_kg),0) FROM workflow_returns r JOIN workflow_deliveries d ON d.id=r.delivery_id WHERE d.workflow_id=?', (workflow_id,)).fetchone()[0]
+        sent -= returned
         available = float(lot['quantity_available_kg'])-float(lot['quantity_reserved_kg'] or 0)
         if quantity > available + 0.000001 or sent + quantity > q['quantity_kg'] + 0.000001:
             return False, 'Miktar kullanılabilir stoğu veya kalan satış miktarını aşıyor.'
@@ -168,8 +172,12 @@ def overview():
         FROM workflow_orders w JOIN quotes q ON q.id=w.quote_id
         JOIN customers c ON c.id=q.customer_id JOIN purchase_orders po ON po.id=w.purchase_order_id
         JOIN payables p ON p.id=w.payable_id
-        LEFT JOIN (SELECT workflow_id,SUM(quantity_kg) qty,SUM(revenue_base) revenue,SUM(cost_base) cost
-                   FROM workflow_deliveries GROUP BY workflow_id) d ON d.workflow_id=w.id
+        LEFT JOIN (SELECT d.workflow_id,SUM(d.quantity_kg-COALESCE(r.qty,0)) qty,
+                   SUM(d.revenue_base-COALESCE(r.revenue,0)) revenue,
+                   SUM(d.cost_base*(1-COALESCE(r.qty,0)/d.quantity_kg)) cost
+                   FROM workflow_deliveries d LEFT JOIN
+                   (SELECT delivery_id,SUM(quantity_kg) qty,SUM(revenue_base) revenue FROM workflow_returns GROUP BY delivery_id) r ON r.delivery_id=d.id
+                   GROUP BY d.workflow_id) d ON d.workflow_id=w.id
         ORDER BY w.id DESC''')
 
 
@@ -215,3 +223,6 @@ def render_workflow():
                     (st.success if ok else st.error)(msg)
                     if ok:
                         st.rerun()
+
+        from workflow_adjustments_ui import render_adjustments
+        render_adjustments(summary)
