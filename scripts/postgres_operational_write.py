@@ -13,6 +13,7 @@ from datetime import date
 import os
 from decimal import Decimal, InvalidOperation
 
+from scripts.postgres_connection import sslmode_for
 from scripts.staging_transaction_smoke import validate_test_url
 from scripts.staging_validate import validate_staging_structure
 
@@ -91,7 +92,7 @@ def _execute(url, role, operation, action):
             return "schema_mismatch", None
         import psycopg
         with psycopg.connect(
-            str(url).strip(), connect_timeout=8, sslmode="require",
+            str(url).strip(), connect_timeout=8, sslmode=sslmode_for(url),
             autocommit=True,
         ) as conn:
             with conn.transaction():
