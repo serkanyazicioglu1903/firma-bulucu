@@ -626,6 +626,30 @@ def render_system_admin(db_path):
                         "Şema oluşturulamadı veya doğrulanamadı. "
                         "Hiçbir eski şirket kaydı silinmedi."
                     )
+            if st.button(
+                "ct_app canlı tablo kayıt sayılarını oku (salt okunur)",
+                key="ct_pg_live_app_counts", disabled=not db_url,
+            ):
+                from scripts.postgres_operational_read import read_operational_counts
+                live_status, live_counts = read_operational_counts(db_url)
+                if live_status == "ok":
+                    st.success("Kalıcı PostgreSQL ct_app tabloları doğrudan okundu.")
+                    st.dataframe(
+                        pd.DataFrame([
+                            {"Tablo": name, "Kayıt": number}
+                            for name, number in live_counts.items()
+                        ]),
+                        width="stretch", hide_index=True,
+                    )
+                else:
+                    st.error(
+                        "Kalıcı PostgreSQL kayıt sayıları okunamadı. "
+                        "Şema yapısını ve Supabase bağlantısını kontrol edin."
+                    )
+                st.caption(
+                    "Sadece tablo başına kayıt sayısı gösterilir; "
+                    "firma veya finans bilgileri okunmaz. SQLite değişmez."
+                )
             st.caption(
                 "Önemli: Yeni PostgreSQL şeması oluşturulsa bile mevcut CRM, "
                 "stok, kalite ve finans ekranları SQLite kullanır. "
