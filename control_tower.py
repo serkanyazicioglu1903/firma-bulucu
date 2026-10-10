@@ -1482,6 +1482,18 @@ def record_receivable_payment(receivable_id, amount, transaction_date,
         if row is None:
             return False, "Alacak kaydı bulunamadı."
 
+        # A bank reference is a payment identity for this invoice. Reject
+        # accidental replays before touching either the ledger or bank balance.
+        payment_ref = str(reference or "").strip()
+        if payment_ref:
+            duplicate = conn.execute(
+                "SELECT 1 FROM finance_transactions "
+                "WHERE transaction_type=? AND receivable_id=? AND reference=? LIMIT 1",
+                ("Tahsilat", int(receivable_id), payment_ref),
+            ).fetchone()
+            if duplicate is not None:
+                return False, "Bu ödeme/tahsilat referansı daha önce kaydedilmiş."
+
         outstanding = max(float(row["amount"] or 0)-float(row["paid_amount"] or 0),0)
         if amount > outstanding + 0.0001:
             return False, "Tahsilat kalan alacaktan büyük olamaz."
@@ -1516,7 +1528,7 @@ def record_receivable_payment(receivable_id, amount, transaction_date,
                 (
                     int(receivable_id),str(transaction_date),amount,row["currency"],
                     float(row["fx_to_base"] or 1),row["base_currency"] or "EUR",
-                    int(account_id) if account_id else None,reference,notes
+                    int(account_id) if account_id else None,payment_ref,notes
                 )
             )
             if account is not None:
@@ -1544,6 +1556,18 @@ def record_payable_payment(payable_id, amount, transaction_date,
         ).fetchone()
         if row is None:
             return False, "Borç kaydı bulunamadı."
+
+        # A bank reference is a payment identity for this invoice. Reject
+        # accidental replays before touching either the ledger or bank balance.
+        payment_ref = str(reference or "").strip()
+        if payment_ref:
+            duplicate = conn.execute(
+                "SELECT 1 FROM finance_transactions "
+                "WHERE transaction_type=? AND payable_id=? AND reference=? LIMIT 1",
+                ("Ödeme", int(payable_id), payment_ref),
+            ).fetchone()
+            if duplicate is not None:
+                return False, "Bu ödeme/tahsilat referansı daha önce kaydedilmiş."
 
         outstanding = max(float(row["amount"] or 0)-float(row["paid_amount"] or 0),0)
         if amount > outstanding + 0.0001:
@@ -1579,7 +1603,7 @@ def record_payable_payment(payable_id, amount, transaction_date,
                 (
                     int(payable_id),str(transaction_date),amount,row["currency"],
                     float(row["fx_to_base"] or 1),row["base_currency"] or "EUR",
-                    int(account_id) if account_id else None,reference,notes
+                    int(account_id) if account_id else None,payment_ref,notes
                 )
             )
             if account is not None:
