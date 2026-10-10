@@ -193,6 +193,44 @@ class OperationalWriteTests(unittest.TestCase):
         )
         self.assertFalse(any(s.startswith("INSERT ") for s in self.statements()))
 
+    def test_quality_release_closes_correct_case_and_unblocks_stock(self):
+        self.rows(("HOLD", 44), (77, "Açık"))
+        self.assertEqual(
+            op.release_inventory_lot(URL, "QUALITY", 77, "Supplier replacement approved"),
+            ("ok", 44),
+        )
+        self.assertTrue(any(
+            'UPDATE "ct_app"."quality_cases"' in stmt
+            for stmt in self.statements()
+        ))
+        self.assertTrue(any(
+            'UPDATE "ct_app"."inventory_lots"' in stmt
+            for stmt in self.statements()
+        ))
+
+    def test_quality_release_replay_or_unrelated_case_is_rejected(self):
+        self.rows(("Released", 44))
+        self.assertEqual(
+            op.release_inventory_lot(URL, "ADMIN", 77, "Repeat"),
+            ("lot_not_on_hold", None),
+        )
+        self.assertFalse(any(stmt.startswith("UPDATE ") for stmt in self.statements()))
+
+        self.cur.reset_mock()
+        self.rows(("HOLD", 44), (88, "Açık"))
+        self.assertEqual(
+            op.release_inventory_lot(URL, "QUALITY", 77, "Wrong case"),
+            ("case_mismatch", None),
+        )
+        self.assertFalse(any(stmt.startswith("UPDATE ") for stmt in self.statements()))
+
+    def test_viewer_cannot_release_quality_hold(self):
+        self.assertEqual(
+            op.release_inventory_lot(URL, "VIEWER", 77, "Not authorized"),
+            ("forbidden", None),
+        )
+        self.connect.assert_not_called()
+
     def test_invoice_duplicate_protection(self):
         self.rows(("Supplier",), None, (91,))
         self.assertEqual(
