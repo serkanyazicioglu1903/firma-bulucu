@@ -1,4 +1,6 @@
 import argparse
+import os
+import database
 import tempfile
 from pathlib import Path
 
@@ -25,11 +27,8 @@ def scalar(sql, params=()):
 def run_checks():
     failures = []
 
-    tables = set(
-        ct.query_df(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )["name"].tolist()
-    )
+    with ct.get_conn() as conn:
+        tables = set(database.table_names(conn))
     missing = sorted(REQUIRED_TABLES - tables)
     if missing:
         failures.append("Eksik tablolar: " + ", ".join(missing))
@@ -98,10 +97,12 @@ def main():
     )
     args = parser.parse_args()
 
+    previous_backend = os.environ.get("AS_CONTROL_TOWER_BACKEND")
     previous = ct.DB_PATH
     temp = None
     try:
         if args.demo:
+            os.environ["AS_CONTROL_TOWER_BACKEND"] = "sqlite"
             temp = tempfile.TemporaryDirectory()
             ct.DB_PATH = Path(temp.name) / "preflight.db"
             ct.init_db()
@@ -122,6 +123,10 @@ def main():
         print("Şema ve temel veri bütünlüğü kontrolleri temiz.")
     finally:
         ct.DB_PATH = previous
+        if previous_backend is None:
+            os.environ.pop("AS_CONTROL_TOWER_BACKEND", None)
+        else:
+            os.environ["AS_CONTROL_TOWER_BACKEND"] = previous_backend
         if temp:
             temp.cleanup()
 

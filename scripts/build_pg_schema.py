@@ -10,7 +10,8 @@ import re
 import sqlite3
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = (ROOT / "control_tower.py", ROOT / "security_admin.py")
+SOURCES = (ROOT / "control_tower.py", ROOT / "security_admin.py",
+           ROOT / "integrated_workflow.py", ROOT / "workflow_adjustments.py")
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -105,6 +106,21 @@ def foreign_key_sql(conn, table):
     return statements
 
 
+# SQLite date differences return NULL for malformed dates. Preserve that behavior
+# in reports while keeping all parameter values bound by the driver.
+DATE_HELPER_SQL = """
+CREATE OR REPLACE FUNCTION ct_julianday(value text) RETURNS double precision
+LANGUAGE plpgsql STABLE STRICT SET search_path TO pg_catalog AS $$
+BEGIN
+    IF value = '' THEN RETURN NULL; END IF;
+    RETURN EXTRACT(EPOCH FROM value::timestamp) / 86400.0 + 2440587.5;
+EXCEPTION WHEN invalid_datetime_format OR datetime_field_overflow THEN
+    RETURN NULL;
+END;
+$$;
+"""
+
+
 def generate(schema="ct_staging"):
     quote(schema)
     with sqlite_schema() as conn:
@@ -124,6 +140,20 @@ def generate(schema="ct_staging"):
         # PostgreSQL rejects inline foreign keys pointing to not-yet-created tables.
         for table in tables:
             result.extend(foreign_key_sql(conn, table))
+        result.append("""
+CREATE FUNCTION protect_workflow_quote() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM workflow_orders WHERE quote_id=OLD.id) THEN
+        RAISE EXCEPTION 'Quote is locked by an integrated order';
+    END IF;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER workflow_quote_frozen BEFORE UPDATE OR DELETE ON quotes
+FOR EACH ROW EXECUTE FUNCTION protect_workflow_quote();
+""")
+        result.append(DATE_HELPER_SQL)
         result.append("COMMIT;")
         return "\n\n".join(result) + "\n", tables
 

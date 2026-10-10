@@ -1,3 +1,4 @@
+import database
 import sqlite3
 from datetime import date
 from pathlib import Path
@@ -7,14 +8,12 @@ import streamlit as st
 
 
 def connect(db_path):
-    conn = sqlite3.connect(Path(db_path), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return database.connect(db_path)
 
 
 def query_df(db_path, sql, params=()):
     with connect(db_path) as conn:
-        return pd.read_sql_query(sql, conn, params=params)
+        return database.frame(conn, sql, params)
 
 
 def scalar(db_path, sql, params=(), default=0):
@@ -62,9 +61,9 @@ def dashboard_snapshot(db_path):
     ))
     overdue_ar = float(scalar(
         db_path,
-        """SELECT COALESCE(SUM((amount-paid_amount)*fx_to_base),0)
+        """SELECT COALESCE(SUM((amount-paid_amount-COALESCE(credit_amount,0))*fx_to_base),0)
            FROM receivables
-           WHERE status!='İptal' AND amount-paid_amount>0
+           WHERE status!='İptal' AND amount-paid_amount-COALESCE(credit_amount,0)>0
              AND due_date!='' AND due_date < ? AND base_currency='EUR'""",
         (str(date.today()),)
     ))
@@ -180,11 +179,11 @@ def sales_risks(db_path):
 def cash_risks(db_path):
     return query_df(db_path, """
         SELECT c.name AS müşteri,r.invoice_no AS fatura,r.due_date AS vade,
-               r.amount-r.paid_amount AS kalan,r.currency AS para,
+               r.amount-r.paid_amount-COALESCE(r.credit_amount,0) AS kalan,r.currency AS para,
                CAST(julianday(date('now'))-julianday(r.due_date) AS INTEGER) AS gecikme_gün
         FROM receivables r
         JOIN customers c ON c.id=r.customer_id
-        WHERE r.status!='İptal' AND r.amount-r.paid_amount>0
+        WHERE r.status!='İptal' AND r.amount-r.paid_amount-COALESCE(r.credit_amount,0)>0
           AND r.due_date!='' AND r.due_date < date('now')
         ORDER BY gecikme_gün DESC,kalan DESC
         LIMIT 20

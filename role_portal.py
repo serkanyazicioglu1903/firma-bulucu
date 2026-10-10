@@ -1,3 +1,4 @@
+import database
 import sqlite3
 from datetime import date
 from pathlib import Path
@@ -11,14 +12,12 @@ from security_admin import audit_sql_write, authorize_write, current_user
 
 
 def connect(db_path):
-    conn=sqlite3.connect(Path(db_path),check_same_thread=False)
-    conn.row_factory=sqlite3.Row
-    return conn
+    return database.connect(db_path)
 
 
 def query_df(db_path,sql,params=()):
     with connect(db_path) as conn:
-        return pd.read_sql_query(sql,conn,params=params)
+        return database.frame(conn, sql, params)
 
 
 def execute(db_path,sql,params=()):
@@ -146,7 +145,7 @@ def render_finance(db_path):
     with ar:
         st.dataframe(query_df(db_path,"""
             SELECT c.name AS müşteri,r.invoice_no AS fatura,r.due_date AS vade,
-                   r.amount-r.paid_amount AS kalan,r.currency AS para,r.status AS durum
+                   CASE WHEN r.amount-r.paid_amount-COALESCE(r.credit_amount,0)<0 THEN 0 ELSE r.amount-r.paid_amount-COALESCE(r.credit_amount,0) END AS kalan,r.currency AS para,r.status AS durum
             FROM receivables r JOIN customers c ON c.id=r.customer_id
             WHERE r.status!='İptal' ORDER BY r.due_date
         """),width="stretch",hide_index=True)
