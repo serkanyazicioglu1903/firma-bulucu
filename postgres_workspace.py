@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from security_admin import current_role
+from postgres_master_forms import postgres_master_write_enabled, render_postgres_master_forms
 from scripts.postgres_operational_read import (
     WORKSPACE_QUERIES,
     read_operational_counts,
@@ -32,10 +33,17 @@ def render_postgres_workspace():
         st.warning("Supabase bağlantısı yapılandırılmamış.")
         return
 
-    st.info(
-        "Bu panel PostgreSQL ct_app kullanır; diğer Control Tower ekranları "
-        "henüz SQLite üzerindedir. Veri girişi, ödeme ve otomatik geçiş kapalıdır."
-    )
+    if postgres_master_write_enabled():
+        st.warning(
+            "PostgreSQL ct_app müşteri, ürün ve depo kayıt formları "
+            "sunucu yöneticisi tarafından etkinleştirilmiş. Diğer iş ekranları "
+            "ve finans işlemleri hâlâ SQLite / pilot durumundadır."
+        )
+    else:
+        st.info(
+            "Bu panel PostgreSQL ct_app kullanır; diğer Control Tower ekranları "
+            "henüz SQLite üzerindedir. Veri girişi, ödeme ve otomatik geçiş kapalıdır."
+        )
     if st.button("PostgreSQL genel durumu yenile", key="ct_pg_360_refresh"):
         status, counts = read_operational_counts(url)
         if status != "ok":
@@ -78,3 +86,14 @@ def render_postgres_workspace():
                 pd.DataFrame.from_records(records),
                 width="stretch", hide_index=True,
             )
+
+    # Write UI is only mounted after BOTH independent server-side flags are
+    # deliberately enabled. Default release remains completely read-only.
+    if postgres_master_write_enabled():
+        with st.expander("🔒 PostgreSQL kayıt yönetimi — kalıcı kayıt"):
+            render_postgres_master_forms(url)
+    else:
+        st.caption(
+            "PostgreSQL müşteri, ürün ve depo formları geliştirme olarak hazır; "
+            "tam güvenlik ve geçiş onayına kadar kayıt işlevi kapalıdır."
+        )
