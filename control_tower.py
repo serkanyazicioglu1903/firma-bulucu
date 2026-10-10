@@ -10,6 +10,10 @@ from ai_manager import render_ai_manager
 from sales_matching import normalize, matched_sectors
 from management_reports import render_management_reports
 from postgres_workspace import render_postgres_workspace
+from postgres_system import render_postgres_system
+from scripts.live_backend import postgres_url, ready_for_live
+from scripts.postgres_compat import CompatConnection, pg_query_df
+from scripts.postgres_operational_write import verified_live_request
 from role_portal import render_role_portal
 from security_admin import (
     audit_sql_write,
@@ -55,6 +59,9 @@ ACTIVITY_TYPES = [
 
 
 def get_conn():
+    url = postgres_url()
+    if url:
+        return CompatConnection(url)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
@@ -66,10 +73,14 @@ def execute(sql, params=()):
     with get_conn() as conn:
         conn.execute(sql, params)
         conn.commit()
-    audit_sql_write(DB_PATH, sql)
+    if not postgres_url():
+        audit_sql_write(DB_PATH, sql)
 
 
 def query_df(sql, params=()):
+    url = postgres_url()
+    if url:
+        return pg_query_df(url, sql, params)
     with get_conn() as conn:
         return pd.read_sql_query(sql, conn, params=params)
 
@@ -2003,14 +2014,37 @@ def sync_quote_to_opportunity(opportunity_id, quote_status,
 
 
 def render_control_tower():
-    init_db()
-    init_security_tables(DB_PATH)
+    """Fail closed on PostgreSQL errors, never fall back to demo/ephemeral data."""
+    url = postgres_url()
+    if url:
+        status = ready_for_live(url, DB_PATH)
+        if status != "ready":
+            st.error(
+                "Canlı PostgreSQL geçiş ön kontrolü tamamlanamadı: " + {
+                    "invalid_url": "DATABASE_URL geçersiz.",
+                    "schema_mismatch": "ct_app şeması beklenen yapıda değil.",
+                    "sqlite_data_present": "SQLite içinde taşınmamış kayıt var. "
+                                           "Güvenli yedek ve aktarım gerekli.",
+                    "sqlite_integrity_unknown": "SQLite kaynak bütünlüğü doğrulanamadı.",
+                    "connection_failed": "PostgreSQL bağlantısına erişilemedi.",
+                }.get(status, "Doğrulama gerekli.")
+            )
+            st.info("Güvenlik gereği eski SQLite verisine otomatik dönüş yapılmadı.")
+            return
+        with verified_live_request():
+            return _render_control_tower_interface(live_postgres=True)
+    return _render_control_tower_interface(live_postgres=False)
+
+
+def _render_control_tower_interface(live_postgres=False):
+    if not live_postgres:
+        init_db()
+        init_security_tables(DB_PATH)
     if not login_gate():
         return
-    # Do not silently populate a real workspace with fictional records.
-    # Existing data is retained; demo setup requires explicit opt-in.
-    import os
-    if os.environ.get("AS_CONTROL_TOWER_DEMO_SEED", "").strip() == "1":
+    if not live_postgres and os.environ.get(
+        "AS_CONTROL_TOWER_DEMO_SEED", ""
+    ).strip() == "1":
         seed_once()
         seed_product_catalog()
         seed_warehouses()
@@ -2051,10 +2085,16 @@ def render_control_tower():
 
     st.subheader("🧭 AS CONTROL TOWER")
     st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
-    st.caption(
-        "🟠 Pilot veri modu: Bu sürüm SQLite kullanıyor. Kalıcı şirket verisi için "
-        "PostgreSQL/Supabase geçişi tamamlanmadan kritik production verisi girmeyin."
-    )
+    if live_postgres:
+        st.success(
+            "🟢 Canlı veri modu: Bütün Control Tower iş ekranları "
+            "Supabase PostgreSQL ct_app üzerinden çalışıyor. SQLite kullanılmıyor."
+        )
+    else:
+        st.caption(
+            "🟠 Pilot veri modu: Bu sürüm SQLite kullanıyor. "
+            "Kalıcı kayıt için PostgreSQL bağlantısı yapılandırılmalı."
+        )
 
     dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, quality_tab, pipeline_tab, followup_tab, tasks_tab, ai_tab, reports_tab, ceo_tab, system_tab, postgres_tab = st.tabs(
         [
@@ -4928,7 +4968,10 @@ def render_control_tower():
             st.success("Şu anda kritik gecikmiş satış takibi görünmüyor.")
 
     with system_tab:
-        render_system_admin(DB_PATH)
+        if live_postgres:
+            render_postgres_system(postgres_url())
+        else:
+            render_system_admin(DB_PATH)
 
     with postgres_tab:
         render_postgres_workspace()
