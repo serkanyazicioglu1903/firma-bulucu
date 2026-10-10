@@ -573,6 +573,56 @@ def render_system_admin(db_path):
                     "Bağlantı ve Supabase yetkilerini kontrol edin."
                 )
 
+        with st.expander("🔄 SQLite → PostgreSQL geçiş ön kontrolü (salt okunur)"):
+            st.caption(
+                "Mevcut SQLite yapısı ve bütünlüğü ile PostgreSQL ct_staging "
+                "tablolarının doluluk durumu karşılaştırılır. Bu adım veri "
+                "taşımaz, tablo oluşturmaz ve hiçbir kaydı değiştirmez."
+            )
+            if st.button(
+                "Veri taşıma hazırlığını kontrol et",
+                key="ct_pg_migration_readiness",
+                disabled=not db_url,
+            ):
+                from scripts.postgres_migration_readiness import (
+                    assess_migration_readiness,
+                )
+                with st.spinner("Yalnızca şema ve kayıt adetleri kontrol ediliyor..."):
+                    report = assess_migration_readiness(db_path, db_url)
+                st.caption(
+                    f'SQLite: {report["source_tables"]} tablo, '
+                    f'{report["source_rows"]} kayıt · '
+                    f'PostgreSQL ct_staging: {report["target_tables"]} tablo, '
+                    f'{report["target_rows"]} kayıt.'
+                )
+                status = report["status"]
+                if status == "ready_for_staging_import":
+                    st.success(
+                        "Şema ve veritabanı bütünlüğü uygun; PostgreSQL test "
+                        "tabloları boş. Onaylı SQLite yedeğinden test şemasına "
+                        "aktarım hazırlığı tamam. Henüz hiçbir kayıt taşınmadı."
+                    )
+                elif status == "target_not_empty":
+                    st.warning(
+                        "PostgreSQL test tablolarında mevcut kayıtlar var. "
+                        "Silmeden veya üzerine yazmadan önce kayıtları inceleyin. "
+                        "Bu araç veri taşıma işlemini başlatmadı."
+                    )
+                else:
+                    st.error({
+                        "invalid_url": "Supabase bağlantı bilgisi geçersiz.",
+                        "schema_failed": "PostgreSQL tablo yapısı doğrulanamadı.",
+                        "sqlite_failed": "SQLite dosyası, ilişkileri veya "
+                                         "beklenen şema kontrolü başarısız.",
+                        "postgres_failed": "PostgreSQL kayıt adetleri "
+                                           "salt okunur şekilde doğrulanamadı.",
+                    }.get(status, "Geçiş ön koşulları doğrulanamadı."))
+                st.info(
+                    "Ana AS Control Tower ekranları SQLite kullanmaya devam eder. "
+                    "Test şemasına veri kopyalamak canlı uygulamayı PostgreSQL'e "
+                    "geçirmez. Şifre ve firma kayıtları bu kontrolde görüntülenmez."
+                )
+
         with st.expander("🧪 PostgreSQL toplu kabul testi (geri alınır)"):
             st.caption(
                 "Tek işlemde şema doğrulaması, geçici PostgreSQL kayıt testleri "
