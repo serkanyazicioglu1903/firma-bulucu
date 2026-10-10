@@ -12,6 +12,7 @@ This is an **integration candidate**, not a production deployment.
 - Inventory receipts reject cancellation, excess quantity and repeated receipt.
 - Payment/collection operations reject a repeated nonblank reference **within the same invoice**, and check amount and bank currency. Blank references have no replay protection.
 - Separate offline fake-PostgreSQL staging tests cover procurement/stock/quality/payment guard and rollback logic.
+- System Health offers a single explicitly confirmed PostgreSQL acceptance action: schema audit, rollback-only CRUD, and rollback-only fictional CRM/quote/purchase/stock/HOLD/finance workflow. The coordinator fails closed and does not reveal credentials. The action must be run in the target Streamlit environment; successful CI mocks **do not** prove connectivity to the user's Supabase instance.
 
 ## Release blockers (do not skip)
 
