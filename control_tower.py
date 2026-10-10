@@ -1975,9 +1975,13 @@ def render_control_tower():
     init_security_tables(DB_PATH)
     if not login_gate():
         return
-    seed_once()
-    seed_product_catalog()
-    seed_warehouses()
+    # Do not silently populate a real workspace with fictional records.
+    # Existing data is retained; demo setup requires explicit opt-in.
+    import os
+    if os.environ.get("AS_CONTROL_TOWER_DEMO_SEED", "").strip() == "1":
+        seed_once()
+        seed_product_catalog()
+        seed_warehouses()
 
     if current_role() != "ADMIN":
         render_role_portal(DB_PATH, current_role())
@@ -3200,6 +3204,14 @@ def render_control_tower():
                 warehouses_po=query_df("""
                     SELECT id,name FROM warehouses WHERE active=1 ORDER BY name
                 """)
+                # Keep empty workspaces usable without writing fictional rows.
+                missing_master_data = products_po.empty or warehouses_po.empty
+                if missing_master_data:
+                    st.info("PO oluşturmadan önce Ürün Kataloğu ve Depolar bölümüne gerçek kayıtları ekleyin.")
+                    if products_po.empty:
+                        products_po = pd.DataFrame([{"id": 0, "name": "Önce ürün ekleyin", "supplier": "", "default_currency": "EUR"}])
+                    if warehouses_po.empty:
+                        warehouses_po = pd.DataFrame([{"id": 0, "name": "Önce depo ekleyin"}])
                 with st.form("proc_new_po",clear_on_submit=True):
                     po_number=st.text_input("PO numarası *",placeholder="Örn: 20260004")
                     p_name=st.selectbox("Ürün",products_po["name"].tolist())
@@ -3220,7 +3232,7 @@ def render_control_tower():
                     warehouse_id=int(warehouses_po.loc[warehouses_po["name"]==wh_name,"id"].iloc[0])
                     status=st.selectbox("Durum",["Sipariş Verildi","Teyit Bekliyor","Teyitli","Üretimde","Hazır","Kısmi Sevk","Tamamlandı","İptal"])
                     notes=st.text_area("Not")
-                    if st.form_submit_button("PO kaydet",type="primary"):
+                    if st.form_submit_button("PO kaydet",type="primary",disabled=missing_master_data):
                         if not po_number.strip() or not supplier.strip():
                             st.error("PO numarası ve tedarikçi zorunlu.")
                         else:
@@ -3310,6 +3322,10 @@ def render_control_tower():
                         y6,y7=st.columns(2)
                         etd=y6.date_input("ETD / çıkış",value=date.today()+timedelta(days=7))
                         eta=y7.date_input("ETA / varış",value=date.today()+timedelta(days=14))
+                        missing_shipment_warehouses = warehouses_s.empty
+                        if missing_shipment_warehouses:
+                            st.info("Sevkiyat için önce Depolar bölümünden depo ekleyin.")
+                            warehouses_s = pd.DataFrame([{"id": 0, "name": "Önce depo ekleyin"}])
                         wh_names=warehouses_s["name"].tolist()
                         default_wh=0
                         if po_row["destination_warehouse_id"]:
@@ -3322,7 +3338,7 @@ def render_control_tower():
                         expiry=st.date_input("SKT",value=date.today()+timedelta(days=365))
                         status=st.selectbox("Durum",["Planlandı","Yükleme Bekliyor","Yüklendi","Yolda","Limanda / Sınırda","Gümrükte","Dağıtımda","Teslim Edildi","İptal"])
                         notes=st.text_area("Not")
-                        if st.form_submit_button("Sevkiyat kaydet",type="primary"):
+                        if st.form_submit_button("Sevkiyat kaydet",type="primary",disabled=missing_shipment_warehouses):
                             execute("""INSERT INTO shipments
                                 (purchase_order_id,shipment_ref,quantity_kg,transport_mode,carrier,
                                  container_vehicle,etd,eta,status,destination_warehouse_id,
@@ -3465,6 +3481,10 @@ def render_control_tower():
 
                 st.markdown("##### Ürün stok politikası")
                 products_pol=query_df("SELECT id,name FROM product_catalog WHERE active=1 ORDER BY name")
+                missing_policy_products = products_pol.empty
+                if missing_policy_products:
+                    st.info("Stok politikası için önce Ürün Kataloğu'na ürün ekleyin.")
+                    products_pol = pd.DataFrame([{"id": 0, "name": "Önce ürün ekleyin"}])
                 pol_name=st.selectbox("Ürün",products_pol["name"].tolist(),key="proc_policy_product")
                 pid=int(products_pol.loc[products_pol["name"]==pol_name,"id"].iloc[0])
                 current=query_df("SELECT * FROM inventory_policy WHERE product_id=?",(pid,))
@@ -3480,7 +3500,7 @@ def render_control_tower():
                 lead_new=p3.number_input("Tedarik süresi (gün)",min_value=0,value=lead,step=5,key="proc_policy_lead")
                 review_new=p4.number_input("Sipariş gözden geçirme (gün)",min_value=0,value=review,step=1,key="proc_policy_review")
                 pnotes_new=st.text_input("Politika notu",value=pnotes,key="proc_policy_notes")
-                if st.button("Stok politikasını kaydet",type="primary"):
+                if st.button("Stok politikasını kaydet",type="primary",disabled=missing_policy_products):
                     execute("""INSERT INTO inventory_policy
                         (product_id,monthly_usage_kg,safety_stock_days,lead_time_days,reorder_review_days,notes,updated_at)
                         VALUES (?,?,?,?,?,?,?)
@@ -3992,6 +4012,10 @@ def render_control_tower():
                 pos_q=query_df("SELECT id,po_number,supplier,product_id,product_name FROM purchase_orders ORDER BY id DESC")
                 ships_q=query_df("SELECT id,purchase_order_id,shipment_ref,lot_number FROM shipments ORDER BY id DESC")
 
+                missing_quality_products = products_q.empty
+                if missing_quality_products:
+                    st.info("Kalite dosyası açmadan önce Ürün Kataloğu'na gerçek ürün ekleyin.")
+                    products_q = pd.DataFrame([{"id": 0, "name": "Önce ürün ekleyin", "supplier": ""}])
                 with st.form("quality_new_case",clear_on_submit=True):
                     c1,c2,c3=st.columns(3)
                     case_no=c1.text_input("Dosya no *",placeholder="Q-2026-001")
@@ -4045,7 +4069,7 @@ def render_control_tower():
                     target_close=c10.date_input("Hedef kapanış",value=date.today()+timedelta(days=14))
                     hold_lot=st.checkbox("Seçili lotu HOLD'a al",value=bool(lot_id))
 
-                    if st.form_submit_button("Kalite dosyasını aç",type="primary"):
+                    if st.form_submit_button("Kalite dosyasını aç",type="primary",disabled=missing_quality_products):
                         if not case_no.strip() or not description.strip():
                             st.error("Dosya no ve problem açıklaması zorunlu.")
                         else:
@@ -4280,6 +4304,10 @@ def render_control_tower():
                 st.dataframe(regs,width="stretch",hide_index=True)
             with st.expander("Yeni regülasyon / izin konusu aç",expanded=regs.empty):
                 products_r=query_df("SELECT id,name FROM product_catalog WHERE active=1 ORDER BY name")
+                missing_reg_products = products_r.empty
+                if missing_reg_products:
+                    st.info("Regülasyon kaydı açmadan önce Ürün Kataloğu'na ürün ekleyin.")
+                    products_r = pd.DataFrame([{"id": 0, "name": "Önce ürün ekleyin"}])
                 with st.form("quality_new_reg",clear_on_submit=True):
                     pname=st.selectbox("Ürün",products_r["name"].tolist())
                     pid=int(products_r.loc[products_r["name"]==pname,"id"].iloc[0])
@@ -4295,7 +4323,7 @@ def render_control_tower():
                     responsible=st.text_input("Sorumlu",key="reg_responsible")
                     source_ref=st.text_input("Resmî kaynak / dosya linki")
                     notes=st.text_area("Not",key="reg_notes")
-                    if st.form_submit_button("Regülasyon konusunu kaydet",type="primary"):
+                    if st.form_submit_button("Regülasyon konusunu kaydet",type="primary",disabled=missing_reg_products):
                         if not country.strip() or not requirement.strip():
                             st.error("Ülke ve gereklilik zorunlu.")
                         else:
