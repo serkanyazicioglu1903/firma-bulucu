@@ -3409,7 +3409,10 @@ def _render_control_tower_interface(live_postgres=False):
                     WHERE po.status NOT IN ('Tamamlandı','İptal')
                     GROUP BY po.id,po.po_number,po.supplier,po.product_name,
                              po.quantity_kg,po.destination_warehouse_id
-                    HAVING remaining_to_ship_kg > 0.001
+                    HAVING po.quantity_kg - COALESCE(SUM(
+                        CASE WHEN COALESCE(s.status,'')!='İptal'
+                             THEN s.quantity_kg ELSE 0 END
+                    ),0) > 0.001
                     ORDER BY po.id DESC
                 """)
                 warehouses_s=query_df("SELECT id,name FROM warehouses WHERE active=1 ORDER BY name")
@@ -4910,7 +4913,10 @@ def _render_control_tower_interface(live_postgres=False):
             FROM customers c
             LEFT JOIN receivables r ON r.customer_id=c.id
             GROUP BY c.id,c.name,c.credit_limit
-            HAVING açık_risk_eur>0
+            HAVING COALESCE(SUM(CASE
+                WHEN r.status!='İptal' AND r.base_currency='EUR'
+                 AND r.amount-r.paid_amount>0
+                THEN (r.amount-r.paid_amount)*r.fx_to_base ELSE 0 END),0)>0
             ORDER BY gecikme_gün DESC,açık_risk_eur DESC
             LIMIT 10
         """)
