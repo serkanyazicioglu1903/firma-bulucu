@@ -2,6 +2,7 @@
 
 All psycopg connections are mocks: no Supabase URI or company data is used.
 """
+import os
 import unittest
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
@@ -13,6 +14,9 @@ URL = "postgresql://user:private-secret@localhost/db"
 
 class OperationalWriteTests(unittest.TestCase):
     def setUp(self):
+        self.env = patch.dict(os.environ, {"AS_CONTROL_TOWER_PG_WRITES_ENABLED": "1"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
         self.schema = patch.object(
             op, "validate_staging_structure", return_value=("ok", [])
         )
@@ -41,6 +45,18 @@ class OperationalWriteTests(unittest.TestCase):
         )
         self.schema_mock.assert_not_called()
         self.connect.assert_not_called()
+
+    def test_all_write_endpoints_are_disabled_by_default(self):
+        with patch.dict(os.environ, {"AS_CONTROL_TOWER_PG_WRITES_ENABLED": "0"}):
+            self.assertEqual(
+                op.create_customer(URL, "ADMIN", "SAFE"), ("disabled", None)
+            )
+            self.assertEqual(
+                op.pay_supplier(URL, "FINANCE", 1, 1, 100, "X", "2026-10-10"),
+                ("disabled", None),
+            )
+        self.connect.assert_not_called()
+        self.schema_mock.assert_not_called()
 
     def test_invalid_url_fails_before_schema_or_connection(self):
         self.assertEqual(
