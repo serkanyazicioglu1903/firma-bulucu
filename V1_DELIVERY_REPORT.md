@@ -1,5 +1,7 @@
 # AS Control Tower — v1 pilot teslim raporu
 
+Güncel devam raporu: [V2_DELIVERY_REPORT.md](https://github.com/serkanyazicioglu1903/firma-bulucu/blob/codex/integrated-v1/V2_DELIVERY_REPORT.md).
+
 Tarih: 10 Ekim 2026. Durum: yerel SQLite üzerinde test edilmiş bütünleşik pilot; canlı kullanıma onay verilmiş sürüm değildir.
 
 ## İncelenen PR'lar
