@@ -175,8 +175,33 @@ class CompatConnection:
             self._connection_scope = None
 
     def execute(self, sql, params=()):
+        from scripts.postgres_operational_write import _REQUEST_LIVE_WRITES
+        from security_admin import current_user, WRITE_TABLE_PERMISSIONS
+        statement = str(sql).strip()
+        match = re.match(
+            r"^(INSERT\\s+INTO|UPDATE|DELETE\\s+FROM)\\s+([a-z_]+)\\b",
+            statement, re.I,
+        )
+        role = str((current_user() or {}).get("role", "")).upper()
+        if match:
+            if not _REQUEST_LIVE_WRITES.get() or not role:
+                raise PermissionError("Authenticated live request required.")
+            table = match.group(2).lower()
+            if table not in ALLOWED_TABLES:
+                raise PermissionError("Unrecognized PostgreSQL write table.")
+            if role != "ADMIN" and table not in WRITE_TABLE_PERMISSIONS.get(role, set()):
+                raise PermissionError("Role is not authorized for table.")
         cursor = self._conn.cursor()
-        cursor.execute(translate_sql(sql), tuple(params))
+        cursor.execute(translate_sql(statement), tuple(params))
+        if match:
+            # Audit the mutation in the same transaction, including direct
+            # legacy conn.execute write paths, and never log customer values.
+            actor = str((current_user() or {}).get("username", ""))[:80]
+            self._conn.execute(
+                'INSERT INTO "ct_app"."audit_log" '
+                '(username,role,action,table_name) VALUES (%s,%s,%s,%s)',
+                (actor, role, match.group(1).split()[0].upper(), match.group(2).lower()),
+            )
         return Result(cursor)
 
     def commit(self):
@@ -211,12 +236,7 @@ def pg_execute(url, sql, params=(), *, actor, role):
     if table not in ALLOWED_TABLES:
         raise PermissionError("Unsupported business table.")
     with CompatConnection(url) as conn:
-        conn.execute(sql, params)
-        conn.execute(
-            'INSERT INTO audit_log (username,role,action,table_name) '
-            'VALUES (%s,%s,%s,%s)',
-            (str(actor)[:80], str(role)[:30], statement.split()[0], table),
-        )
+        conn.execute(sql, params)  # audit automatically committed atomically
 
 
 ALLOWED_TABLES = frozenset((
