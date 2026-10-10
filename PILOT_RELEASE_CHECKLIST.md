@@ -49,6 +49,17 @@ and test authenticated PostgreSQL CRUD and transactional business rules for
 and restore, and intentionally activate the fully reviewed backend. Avoid
 silently running some modules against SQLite and others against PostgreSQL.
 
+## First direct ct_app runtime read (still no cutover)
+
+The ADMIN System Health panel includes **ct_app canlı tablo kayıt sayılarını oku**.
+It opens a real read-only PostgreSQL transaction, validates the 26-table
+`ct_app` structure first, and returns only aggregate row counts from 11
+operational tables. This is intentionally the first observable application
+query against the new durable database; it does not write, copy or expose
+customer rows, or alter the existing SQLite business screens. Authentication
+and the full transaction/write adapter must still be completed before any
+real customer or finance data enters PostgreSQL via the main app.
+
 ## Release blockers (do not skip)
 
 1. Validate real PostgreSQL schema and integration against an **isolated, non-production** database. The offline adapter test is not a live PostgreSQL test.
