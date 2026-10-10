@@ -207,6 +207,8 @@ def reverse_payment(transaction_id, reference, reason):
             return False, 'Asıl tahsilat/ödeme işlemini seçin.'
         if conn.execute('SELECT 1 FROM finance_reversals WHERE transaction_id=? OR reference=?',(transaction_id,reference.strip())).fetchone():
             return False, 'İşlem zaten ters kaydedildi veya referans kullanılıyor.'
+        if conn.execute('SELECT 1 FROM finance_transactions WHERE reference=?',(reference.strip(),)).fetchone():
+            return False, 'Bu finans hareketi referansı zaten kullanılıyor.'
         table,key=('receivables','receivable_id') if t['transaction_type']=='Tahsilat' else ('payables','payable_id')
         target=conn.execute('SELECT * FROM '+table+' WHERE id=?',(t[key],)).fetchone()
         if not target or target['paid_amount']+1e-6<t['amount']:

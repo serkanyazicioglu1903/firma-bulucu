@@ -309,3 +309,10 @@ def test_multi_line_rejects_mixed_customers(order):
         c.execute('UPDATE quotes SET customer_id=2 WHERE id=3')
     assert not flow.create_order_batch([2,3],'Factory',1,'GROUP-MIX',date.today())[0]
     assert scalar('SELECT COUNT(*) FROM workflow_orders')==1
+
+
+def test_reversal_reference_cannot_reuse_original_payment(order):
+    import workflow_adjustments as a
+    assert ct.record_payable_payment(1,100,date.today(),1,'ORIGINAL','')[0]
+    assert not a.reverse_payment(1,'ORIGINAL','Yanlış referans')[0]
+    assert scalar('SELECT paid_amount FROM payables')==100

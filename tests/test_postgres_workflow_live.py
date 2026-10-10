@@ -102,3 +102,22 @@ def test_postgres_multi_line_batch_and_rollback(pg_order):
         c.execute("UPDATE quotes SET status='Kabul' WHERE id=3")
     assert flow.create_order_batch([2,3],'PG Factory',1,'PG-GROUP',date.today())[0]
     assert scalar('SELECT COUNT(*) FROM workflow_group_lines')==2
+
+
+def test_additive_workflow_migration_is_repeatable_and_preserves_data():
+    from scripts.build_workflow_migration import generate_migration
+    validate_test_url(URL)
+    with psycopg.connect(URL,autocommit=True) as conn:
+        conn.execute('DROP SCHEMA IF EXISTS ct_staging CASCADE')
+        conn.execute(generate()[0])
+        conn.execute("INSERT INTO ct_staging.customers (name) VALUES ('Keep this synthetic customer')")
+        conn.execute('ALTER TABLE ct_staging.receivables DROP COLUMN credit_amount')
+        # Simulate the pre-workflow schema without modifying any external DB.
+        tables=conn.execute("SELECT tablename FROM pg_tables WHERE schemaname='ct_staging' AND (tablename LIKE 'workflow_%' OR tablename='finance_reversals')").fetchall()
+        for (table,) in tables:
+            from psycopg import sql
+            conn.execute(sql.SQL('DROP TABLE IF EXISTS ct_staging.{} CASCADE').format(sql.Identifier(table)))
+        conn.execute(generate_migration())
+        conn.execute(generate_migration())
+        assert conn.execute('SELECT name FROM ct_staging.customers').fetchone()[0]=='Keep this synthetic customer'
+        assert conn.execute("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='ct_staging' AND table_name='receivables' AND column_name='credit_amount'").fetchone()[0]==1
