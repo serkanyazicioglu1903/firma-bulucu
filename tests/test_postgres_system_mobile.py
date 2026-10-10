@@ -162,5 +162,39 @@ class MobileSystemTests(unittest.TestCase):
         st.error.assert_not_called()
 
 
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="VIEWER")
+    def test_reconciliation_shortcut_hidden_for_non_admin(self, _role, st):
+        system.render_postgres_quick_reconciliation(URL)
+        st.expander.assert_not_called()
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    @patch("scripts.postgres_reconciliation.check_operational_consistency")
+    def test_reconciliation_shortcut_is_click_only(self, check, _role, st):
+        st.button.return_value = False
+        system.render_postgres_quick_reconciliation(URL)
+        st.expander.assert_called_once()
+        self.assertIn("hızlı erişim", st.expander.call_args.args[0])
+        check.assert_not_called()
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    @patch(
+        "scripts.postgres_reconciliation.check_operational_consistency",
+        return_value={"status": "ok", "checks": []},
+    )
+    def test_reconciliation_shortcut_uses_existing_read_only_check(
+        self, check, _role, st,
+    ):
+        st.button.return_value = True
+        system.render_postgres_quick_reconciliation(URL)
+        check.assert_called_once_with(URL)
+        self.assertTrue(any(
+            "10 kontrolde tutarsızlık bulunmadı" in str(call.args[0])
+            for call in st.success.call_args_list
+        ))
+
+
 if __name__ == "__main__":
     unittest.main()
