@@ -5,7 +5,8 @@ inert until the application uses its functions under authenticated server-side
 roles. Each operation validates the full ct_app schema and commits *one* atomic
 transaction; unexpected errors are sanitized and rolled back.
 
-Writes are disabled by default (AS_CONTROL_TOWER_PG_WRITES_ENABLED != 1).\nThe Streamlit app must not expose these write functions to customers until
+Writes are disabled by default (AS_CONTROL_TOWER_PG_WRITES_ENABLED != 1).
+The Streamlit app must not expose these write functions to customers until
 security, backup/restore, real-database integration and feature-parity testing
 are complete. ct_staging is never touched by this module.
 """
@@ -414,7 +415,9 @@ def pay_supplier(url, role, payable_id, account_id, amount, reference,
         if invoice[0] is not None:
             cur.execute(
                 'SELECT EXISTS (SELECT 1 FROM "ct_app"."inventory_lots" '
-                'WHERE purchase_order_id=%s AND quality_hold_kg>0)',
+                "WHERE purchase_order_id=%s AND "
+                "(COALESCE(quality_hold_kg,0)>0 OR "
+                "COALESCE(quality_status,'Released')!='Released'))",
                 (invoice[0],),
             )
             if cur.fetchone()[0]:
@@ -431,11 +434,14 @@ def pay_supplier(url, role, payable_id, account_id, amount, reference,
             raise OperationRejected("currency_mismatch")
         if Decimal(str(account[1] or 0)) < paid_now:
             raise OperationRejected("insufficient_funds")
+        # Guard bank-transfer identity across both this payable and other
+        # supplier invoices drawn from the same account. The payable and bank
+        # FOR UPDATE locks serialize competing payments before this check.
         cur.execute(
             'SELECT 1 FROM "ct_app"."finance_transactions" '
-            "WHERE payable_id=%s AND transaction_type='Ödeme' "
-            "AND reference=%s LIMIT 1",
-            (payable,reference_id),
+            "WHERE transaction_type='Ödeme' AND reference=%s "
+            "AND (payable_id=%s OR account_id=%s) LIMIT 1",
+            (reference_id,payable,bank),
         )
         if cur.fetchone() is not None:
             raise OperationRejected("duplicate_payment")
