@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from urllib.parse import urlsplit
 
 from scripts.build_pg_schema import column_type, sqlite_schema
+from scripts.postgres_connection import sslmode_for
 
 
 SCHEMA = "ct_staging"
@@ -116,7 +117,7 @@ def validate_staging_structure(url, schema=SCHEMA):
         actual_columns = defaultdict(dict)
         actual_constraints = defaultdict(list)
         with psycopg.connect(
-            str(url).strip(), connect_timeout=8, sslmode="require"
+            str(url).strip(), connect_timeout=8, sslmode=sslmode_for(url)
         ) as conn:
             with conn.cursor() as cur:
                 cur.execute("SET TRANSACTION READ ONLY")
