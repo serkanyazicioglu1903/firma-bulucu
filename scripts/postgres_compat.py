@@ -181,7 +181,7 @@ def _pool(url):
         max_size=6,
         timeout=8,
         open=True,
-        kwargs={"sslmode": sslmode_for(url), "connect_timeout": 8},
+        kwargs={"sslmode": sslmode_for(url), "connect_timeout": 8, "prepare_threshold": None},
     )
 
 
