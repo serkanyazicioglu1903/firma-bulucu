@@ -258,6 +258,63 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
 
 
 
+    def test_legacy_sql_forms_read_and_write_ct_app_only(self):
+        """Actual legacy business facade writes persist in disposable PostgreSQL."""
+        from unittest.mock import patch
+        import control_tower as ct
+        import security_admin as auth
+        from scripts.postgres_operational_write import verified_live_request
+        fictional_user = {
+            "username": "ci-legacy-admin", "role": "ADMIN",
+            "display_name": "CI Legacy Admin",
+        }
+        with patch.dict(os.environ, {"DATABASE_URL": self.url}):
+            with patch.object(auth, "current_user", return_value=fictional_user):
+                with patch.object(ct, "current_user", return_value=fictional_user):
+                    with patch.object(ct, "authorize_write", return_value=True):
+                        with verified_live_request():
+                            ct.execute(
+                                "INSERT INTO customers (name, country, sector) "
+                                "VALUES (?,?,?)",
+                                ("CI LEGACY CUSTOMER", "Türkiye", "Food"),
+                            )
+                            got = ct.query_df(
+                                "SELECT id,name,country FROM customers WHERE name=?",
+                                ("CI LEGACY CUSTOMER",),
+                            )
+                            self.assertEqual(len(got), 1)
+                            self.assertEqual(got.iloc[0]["country"], "Türkiye")
+                            customer_id = int(got.iloc[0]["id"])
+                            with ct.get_conn() as conn:
+                                conn.execute(
+                                    "UPDATE customers SET sector=? WHERE id=?",
+                                    ("Ingredients", customer_id),
+                                )
+                                conn.commit()
+                            self.assertEqual(
+                                ct.query_df(
+                                    "SELECT sector FROM customers WHERE id=?",
+                                    (customer_id,),
+                                ).iloc[0]["sector"],
+                                "Ingredients",
+                            )
+        # New connections confirm durable persistence, unlike demo SQLite.
+        self.assertEqual(
+            self.execute(
+                'SELECT sector FROM "ct_app"."customers" WHERE name=%s',
+                ("CI LEGACY CUSTOMER",),
+            )[0],
+            "Ingredients",
+        )
+        self.assertEqual(
+            self.execute(
+                'SELECT COUNT(*) FROM "ct_app"."audit_log" '
+                "WHERE username=%s AND table_name='customers'",
+                ("ci-legacy-admin",),
+            )[0],
+            2,
+        )
+
     def test_control_tower_postgres_live_streamlit_smoke(self):
         """Real 26-table PostgreSQL backend exercised through all Streamlit tabs."""
         import tempfile
