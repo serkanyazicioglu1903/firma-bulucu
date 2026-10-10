@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -20,7 +21,13 @@ from security_admin import (
     render_system_admin,
 )
 
-DB_PATH = Path(__file__).with_name("as_control_tower.db")
+# Mount a persistent volume and set AS_CONTROL_TOWER_DB_PATH to its SQLite file.
+# Without an override the historical local file path is retained for compatibility.
+# No data is migrated or modified merely by configuring this path.
+DB_PATH = Path(
+    os.environ.get("AS_CONTROL_TOWER_DB_PATH")
+    or str(Path(__file__).with_name("as_control_tower.db"))
+).expanduser()
 
 STAGES = [
     "Lead", "Temas", "Numune", "Deneme", "Teklif", "Pazarlık",
