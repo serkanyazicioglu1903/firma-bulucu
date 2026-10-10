@@ -37,6 +37,18 @@ def init_workflow():
             base_currency TEXT NOT NULL,
             delivery_date TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS workflow_order_groups (
+            id INTEGER PRIMARY KEY,
+            reference TEXT NOT NULL UNIQUE,
+            customer_id INTEGER NOT NULL REFERENCES customers(id),
+            supplier TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS workflow_group_lines (
+            id INTEGER PRIMARY KEY,
+            group_id INTEGER NOT NULL REFERENCES workflow_order_groups(id),
+            workflow_id INTEGER NOT NULL UNIQUE REFERENCES workflow_orders(id)
+        );
         CREATE TRIGGER IF NOT EXISTS workflow_quote_frozen BEFORE UPDATE ON quotes
         WHEN EXISTS (SELECT 1 FROM workflow_orders WHERE quote_id=OLD.id)
         BEGIN SELECT RAISE(ABORT,'Siparişe dönüşen teklif değiştirilemez; yeni revizyon oluşturun.'); END;
@@ -61,6 +73,12 @@ def _audit(conn, action):
 
 
 def create_order(quote_id, product_id, supplier, warehouse_id, po_number, due_date):
+    with core().get_conn() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        return _create_order(conn,quote_id,product_id,supplier,warehouse_id,po_number,due_date)
+
+
+def _create_order(conn, quote_id, product_id, supplier, warehouse_id, po_number, due_date):
     ct = core()
     if ct.current_role() not in ('', 'SYSTEM', 'ADMIN'):
         return False, 'Bütünleşik sipariş açmak için yönetici yetkisi gerekir.'
@@ -70,42 +88,40 @@ def create_order(quote_id, product_id, supplier, warehouse_id, po_number, due_da
         date.fromisoformat(str(due_date))
     except ValueError:
         return False, 'Geçerli ödeme tarihi girin.'
-    with ct.get_conn() as conn:
-        conn.execute('BEGIN IMMEDIATE')
-        if conn.execute('SELECT 1 FROM workflow_orders WHERE quote_id=?', (quote_id,)).fetchone():
-            return False, 'Bu teklif zaten siparişe dönüştürülmüş.'
-        q = conn.execute('SELECT * FROM quotes WHERE id=?', (quote_id,)).fetchone()
-        p = conn.execute('SELECT * FROM product_catalog WHERE id=? AND active=1', (product_id,)).fetchone()
-        if not q or q['status'] != 'Kabul':
-            return False, 'Önce teklif durumunu Kabul olarak kaydedin.'
-        if not p or p['name'] != q['product_name']:
-            return False, 'Teklif ürünü ile katalog ürünü eşleşmiyor.'
-        if not conn.execute('SELECT 1 FROM customers WHERE id=?', (q['customer_id'],)).fetchone():
-            return False, 'Teklife geçerli müşteri bağlanmalı.'
-        if not conn.execute('SELECT 1 FROM warehouses WHERE id=? AND active=1', (warehouse_id,)).fetchone():
-            return False, 'Aktif depo seçilmeli.'
-        if not all(positive(q[k]) for k in ('quantity_kg', 'buy_price_per_kg', 'sell_price_per_kg', 'buy_fx_to_base', 'sell_fx_to_base', 'total_cost_per_kg')):
-            return False, 'Miktar, fiyatlar ve kurlar sıfırdan büyük olmalı.'
-        if not 0 <= q['sales_commission_pct'] < 100 or q['customer_credit_days'] < 0:
-            return False, 'Komisyon ve vade değerlerini düzeltin.'
-        if conn.execute('SELECT 1 FROM purchase_orders WHERE po_number=?', (po_number.strip(),)).fetchone():
-            return False, 'Sipariş numarası zaten kullanılıyor.'
-        po = conn.execute('''INSERT INTO purchase_orders
-            (po_number,supplier,product_id,product_name,quantity_kg,unit_price,currency,
-             incoterm,order_date,destination_warehouse_id,status)
-            VALUES (?,?,?,?,?,?,?,?,?,?,'Sipariş Verildi')''',
-            (po_number.strip(),supplier.strip(),product_id,p['name'],q['quantity_kg'],q['buy_price_per_kg'],
-             q['buy_currency'],q['incoterm'],str(date.today()),warehouse_id)).lastrowid
-        payable = conn.execute('''INSERT INTO payables
-            (supplier,purchase_order_id,invoice_no,due_date,amount,currency,fx_to_base,base_currency,notes)
-            VALUES (?,?,?,?,?,?,?,?,?)''',
-            (supplier.strip(),po,'',str(due_date),q['quantity_kg']*q['buy_price_per_kg'],q['buy_currency'],
-             q['buy_fx_to_base'],q['base_currency'],'Siparişten oluşan planlanan borç; tedarikçi faturası bekleniyor.')).lastrowid
-        conn.execute('INSERT INTO workflow_orders (quote_id,product_id,purchase_order_id,payable_id) VALUES (?,?,?,?)',
-                     (quote_id,product_id,po,payable))
-        if q['opportunity_id']:
-            conn.execute("UPDATE opportunities SET stage='Sipariş',probability=90 WHERE id=? AND stage NOT IN ('Kazanıldı','Kaybedildi')", (q['opportunity_id'],))
-        _audit(conn, 'Tekliften satın alma ve planlanan borç oluşturuldu')
+    if conn.execute('SELECT 1 FROM workflow_orders WHERE quote_id=?', (quote_id,)).fetchone():
+        return False, 'Bu teklif zaten siparişe dönüştürülmüş.'
+    q = conn.execute('SELECT * FROM quotes WHERE id=?', (quote_id,)).fetchone()
+    p = conn.execute('SELECT * FROM product_catalog WHERE id=? AND active=1', (product_id,)).fetchone()
+    if not q or q['status'] != 'Kabul':
+        return False, 'Önce teklif durumunu Kabul olarak kaydedin.'
+    if not p or p['name'] != q['product_name']:
+        return False, 'Teklif ürünü ile katalog ürünü eşleşmiyor.'
+    if not conn.execute('SELECT 1 FROM customers WHERE id=?', (q['customer_id'],)).fetchone():
+        return False, 'Teklife geçerli müşteri bağlanmalı.'
+    if not conn.execute('SELECT 1 FROM warehouses WHERE id=? AND active=1', (warehouse_id,)).fetchone():
+        return False, 'Aktif depo seçilmeli.'
+    if not all(positive(q[k]) for k in ('quantity_kg', 'buy_price_per_kg', 'sell_price_per_kg', 'buy_fx_to_base', 'sell_fx_to_base', 'total_cost_per_kg')):
+        return False, 'Miktar, fiyatlar ve kurlar sıfırdan büyük olmalı.'
+    if not 0 <= q['sales_commission_pct'] < 100 or q['customer_credit_days'] < 0:
+        return False, 'Komisyon ve vade değerlerini düzeltin.'
+    if conn.execute('SELECT 1 FROM purchase_orders WHERE po_number=?', (po_number.strip(),)).fetchone():
+        return False, 'Sipariş numarası zaten kullanılıyor.'
+    po = conn.execute('''INSERT INTO purchase_orders
+        (po_number,supplier,product_id,product_name,quantity_kg,unit_price,currency,
+         incoterm,order_date,destination_warehouse_id,status)
+        VALUES (?,?,?,?,?,?,?,?,?,?,'Sipariş Verildi')''',
+        (po_number.strip(),supplier.strip(),product_id,p['name'],q['quantity_kg'],q['buy_price_per_kg'],
+         q['buy_currency'],q['incoterm'],str(date.today()),warehouse_id)).lastrowid
+    payable = conn.execute('''INSERT INTO payables
+        (supplier,purchase_order_id,invoice_no,due_date,amount,currency,fx_to_base,base_currency,notes)
+        VALUES (?,?,?,?,?,?,?,?,?)''',
+        (supplier.strip(),po,'',str(due_date),q['quantity_kg']*q['buy_price_per_kg'],q['buy_currency'],
+         q['buy_fx_to_base'],q['base_currency'],'Siparişten oluşan planlanan borç; tedarikçi faturası bekleniyor.')).lastrowid
+    conn.execute('INSERT INTO workflow_orders (quote_id,product_id,purchase_order_id,payable_id) VALUES (?,?,?,?)',
+                 (quote_id,product_id,po,payable))
+    if q['opportunity_id']:
+        conn.execute("UPDATE opportunities SET stage='Sipariş',probability=90 WHERE id=? AND stage NOT IN ('Kazanıldı','Kaybedildi')", (q['opportunity_id'],))
+    _audit(conn, 'Tekliften satın alma ve planlanan borç oluşturuldu')
     return True, 'Sipariş ve planlanan borç oluştu. İthalat/sevkiyatı Satın Alma & Stok bölümünden takip edin.'
 
 
@@ -163,7 +179,7 @@ def deliver(workflow_id, lot_id, quantity, reference, delivery_date):
 
 
 def overview():
-    return core().query_df('''SELECT w.id,q.id AS teklif, c.name AS müşteri,q.product_name AS ürün,
+    return core().query_df('''SELECT w.id,g.reference AS sipariş_grubu,q.id AS teklif, c.name AS müşteri,q.product_name AS ürün,
         po.po_number AS satın_alma,po.status AS satın_alma_durumu,q.quantity_kg AS sipariş_kg,
         COALESCE(d.qty,0) AS sevk_kg,q.quantity_kg-COALESCE(d.qty,0) AS kalan_kg,
         COALESCE(d.revenue,0) AS net_satış,COALESCE(d.cost,0) AS teklif_maliyeti,
@@ -172,6 +188,8 @@ def overview():
         FROM workflow_orders w JOIN quotes q ON q.id=w.quote_id
         JOIN customers c ON c.id=q.customer_id JOIN purchase_orders po ON po.id=w.purchase_order_id
         JOIN payables p ON p.id=w.payable_id
+        LEFT JOIN workflow_group_lines gl ON gl.workflow_id=w.id
+        LEFT JOIN workflow_order_groups g ON g.id=gl.group_id
         LEFT JOIN (SELECT d.workflow_id,SUM(d.quantity_kg-COALESCE(r.qty,0)) qty,
                    SUM(d.revenue_base-COALESCE(r.revenue,0)) revenue,
                    SUM(d.cost_base*(1-COALESCE(r.qty,0)/d.quantity_kg)) cost
@@ -209,6 +227,19 @@ def render_workflow():
                     (st.success if ok else st.error)(msg)
                     if ok:
                         st.rerun()
+        if len(quotes)>=2 and not warehouses.empty:
+            with st.form('workflow_batch'):
+                selected=st.multiselect('Çok kalemli sipariş teklifleri',quotes.id.tolist(),format_func=lambda x:f'#{x} · {quotes.set_index("id").loc[x,"product_name"]}')
+                batch_ref=st.text_input('Ortak sipariş referansı')
+                batch_supplier=st.text_input('Çok kalemli sipariş tedarikçisi')
+                batch_warehouse=st.selectbox('Ortak varış deposu',warehouses.id.tolist(),format_func=lambda x:warehouses.set_index('id').loc[x,'name'])
+                batch_due=st.date_input('Ortak planlanan ödeme tarihi')
+                st.caption('Aynı müşterinin kabul edilmiş tekliflerini seçin. Her kalem ayrı stok ve maliyetle izlenir; bir kalem hatalıysa hiçbir kalem kaydedilmez.')
+                if st.form_submit_button('Tüm kalemleri birlikte siparişe dönüştür'):
+                    ok,msg=create_order_batch(selected,batch_supplier,batch_warehouse,batch_ref,batch_due)
+                    (st.success if ok else st.error)(msg)
+                    if ok:
+                        st.rerun()
         lots = core().query_df('''SELECT l.id,l.lot_number,l.quantity_available_kg,w.id AS workflow_id
              FROM inventory_lots l JOIN workflow_orders w ON w.purchase_order_id=l.purchase_order_id
              WHERE l.quantity_available_kg>0''')
@@ -226,3 +257,42 @@ def render_workflow():
 
         from workflow_adjustments_ui import render_adjustments
         render_adjustments(summary)
+
+
+class BatchOrderError(ValueError):
+    pass
+
+
+def create_order_batch(quote_ids, supplier, warehouse_id, reference, due_date):
+    """One multi-line header, child POs per product; all rows commit or none do."""
+    if core().current_role() not in ('','SYSTEM','ADMIN'):
+        return False, 'Çok kalemli sipariş için yönetici yetkisi gerekli.'
+    if len(quote_ids)<2 or len(set(quote_ids))!=len(quote_ids) or not reference.strip():
+        return False, 'En az iki farklı kabul edilmiş teklif ve sipariş referansı seçin.'
+    try:
+        with core().get_conn() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if conn.execute('SELECT 1 FROM workflow_order_groups WHERE reference=?',(reference.strip(),)).fetchone():
+                return False, 'Sipariş grup referansı zaten kullanılmış.'
+            first=conn.execute('SELECT customer_id FROM quotes WHERE id=?',(quote_ids[0],)).fetchone()
+            if not first or not first["customer_id"]:
+                return False, 'İlk teklifte geçerli müşteri bulunamadı.'
+            group_id=conn.execute('INSERT INTO workflow_order_groups (reference,customer_id,supplier) VALUES (?,?,?)',
+                                  (reference.strip(),first['customer_id'],supplier.strip())).lastrowid
+            for line,quote_id in enumerate(quote_ids,1):
+                q=conn.execute('SELECT * FROM quotes WHERE id=?',(quote_id,)).fetchone()
+                if not q or q['customer_id']!=first['customer_id']:
+                    raise BatchOrderError('Tüm kalemler aynı müşteriye ait olmalı; hiçbir sipariş oluşturulmadı.')
+                products=conn.execute('SELECT id FROM product_catalog WHERE name=? AND active=1',(q['product_name'],)).fetchall()
+                if len(products)!=1:
+                    raise BatchOrderError('Her teklif ürünü katalogda tek bir aktif ürünle eşleşmeli.')
+                ok,message=_create_order(conn,quote_id,products[0]['id'],supplier,warehouse_id,
+                                         reference.strip()+'-'+str(line),due_date)
+                if not ok:
+                    raise BatchOrderError('Kalem '+str(line)+': '+message+' Hiçbir kalem kaydedilmedi.')
+                wid=conn.execute('SELECT id FROM workflow_orders WHERE quote_id=?',(quote_id,)).fetchone()['id']
+                conn.execute('INSERT INTO workflow_group_lines (group_id,workflow_id) VALUES (?,?)',(group_id,wid))
+            _audit(conn,'Çok kalemli sipariş grubu oluşturuldu: '+reference.strip())
+        return True, 'Tüm kalemler tek sipariş grubuna bağlandı; ürün bazında stok, borç ve maliyet izlenebilir.'
+    except BatchOrderError as exc:
+        return False,str(exc)

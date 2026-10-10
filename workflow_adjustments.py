@@ -171,6 +171,14 @@ def return_delivery(delivery_id, quantity, reference, return_date, reason):
              quantity_reserved_kg,unit_cost,currency,purchase_order_id,received_date,quality_status,quality_hold_kg,notes)
              VALUES (?,?,?,?,?,?,?,0,?,?,?,?,'HOLD',?,?)''',
             (lot['product_id'],lot['product_name'],lot['warehouse_id'],'RETURN-'+reference.strip(),lot['expiry_date'],quantity,quantity,lot['unit_cost'],lot['currency'],d['purchase_order_id'],str(day),quantity,reason.strip())).lastrowid
+        quality_id=conn.execute("""INSERT INTO quality_cases
+            (case_no,opened_date,customer_id,product_id,product_name,inventory_lot_id,purchase_order_id,
+             complaint_type,affected_quantity_kg,currency,description,immediate_action)
+            VALUES (?,?,?,?,?,?,?,'Müşteri iadesi',?,?,?,?)""",
+            ('RET-'+str(new_lot)+'-'+reference.strip(),str(day),d['customer_id'],lot['product_id'],
+             lot['product_name'],new_lot,d['purchase_order_id'],quantity,d['currency'],reason.strip(),
+             'İade stoğu ayrı lotta HOLD. İnceleme sonrası serbest bırakma veya imha kararı gerekli.')).lastrowid
+        conn.execute('UPDATE inventory_lots SET quality_case_id=? WHERE id=?',(quality_id,new_lot))
         refund_id=None
         if refund>0:
             name=conn.execute('SELECT name FROM customers WHERE id=?',(d['customer_id'],)).fetchone()['name']

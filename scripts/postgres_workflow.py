@@ -13,7 +13,7 @@ IDENTITY_TABLES = {
     'customers','product_catalog','warehouses','opportunities','quotes','purchase_orders',
     'payables','receivables','inventory_lots','shipments','cash_accounts','finance_transactions',
     'audit_log','workflow_orders','workflow_deliveries','workflow_costs','workflow_returns',
-    'finance_reversals','regulatory_items','quality_cases','tasks',
+    'finance_reversals','workflow_order_groups','workflow_group_lines','regulatory_items','quality_cases','tasks',
 }
 
 

@@ -95,7 +95,7 @@ jobs:
       - name: Install app and browser test dependencies
         run: |
           pip install -r requirements.txt playwright==1.51.0
-          python -m playwright install --with-deps chromium
+          python -m playwright install --with-deps chromium webkit
       - name: Desktop and phone viewport acceptance
         run: python scripts/browser_acceptance.py
       - name: Save screenshots and server log

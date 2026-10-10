@@ -88,3 +88,17 @@ def test_postgres_delivery_failure_rolls_back(pg_order):
         flow.deliver(1,1,100,'PG-FAIL',date.today())
     assert scalar('SELECT COUNT(*) FROM receivables')==0
     assert scalar('SELECT COUNT(*) FROM workflow_deliveries')==0
+
+
+def test_postgres_multi_line_batch_and_rollback(pg_order):
+    with ct.get_conn() as c:
+        c.execute("INSERT INTO quotes (customer_id,product_name,quantity_kg,buy_price_per_kg,sell_price_per_kg,total_cost_per_kg,status) VALUES (1,'PG Ingredient',100,2,3,2.5,'Kabul')")
+        c.execute("INSERT INTO product_catalog (name,active) VALUES ('Second PG Ingredient',1)")
+        c.execute("INSERT INTO quotes (customer_id,product_name,quantity_kg,buy_price_per_kg,sell_price_per_kg,total_cost_per_kg,status) VALUES (1,'Second PG Ingredient',200,4,6,5,'Taslak')")
+    assert not flow.create_order_batch([2,3],'PG Factory',1,'PG-GROUP',date.today())[0]
+    assert scalar('SELECT COUNT(*) FROM workflow_order_groups')==0
+    assert scalar('SELECT COUNT(*) FROM purchase_orders')==1
+    with ct.get_conn() as c:
+        c.execute("UPDATE quotes SET status='Kabul' WHERE id=3")
+    assert flow.create_order_batch([2,3],'PG Factory',1,'PG-GROUP',date.today())[0]
+    assert scalar('SELECT COUNT(*) FROM workflow_group_lines')==2

@@ -246,3 +246,66 @@ def test_viewer_cannot_adjust_costs_or_returns(order,monkeypatch):
     assert not a.reconcile(1,True,'X')[0]
     assert not a.return_delivery(1,10,'X',date.today(),'X')[0]
     assert not a.reverse_payment(1,'X','X')[0]
+
+
+def test_adjustment_ui_creates_cost_and_return(order):
+    from pathlib import Path
+    from streamlit.testing.v1 import AppTest
+    assert flow.deliver(1,1,100,'UI-SHIP',date.today())[0]
+    app=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py'),default_timeout=60)
+    app.session_state['ct_user']={'username':'test','display_name':'Test','role':'ADMIN'}
+    app.session_state['ct_session_id']='adjustment-test'
+    app.run()
+    assert not app.exception
+    next(x for x in app.text_input if x.label=='Masraf belge referansı').set_value('UI-COST')
+    next(x for x in app.text_input if x.label=='Masraf açıklaması').set_value('Mal faturası')
+    next(x for x in app.number_input if x.label=='Gerçekleşen tutar').set_value(2000)
+    next(x for x in app.button if x.label=='Gerçek maliyeti kaydet').click()
+    app.run()
+    assert not app.exception
+    assert scalar('SELECT amount_base FROM workflow_costs')==2000
+    next(x for x in app.number_input if x.label=='İade miktarı (kg)').set_value(10)
+    next(x for x in app.text_input if x.label=='İade belge referansı').set_value('UI-RETURN')
+    next(x for x in app.text_input if x.label=='İade gerekçesi').set_value('Ambalaj hasarı')
+    next(x for x in app.button if x.label=='İadeyi ve alacak mahsubunu kaydet').click()
+    app.run()
+    assert not app.exception
+    assert scalar('SELECT credit_amount FROM receivables')==30
+    assert scalar("SELECT affected_quantity_kg FROM quality_cases WHERE complaint_type='Müşteri iadesi'")==10
+
+
+def add_batch_quotes():
+    with ct.get_conn() as c:
+        c.execute("INSERT INTO quotes (customer_id,product_name,quantity_kg,buy_price_per_kg,sell_price_per_kg,total_cost_per_kg,status) VALUES (1,'Test Ingredient',100,2,3,2.5,'Kabul')")
+        c.execute("INSERT INTO product_catalog (name,active) VALUES ('Second Ingredient',1)")
+        c.execute("INSERT INTO quotes (customer_id,product_name,quantity_kg,buy_price_per_kg,sell_price_per_kg,total_cost_per_kg,status) VALUES (1,'Second Ingredient',200,4,6,5,'Kabul')")
+
+
+def test_multi_line_orders_are_linked_and_atomic(order):
+    add_batch_quotes()
+    assert flow.create_order_batch([2,3],'Factory',1,'GROUP-A',date.today())[0]
+    assert scalar('SELECT COUNT(*) FROM workflow_group_lines')==2
+    assert scalar('SELECT COUNT(*) FROM payables')==3
+    assert scalar('SELECT SUM(amount) FROM payables WHERE id>1')==1000
+    assert set(flow.overview().sipariş_grubu.dropna())=={'GROUP-A'}
+    assert not flow.create_order_batch([2,3],'Factory',1,'GROUP-A',date.today())[0]
+
+
+def test_multi_line_failure_rolls_back_first_line(order):
+    add_batch_quotes()
+    with ct.get_conn() as c:
+        c.execute("UPDATE quotes SET status='Taslak' WHERE id=3")
+    assert not flow.create_order_batch([2,3],'Factory',1,'GROUP-FAIL',date.today())[0]
+    assert scalar('SELECT COUNT(*) FROM workflow_order_groups')==0
+    assert scalar('SELECT COUNT(*) FROM workflow_orders')==1
+    assert scalar('SELECT COUNT(*) FROM purchase_orders')==1
+    assert scalar('SELECT COUNT(*) FROM payables')==1
+
+
+def test_multi_line_rejects_mixed_customers(order):
+    add_batch_quotes()
+    with ct.get_conn() as c:
+        c.execute("INSERT INTO customers (name) VALUES ('Other Customer')")
+        c.execute('UPDATE quotes SET customer_id=2 WHERE id=3')
+    assert not flow.create_order_batch([2,3],'Factory',1,'GROUP-MIX',date.today())[0]
+    assert scalar('SELECT COUNT(*) FROM workflow_orders')==1

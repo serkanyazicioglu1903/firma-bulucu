@@ -33,30 +33,31 @@ def main():
                 else:
                     raise RuntimeError('Server did not become healthy')
                 with sync_playwright() as p:
-                    browser=p.chromium.launch()
-                    for name,width,height in [('desktop',1440,900),('phone',390,844)]:
-                        context=browser.new_context(viewport={'width':width,'height':height},has_touch=name=='phone')
-                        page=context.new_page()
-                        page.set_default_timeout(30000)
-                        page.goto('http://127.0.0.1:8503')
-                        expect(page.get_by_label('Şifre',exact=True)).to_be_visible()
-                        assert page.get_by_role('tab').count()==0
-                        page.get_by_label('Şifre',exact=True).fill(password)
-                        page.get_by_role('button',name='Giriş',exact=True).click()
-                        tab=page.get_by_role('tab',name='🧭 AS Control Tower',exact=True)
-                        expect(tab).to_be_visible()
-                        tab.click()
-                        expect(page.get_by_text('🔗 Tekliften tahsilata • Bütünleşik işlem merkezi',exact=True)).to_be_visible()
-                        expect(page.locator('[data-testid="stException"]')).to_have_count(0)
-                        for label in ['🚚 Satın Alma & Stok','💶 Finans & Nakit','🧪 Kalite & Regülasyon','📊 Yönetici Paneli']:
-                            page.get_by_role('tab',name=label,exact=True).click()
+                    for engine in ('chromium','webkit'):
+                        browser=getattr(p,engine).launch()
+                        for name,width,height in [('desktop',1440,900),('phone',390,844)]:
+                            context=browser.new_context(viewport={'width':width,'height':height},has_touch=name=='phone',is_mobile=name=='phone')
+                            page=context.new_page()
+                            page.set_default_timeout(30000)
+                            page.goto('http://127.0.0.1:8503')
+                            expect(page.get_by_label('Şifre',exact=True)).to_be_visible()
+                            assert page.get_by_role('tab').count()==0
+                            page.get_by_label('Şifre',exact=True).fill(password)
+                            page.get_by_role('button',name='Giriş',exact=True).click()
+                            tab=page.get_by_role('tab',name='🧭 AS Control Tower',exact=True)
+                            expect(tab).to_be_visible()
+                            tab.click()
+                            expect(page.get_by_text('🔗 Tekliften tahsilata • Bütünleşik işlem merkezi',exact=True)).to_be_visible()
                             expect(page.locator('[data-testid="stException"]')).to_have_count(0)
-                        overflow=page.evaluate('document.documentElement.scrollWidth > window.innerWidth + 2')
-                        assert not overflow, f'{name}: page-wide horizontal overflow'
-                        page.screenshot(path=str(output/f'{name}.png'),full_page=True)
-                        print(f'PASS {name} {width}x{height}: login, protected tabs, module navigation, no page overflow')
-                        context.close()
-                    browser.close()
+                            for label in ['🚚 Satın Alma & Stok','💶 Finans & Nakit','🧪 Kalite & Regülasyon','📊 Yönetici Paneli']:
+                                page.get_by_role('tab',name=label,exact=True).click()
+                                expect(page.locator('[data-testid="stException"]')).to_have_count(0)
+                            overflow=page.evaluate('document.documentElement.scrollWidth > window.innerWidth + 2')
+                            assert not overflow, f'{name}: page-wide horizontal overflow'
+                            page.screenshot(path=str(output/f'{engine}-{name}.png'),full_page=True)
+                            print(f'PASS {engine} {name} {width}x{height}: login, protected tabs, module navigation, no page overflow')
+                            context.close()
+                        browser.close()
             finally:
                 server.terminate()
                 server.wait(timeout=15)
