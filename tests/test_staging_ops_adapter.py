@@ -96,6 +96,7 @@ class Cursor:
             if table=="payables":entry["paid"]=0.0
             if table=="cash_accounts":entry["balance"]=10000.0
             if table=="inventory_lots":entry["available"]=600.0;entry["hold"]=0.0
+            if table=="quality_cases":entry["affected"]=100.0
             tables[table][ident]=entry
             return
         if sql.startswith("SELECT po.quantity_kg"):
@@ -115,6 +116,18 @@ class Cursor:
                              2250.0,tables["payables"][ident]["paid"],
                              tables["cash_accounts"][ident]["balance"])
             return
+        if sql.startswith("SELECT l.quantity_received_kg"):
+            ident=params[0]
+            lot=tables["inventory_lots"].get(ident)
+            if lot:
+                quality=tables["quality_cases"].get(ident)
+                finance=tables["finance_transactions"].get(ident)
+                self.answer=(600.0,lot["available"],lot["hold"],
+                             "HOLD" if lot["hold"] else "Released",
+                             ident if quality else None,
+                             ident if finance else None,
+                             500.0 if finance else None)
+            return
         if sql.startswith("SELECT po.id"):
             for ident in tables["purchase_orders"]:
                 lot=tables["inventory_lots"].get(ident)
@@ -130,6 +143,16 @@ class Cursor:
                     tables["cash_accounts"][ident]["balance"],
                     ident if finance else None
                 ))
+            return
+        if sql.startswith('SELECT id FROM "ct_staging"."inventory_lots"') and "quality_status=%s" in sql:
+            ident=params[0]
+            lot=tables["inventory_lots"].get(ident)
+            self.answer=(ident,) if lot and lot["hold"]==100.0 and lot["available"]==600.0 else None
+            return
+        if sql.startswith('SELECT id FROM "ct_staging"."quality_cases"') and "affected_quantity_kg=%s" in sql:
+            ident=params[0]
+            case=tables["quality_cases"].get(ident)
+            self.answer=(ident,) if case and case["affected"]==100.0 else None
             return
         if sql.startswith("SELECT id FROM"):
             ident=params[0]
@@ -216,6 +239,24 @@ class OperationsPilotTests(unittest.TestCase):
         self.assertEqual(advance_ops_pilot(self.dsn,ident,"pay"),"not_ready")
         self.assertEqual(self.store.tables["payables"][ident]["paid"],0)
 
+    def test_payment_rejects_missing_or_changed_hold(self):
+        ident=self.create()
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"receive"),"updated")
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"hold"),"updated")
+        self.store.tables["inventory_lots"][ident]["hold"]=0.0
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"pay"),"not_ready")
+        self.assertEqual(self.store.tables["payables"][ident]["paid"],0)
+        self.assertEqual(self.store.tables["cash_accounts"][ident]["balance"],10000)
+
+    def test_payment_rejects_inconsistent_quality_case_quantity(self):
+        ident=self.create()
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"receive"),"updated")
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"hold"),"updated")
+        self.store.tables["quality_cases"][ident]["affected"]=75.0
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"pay"),"not_ready")
+        self.assertEqual(self.store.tables["payables"][ident]["paid"],0)
+        self.assertEqual(self.store.tables["cash_accounts"][ident]["balance"],10000)
+
     def test_failure_rolling_back_payment_and_cash(self):
         ident=self.create()
         self.assertEqual(advance_ops_pilot(self.dsn,ident,"receive"),"updated")
@@ -233,6 +274,15 @@ class OperationsPilotTests(unittest.TestCase):
         self.assertEqual(delete_ops_pilot(self.dsn,wrong),"not_ready")
         self.assertIn(wrong,self.store.tables["purchase_orders"])
         self.assertIn(ident,self.store.tables["purchase_orders"])
+
+    def test_cleanup_refuses_divergent_hold_without_deleting(self):
+        ident=self.create()
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"receive"),"updated")
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"hold"),"updated")
+        self.store.tables["inventory_lots"][ident]["hold"]=50.0
+        before=deepcopy(self.store.tables)
+        self.assertEqual(delete_ops_pilot(self.dsn,ident),"not_ready")
+        self.assertEqual(self.store.tables,before)
 
     def test_schema_failure_does_not_write(self):
         with patch("scripts.staging_ops_adapter.validate_staging_structure",
