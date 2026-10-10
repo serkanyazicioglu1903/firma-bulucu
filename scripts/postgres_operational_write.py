@@ -47,6 +47,7 @@ _ALLOWED_ROLES = {
     "release_inventory_lot": frozenset(("ADMIN", "QUALITY")),
     "create_payable": frozenset(("ADMIN", "FINANCE")),
     "pay_supplier": frozenset(("ADMIN", "FINANCE")),
+    "collect_customer_payment": frozenset(("ADMIN", "FINANCE")),
 }
 
 
@@ -107,6 +108,7 @@ _AUDIT_TABLE = {
     "release_inventory_lot": "quality_cases",
     "create_payable": "payables",
     "pay_supplier": "finance_transactions",
+    "collect_customer_payment": "finance_transactions",
 }
 
 
@@ -572,3 +574,63 @@ def pay_supplier(url, role, payable_id, account_id, amount, reference,
         )
         return payment_id
     return _execute(url, role, "pay_supplier", action, actor=actor)
+
+
+def collect_customer_payment(url, role, receivable_id, account_id, amount,
+                             reference, payment_date, actor=None):
+    """Receive customer funds exactly once; lock AR and matching cash account."""
+    def action(cur):
+        invoice_id = _id(receivable_id)
+        bank = _id(account_id)
+        received = _positive(amount)
+        transfer = _text(reference, label="reference_required")
+        when = _date(payment_date)
+        cur.execute(
+            'SELECT amount,paid_amount,currency,status '
+            'FROM "ct_app"."receivables" WHERE id=%s FOR UPDATE',
+            (invoice_id,),
+        )
+        invoice = cur.fetchone()
+        if invoice is None or invoice[3] == "İptal":
+            raise OperationRejected("unknown_receivable")
+        remaining = Decimal(str(invoice[0] or 0)) - Decimal(str(invoice[1] or 0))
+        if remaining <= 0 or received > remaining:
+            raise OperationRejected("over_collection")
+        cur.execute(
+            'SELECT currency,balance,active FROM "ct_app"."cash_accounts" '
+            'WHERE id=%s FOR UPDATE',
+            (bank,),
+        )
+        account = cur.fetchone()
+        if account is None or not account[2]:
+            raise OperationRejected("unknown_account")
+        if account[0] != invoice[2]:
+            raise OperationRejected("currency_mismatch")
+        cur.execute(
+            'SELECT 1 FROM "ct_app"."finance_transactions" '
+            "WHERE transaction_type='Tahsilat' AND reference=%s "
+            "AND (receivable_id=%s OR account_id=%s) LIMIT 1",
+            (transfer, invoice_id, bank),
+        )
+        if cur.fetchone() is not None:
+            raise OperationRejected("duplicate_collection")
+        status = "Kapandı" if remaining == received else "Kısmi"
+        cur.execute(
+            'UPDATE "ct_app"."receivables" '
+            'SET paid_amount=paid_amount+%s,status=%s WHERE id=%s',
+            (received, status, invoice_id),
+        )
+        cur.execute(
+            'INSERT INTO "ct_app"."finance_transactions" '
+            '(transaction_type,receivable_id,transaction_date,amount,currency,'
+            'account_id,reference) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id',
+            ("Tahsilat", invoice_id, when, received, invoice[2], bank, transfer),
+        )
+        record_id = int(cur.fetchone()[0])
+        cur.execute(
+            'UPDATE "ct_app"."cash_accounts" '
+            'SET balance=balance+%s WHERE id=%s',
+            (received, bank),
+        )
+        return record_id
+    return _execute(url, role, "collect_customer_payment", action, actor=actor)
