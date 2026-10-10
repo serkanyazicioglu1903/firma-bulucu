@@ -97,5 +97,65 @@ class MobileSystemTests(unittest.TestCase):
         st.download_button.assert_not_called()
 
 
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    @patch.object(system, "current_user", return_value={"username": "ci-admin"})
+    @patch(
+        "scripts.postgres_reconciliation.check_operational_consistency",
+        return_value={
+            "status": "issues_found",
+            "checks": [{
+                "id": "invalid_stock_quantities",
+                "area": "Stok / Kalite",
+                "label": "Negatif veya müsait miktarı aşan stok blokajı",
+                "severity": "critical",
+                "count": 2,
+            }],
+        },
+    )
+    def test_reconciliation_is_admin_only_and_read_only(
+        self, check, _user, _role, st,
+    ):
+        st.selectbox.return_value = "🔍 Operasyon Mutabakatı"
+        st.button.return_value = True
+        system.render_postgres_system(URL)
+        check.assert_called_once_with(URL)
+        st.error.assert_called_once()
+        st.dataframe.assert_called_once()
+        st.download_button.assert_not_called()
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    @patch.object(system, "current_user", return_value={"username": "ci-admin"})
+    @patch(
+        "scripts.postgres_reconciliation.check_operational_consistency",
+    )
+    def test_reconciliation_waits_for_explicit_click(
+        self, check, _user, _role, st,
+    ):
+        st.selectbox.return_value = "🔍 Operasyon Mutabakatı"
+        st.button.return_value = False
+        system.render_postgres_system(URL)
+        check.assert_not_called()
+        st.dataframe.assert_not_called()
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    @patch.object(system, "current_user", return_value={"username": "ci-admin"})
+    @patch(
+        "scripts.postgres_reconciliation.check_operational_consistency",
+        return_value={"status": "ok", "checks": []},
+    )
+    def test_reconciliation_reports_no_issues_without_changes(
+        self, check, _user, _role, st,
+    ):
+        st.selectbox.return_value = "🔍 Operasyon Mutabakatı"
+        st.button.return_value = True
+        system.render_postgres_system(URL)
+        check.assert_called_once_with(URL)
+        st.success.assert_called_once()
+        st.error.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
