@@ -115,6 +115,18 @@ class Cursor:
                              2250.0,tables["payables"][ident]["paid"],
                              tables["cash_accounts"][ident]["balance"])
             return
+        if sql.startswith("SELECT l.quantity_received_kg"):
+            ident=params[0]
+            lot=tables["inventory_lots"].get(ident)
+            if lot:
+                quality=tables["quality_cases"].get(ident)
+                finance=tables["finance_transactions"].get(ident)
+                self.answer=(600.0,lot["available"],lot["hold"],
+                             "HOLD" if lot["hold"] else "Released",
+                             ident if quality else None,
+                             ident if finance else None,
+                             500.0 if finance else None)
+            return
         if sql.startswith("SELECT po.id"):
             for ident in tables["purchase_orders"]:
                 lot=tables["inventory_lots"].get(ident)
@@ -247,6 +259,15 @@ class OperationsPilotTests(unittest.TestCase):
         self.assertEqual(delete_ops_pilot(self.dsn,wrong),"not_ready")
         self.assertIn(wrong,self.store.tables["purchase_orders"])
         self.assertIn(ident,self.store.tables["purchase_orders"])
+
+    def test_cleanup_refuses_divergent_hold_without_deleting(self):
+        ident=self.create()
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"receive"),"updated")
+        self.assertEqual(advance_ops_pilot(self.dsn,ident,"hold"),"updated")
+        self.store.tables["inventory_lots"][ident]["hold"]=50.0
+        before=deepcopy(self.store.tables)
+        self.assertEqual(delete_ops_pilot(self.dsn,ident),"not_ready")
+        self.assertEqual(self.store.tables,before)
 
     def test_schema_failure_does_not_write(self):
         with patch("scripts.staging_ops_adapter.validate_staging_structure",
