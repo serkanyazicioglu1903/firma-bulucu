@@ -16,7 +16,8 @@ from scripts.postgres_live_schema import schema_ddl_steps
 from scripts.staging_validate import validate_staging_structure
 from scripts.postgres_operational_write import (
     create_customer, create_product, create_purchase_order, create_shipment,
-    receive_shipment, hold_inventory_lot, create_payable, pay_supplier,
+    receive_shipment, hold_inventory_lot, release_inventory_lot,
+    create_payable, pay_supplier,
 )
 from scripts.postgres_operational_read import read_operational_counts
 
@@ -154,16 +155,25 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
             )[0],
             "quality_hold_blocks_payment",
         )
-        # A quality resolution is deliberately explicit and test-only here.
-        self.execute(
-            'UPDATE "ct_app"."inventory_lots" '
-            "SET quality_status='Released',quality_hold_kg=0 WHERE id=%s",
-            (receipt[1],),
+        # Release must close its own quality case atomically.
+        self.assertEqual(
+            release_inventory_lot(
+                self.url, "QUALITY", receipt[1], "CI fictional test resolved"
+            )[0],
+            "ok",
         )
-        self.execute(
-            'UPDATE "ct_app"."quality_cases" '
-            "SET status='Kapandı', final_resolution='CI resolved' WHERE id=%s",
-            (hold[1],),
+        self.assertEqual(
+            release_inventory_lot(
+                self.url, "QUALITY", receipt[1], "Repeat release"
+            )[0],
+            "lot_not_on_hold",
+        )
+        self.assertEqual(
+            self.execute(
+                'SELECT status FROM "ct_app"."quality_cases" WHERE id=%s',
+                (hold[1],),
+            )[0],
+            "Kapandı",
         )
         self.assertEqual(
             pay_supplier(
