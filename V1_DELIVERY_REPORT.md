@@ -49,6 +49,7 @@ Python 3.12 / Streamlit 1.65.0 üzerinde:
 | `python preflight_check.py --demo` | PASS |
 | Yerel Streamlit `/_stcore/health` | HTTP yanıtı `ok` |
 | `git diff --check` | Geçti |
+| Chromium masaüstü 1440×900 / telefon 390×844 | GitHub CI: geçti; giriş, modül geçişleri, yatay taşma kontrolü |
 | Gerçek iPhone/Safari ve MacBook testi | Yapılamadı |
 | PostgreSQL gerçek sunucu entegrasyonu | Yapılmadı; staging testleri çevrimdışı taklit bağlantılarla |
 
@@ -56,7 +57,7 @@ Uçtan uca test: 1.000 kg, alış 2 EUR/kg, satış 3 EUR/kg, teklif toplam mali
 
 Bir mevcut uyarı: parola hash testindeki `datetime.utcnow()` kullanımı için deprecation uyarısı. Test başarısını etkilemiyor.
 
-Tarayıcı görsel testi için Chromium indirmesi iki sürümde geçersiz/eksik arşiv döndürdü. Ekran bileşenleri AppTest ile doğrulandı; bunun gerçek cihaz/görsel testin yerine geçtiği iddia edilmiyor. GitHub CI sonucu ayrıca incelenmeli; yukarıdaki sonuçlar yerel testlerdir.
+Yerel Chromium indirmesi geçersiz/eksik arşiv döndürdüğü için tarayıcı kabul testi GitHub CI ortamına taşındı ve geçti. 1440×900 masaüstü ve 390×844 telefon boyutunda giriş, modül geçişleri, sayfa yatay taşması ve uygulama istisnaları kontrol edildi. Ekran görüntüleri CI artifact olarak kaydedildi. Bu test fiziksel iPhone/Safari veya MacBook testinin yerine geçmez. Sonraki GitHub CI çalışmasında ana uygulama kontrolleri, birleşik test seti ve staging güvenlik testleri de geçti.
 
 ## MacBook ve aynı Wi-Fi'deki telefon için önizleme
 
@@ -84,3 +85,13 @@ Başlatıcı en az 12 karakterli geçici şifre ister. Kullanıcı adı `serkan`
 - Canlı geçişten önce yedekleme/geri dönüş, yetki kabulü ve gerçek PostgreSQL transaction testi tamamlanmalı.
 
 PR birleştirme, canlı dağıtım veya canlı veri aktarımı için Serkan Bey'in ayrıca onayı gerekir.
+
+## Son GitHub doğrulaması
+
+Test edilen kod commit’i: `d56b28969ae72ac2f4b4a67dceabe23c166bfcd8`.
+
+- [Ana uygulama + tarayıcı kabul testi: başarılı](https://github.com/serkanyazicioglu1903/firma-bulucu/actions/runs/38074788079)
+- [Staging güvenliği: başarılı](https://github.com/serkanyazicioglu1903/firma-bulucu/actions/runs/38074788074)
+- Tarayıcı ekran görüntüleri ilk bağlantıdaki `browser-acceptance` artifact içinde.
+- İlk CI denemesindeki pytest import yolu sorunu düzeltildi; pandas test edilen 2.2.3 sürümüne sabitlendi.
+- Bu sonuçların ardından yapılan rapor güncellemesi uygulama kodunu değiştirmez.
