@@ -374,5 +374,38 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
             self.assertGreaterEqual(manifest["tables"]["customers"]["row_count"], 1)
 
 
+    def test_all_role_portals_use_live_postgres_without_sqlite(self):
+        """Verify non-admin role pages in the disposable PG live backend."""
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from streamlit.testing.v1 import AppTest
+        import control_tower as ct
+        import security_admin as auth
+
+        def fake_secret(name, default=""):
+            return "ci-only-password" if name == "CONTROL_TOWER_PASSWORD" else default
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"DATABASE_URL": self.url}):
+                with patch.object(ct, "DB_PATH", Path(tmp) / "no-sqlite.db"):
+                    with patch.object(auth, "_secret", side_effect=fake_secret):
+                        for role in ("SALES", "PURCHASING", "QUALITY", "FINANCE", "VIEWER"):
+                            with self.subTest(role=role):
+                                app = AppTest.from_file(
+                                    str(Path(__file__).resolve().parents[1] / "app.py"),
+                                    default_timeout=110,
+                                )
+                                app.session_state["ct_user"] = {
+                                    "username": "ci-" + role.lower(),
+                                    "display_name": "CI " + role,
+                                    "role": role,
+                                }
+                                app.session_state["ct_session_id"] = "ci-session-" + role
+                                app.run()
+                                self.assertFalse(app.exception, str(app.exception))
+                        self.assertFalse(ct.DB_PATH.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
