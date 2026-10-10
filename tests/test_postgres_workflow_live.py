@@ -21,9 +21,10 @@ def pg_order(monkeypatch):
     with psycopg.connect(URL,autocommit=True) as conn:
         conn.execute('DROP SCHEMA IF EXISTS ct_staging CASCADE')
         conn.execute(generate()[0])
-    monkeypatch.setattr(ct,'get_conn',lambda:Connection(URL))
-    monkeypatch.setattr(ct,'query_df',lambda sql,params=():query_df(URL,sql,params))
-    monkeypatch.setattr(ct,'audit_sql_write',lambda *args:None)
+    monkeypatch.setenv('AS_CONTROL_TOWER_BACKEND', 'postgres')
+    monkeypatch.setenv('AS_CONTROL_TOWER_POSTGRES_URL', URL)
+    monkeypatch.setenv('AS_CONTROL_TOWER_POSTGRES_SCHEMA', 'ct_staging')
+    ct.init_db()
     with ct.get_conn() as c:
         c.execute("INSERT INTO customers (name) VALUES ('Postgres Test Customer')")
         c.execute("INSERT INTO product_catalog (name,supplier,active) VALUES ('PG Ingredient','PG Factory',1)")
@@ -121,3 +122,38 @@ def test_additive_workflow_migration_is_repeatable_and_preserves_data():
         conn.execute(generate_migration())
         assert conn.execute('SELECT name FROM ct_staging.customers').fetchone()[0]=='Keep this synthetic customer'
         assert conn.execute("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='ct_staging' AND table_name='receivables' AND column_name='credit_amount'").fetchone()[0]==1
+
+
+@pytest.mark.parametrize('role', ['ADMIN','SALES','PURCHASING','FINANCE','QUALITY','VIEWER'])
+def test_all_postgres_role_screens(pg_order, role):
+    from streamlit.testing.v1 import AppTest
+    import security_admin
+    assert ct.receive_shipment_to_stock(1)[0]
+    assert flow.deliver(1,1,100,'UI-INV',date.today())[0]
+    assert adj.add_cost(1,'UI-GOODS','Mal bedeli',2000,'EUR',1,date.today(),'Test')[0]
+    # All module tabs execute during the same Streamlit run, including reporting,
+    # system admin/export and role-specific portals, without monkeypatched SQL.
+    app = AppTest.from_file('app.py', default_timeout=90)
+    app.session_state['ct_user'] = {'username':'pg-test','display_name':'PG Test','role':role}
+    app.session_state['ct_session_id'] = 'pg-app-test'
+    app.run()
+    assert not app.exception, [e.message for e in app.exception]
+    import zipfile, io
+    with zipfile.ZipFile(io.BytesIO(security_admin.export_all_tables_zip(ct.DB_PATH))) as archive:
+        assert 'customers.csv' in archive.namelist()
+        assert 'Postgres Test Customer' in archive.read('customers.csv').decode()
+    # A fresh connection sees the same persistent records, including audit writes.
+    assert scalar('SELECT COUNT(*) FROM audit_log') > 0
+
+
+def test_empty_postgres_application(pg_order):
+    from streamlit.testing.v1 import AppTest
+    with psycopg.connect(URL,autocommit=True) as conn:
+        conn.execute('DROP SCHEMA ct_staging CASCADE')
+        conn.execute(generate()[0])
+    app = AppTest.from_file('app.py',default_timeout=90)
+    app.session_state['ct_user'] = {'username':'pg-test','display_name':'PG Test','role':'ADMIN'}
+    app.run()
+    assert not app.exception, [e.message for e in app.exception]
+    assert scalar('SELECT COUNT(*) FROM customers') == 0
+    assert scalar('SELECT COUNT(*) FROM product_catalog') == 0

@@ -15,6 +15,9 @@ def core():
 
 
 def init_workflow():
+    import database
+    if database.is_postgres():
+        return
     with core().get_conn() as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS workflow_orders (

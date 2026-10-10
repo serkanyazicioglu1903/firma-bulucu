@@ -1,3 +1,4 @@
+import database
 import sqlite3
 from datetime import date
 from pathlib import Path
@@ -7,14 +8,12 @@ import streamlit as st
 
 
 def connect(db_path):
-    conn = sqlite3.connect(Path(db_path), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return database.connect(db_path)
 
 
 def query_df(db_path, sql, params=()):
     with connect(db_path) as conn:
-        return pd.read_sql_query(sql, conn, params=params)
+        return database.frame(conn, sql, params)
 
 
 def scalar(db_path, sql, params=(), default=0):

@@ -106,6 +106,21 @@ def foreign_key_sql(conn, table):
     return statements
 
 
+# SQLite date differences return NULL for malformed dates. Preserve that behavior
+# in reports while keeping all parameter values bound by the driver.
+DATE_HELPER_SQL = """
+CREATE OR REPLACE FUNCTION ct_julianday(value text) RETURNS double precision
+LANGUAGE plpgsql IMMUTABLE STRICT SET search_path TO pg_catalog AS $$
+BEGIN
+    IF value = '' THEN RETURN NULL; END IF;
+    RETURN EXTRACT(EPOCH FROM value::timestamp) / 86400.0 + 2440587.5;
+EXCEPTION WHEN invalid_datetime_format OR datetime_field_overflow THEN
+    RETURN NULL;
+END;
+$$;
+"""
+
+
 def generate(schema="ct_staging"):
     quote(schema)
     with sqlite_schema() as conn:
@@ -138,6 +153,7 @@ $$;
 CREATE TRIGGER workflow_quote_frozen BEFORE UPDATE OR DELETE ON quotes
 FOR EACH ROW EXECUTE FUNCTION protect_workflow_quote();
 """)
+        result.append(DATE_HELPER_SQL)
         result.append("COMMIT;")
         return "\n\n".join(result) + "\n", tables
 

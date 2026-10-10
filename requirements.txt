@@ -7,3 +7,5 @@ pandas==2.2.3
 pytest>=8.0
 sqlalchemy>=2.0
 psycopg[binary]>=3.2
+
+sqlglot==27.28.1

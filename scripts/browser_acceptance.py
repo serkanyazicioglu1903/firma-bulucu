@@ -1,5 +1,6 @@
 """Isolated Chromium desktop/mobile-viewport acceptance; no deployment or live data."""
 import os
+import argparse
 from pathlib import Path
 import secrets
 import subprocess
@@ -13,12 +14,29 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 def main():
-    output=ROOT/'browser-artifacts'
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--postgres-test', action='store_true')
+    args = parser.parse_args()
+    backend = {'AS_CONTROL_TOWER_BACKEND': 'sqlite'}
+    if args.postgres_test:
+        sys.path.insert(0, str(ROOT))
+        import psycopg
+        from scripts.postgres_workflow import validate_test_url
+        from scripts.build_pg_schema import generate
+        url = validate_test_url(os.environ.get('AS_CT_TEST_POSTGRES_URL', ''))
+        with psycopg.connect(url, autocommit=True) as conn:
+            conn.execute('DROP SCHEMA IF EXISTS ct_staging CASCADE')
+            conn.execute(generate()[0])
+        backend = {'AS_CONTROL_TOWER_BACKEND': 'postgres',
+                   'AS_CONTROL_TOWER_POSTGRES_URL': url,
+                   'AS_CONTROL_TOWER_POSTGRES_SCHEMA': 'ct_staging'}
+    output=ROOT/('browser-artifacts-postgres' if args.postgres_test else 'browser-artifacts')
     output.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='ct-browser-') as tmp:
         password=secrets.token_urlsafe(24)
         env=dict(os.environ,AS_CONTROL_TOWER_DB=str(Path(tmp)/'test.db'),
                  AS_CONTROL_TOWER_DEMO_SEED='1',CONTROL_TOWER_PASSWORD=password,APP_USERS_JSON='')
+        env.update(backend)
         with (output/'server.log').open('w') as log:
             server=subprocess.Popen([sys.executable,'-m','streamlit','run',str(ROOT/'app.py'),
                 '--server.address=127.0.0.1','--server.port=8503','--server.headless=true',

@@ -1,3 +1,4 @@
+import database
 import sqlite3
 import os
 import math
@@ -49,9 +50,7 @@ ACTIVITY_TYPES = [
 
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return database.connect(DB_PATH)
 
 
 def execute(sql, params=()):
@@ -65,7 +64,7 @@ def execute(sql, params=()):
 
 def query_df(sql, params=()):
     with get_conn() as conn:
-        return pd.read_sql_query(sql, conn, params=params)
+        return database.frame(conn, sql, params)
 
 
 def ensure_column(conn, table, column, definition):
@@ -75,6 +74,9 @@ def ensure_column(conn, table, column, definition):
 
 
 def init_db():
+    if database.is_postgres():
+        database.validate_schema(DB_PATH)
+        return
     with get_conn() as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS customers (

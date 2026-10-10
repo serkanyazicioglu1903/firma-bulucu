@@ -132,3 +132,16 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Real PostgreSQL workflow, concurrency and rollback acceptance
         run: python -m pytest -q tests/test_postgres_workflow_live.py
+
+      - name: Install browser engines for PostgreSQL application acceptance
+        run: |
+          pip install playwright==1.51.0
+          python -m playwright install --with-deps chromium webkit
+      - name: PostgreSQL desktop and phone acceptance
+        run: python scripts/browser_acceptance.py --postgres-test
+      - name: Save PostgreSQL screenshots and log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-acceptance-postgres
+          path: browser-artifacts-postgres/

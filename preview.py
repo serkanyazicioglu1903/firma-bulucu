@@ -18,7 +18,7 @@ def main():
         parser.error('En az 12 karakter kullanın.')
     with tempfile.TemporaryDirectory(prefix='as-control-tower-preview-') as folder:
         env = os.environ.copy()
-        env.update(AS_CONTROL_TOWER_DB=str(Path(folder)/'preview.db'),
+        env.update(AS_CONTROL_TOWER_BACKEND='sqlite', AS_CONTROL_TOWER_DB=str(Path(folder)/'preview.db'),
                    AS_CONTROL_TOWER_DEMO_SEED='1' if args.demo else '0',
                    CONTROL_TOWER_PASSWORD=password, APP_USERS_JSON='')
         print('Kullanıcı: serkan. Geçici önizleme; kapatınca örnek kayıtlar silinir.')

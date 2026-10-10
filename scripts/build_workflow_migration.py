@@ -2,7 +2,7 @@
 from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from scripts.build_pg_schema import sqlite_schema,create_table_sql,foreign_key_sql
+from scripts.build_pg_schema import sqlite_schema,create_table_sql,foreign_key_sql,DATE_HELPER_SQL
 
 
 def generate_migration():
@@ -32,6 +32,7 @@ def generate_migration():
                 FOR EACH ROW EXECUTE FUNCTION protect_workflow_quote();
             END IF;
         END $$;''')
+    statements.append(DATE_HELPER_SQL)
     statements.append('COMMIT;')
     return '\n\n'.join(statements)+'\n'
 

@@ -1,3 +1,4 @@
+import database
 import os
 import hashlib
 import hmac
@@ -26,12 +27,12 @@ ROLE_PERMISSIONS = {
 
 
 def connect(db_path):
-    conn = sqlite3.connect(Path(db_path), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return database.connect(db_path)
 
 
 def init_security_tables(db_path):
+    if database.is_postgres():
+        return
     with connect(db_path) as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS audit_log (
@@ -304,7 +305,7 @@ def audit_sql_write(db_path, sql):
 
 def query_df(db_path, sql, params=()):
     with connect(db_path) as conn:
-        return pd.read_sql_query(sql, conn, params=params)
+        return database.frame(conn, sql, params)
 
 
 def date_stamp():
@@ -336,14 +337,9 @@ def verified_sqlite_backup_bytes(db_path):
 def export_all_tables_zip(db_path):
     buffer=io.BytesIO()
     with connect(db_path) as conn, zipfile.ZipFile(buffer,"w",zipfile.ZIP_DEFLATED) as z:
-        tables=[
-            row[0] for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-            ).fetchall()
-            if not row[0].startswith("sqlite_")
-        ]
+        tables = database.table_names(conn)
         for table in tables:
-            df=pd.read_sql_query('SELECT * FROM "' + table + '"',conn)
+            df=database.frame(conn, 'SELECT * FROM "' + table.replace('"', '""') + '"')
             z.writestr(table + ".csv",df.to_csv(index=False))
     return buffer.getvalue()
 
@@ -477,454 +473,456 @@ def render_system_admin(db_path):
     )
 
     with health_tab:
-        st.markdown("#### Supabase PostgreSQL bağlantısı")
-        st.caption(
-            "Bu kontrol yalnız SELECT 1 çalıştırır; tablo oluşturmaz, "
-            "veri taşımaz ve bağlantı şifresini göstermez."
-        )
-        st.info(
-            "Uygulamanın mevcut iş veritabanı hâlâ SQLite. "
-            "Bağlantı testi başarılı olsa bile PostgreSQL'e geçiş yapılmış olmaz."
-        )
-        db_url = _secret("DATABASE_URL")
-        if not db_url:
-            st.warning("DATABASE_URL Streamlit Secrets içinde bulunamadı.")
-        if st.button("Supabase bağlantısını test et", key="ct_postgres_test"):
-            success, reason = test_postgres_connection(db_url)
-            if success:
-                st.success("Supabase PostgreSQL bağlantısı başarılı (salt okunur test).")
-            elif reason == "missing":
-                st.error("DATABASE_URL bulunamadı. Streamlit Secrets kaydını kontrol edin.")
-            elif reason == "placeholder":
-                st.error("Bağlantı adresinde [YOUR-PASSWORD] veya örnek metin kalmış.")
-            elif reason == "invalid_url":
-                st.error("DATABASE_URL geçerli bir PostgreSQL URI değil.")
-            else:
-                st.error(
-                    "Supabase bağlantısı kurulamadı. Session pooler URI, "
-                    "veritabanı şifresi, özel karakterlerin URL kodlaması "
-                    "ve projenin aktif olduğunu kontrol edin."
-                )
-
-        st.markdown("#### PostgreSQL test tabloları (yalnızca kontrol)")
-        st.caption(
-            "Bu bölüm mevcut Supabase tablolarını sadece okur. "
-            "SQLite kayıtlarını taşımaz, PostgreSQL tablolarını oluşturmaz."
-        )
-        if st.button("Supabase test tablolarını kontrol et", key="ct_pg_staging_inspect"):
-            ok, reason, existing = inspect_postgres_staging(db_url)
-            if ok:
-                from scripts.build_pg_schema import generate
-                _, expected = generate()
-                missing = sorted(set(expected) - set(existing))
-                st.info(
-                    f"ct_staging: {len(existing)} mevcut tablo; "
-                    f"{len(expected)} beklenen uygulama tablosu."
-                )
-                if missing:
-                    st.warning(
-                        "Henüz oluşturulmamış tablolar: " + ", ".join(missing)
-                    )
-                else:
-                    st.success(
-                        "Uygulamanın beklediği tablo adları test şemasında mevcut. "
-                        "Bu kontrol kolonları, ilişkileri veya uygulama işlevlerini "
-                        "henüz doğrulamaz."
-                    )
-            else:
-                st.error(
-                    "Salt okunur tablo kontrolü tamamlanamadı. "
-                    "DATABASE_URL bağlantısını kontrol edin."
-                )
-        st.markdown("#### PostgreSQL tablo yapısı doğrulaması")
-        st.caption(
-            "26 uygulama tablosunun sütun adlarını, veri tiplerini, zorunlu alanlarını, "
-            "birincil anahtarlarını, benzersizlik ve yabancı anahtar ilişkilerini "
-            "salt okunur şekilde kontrol eder. Veri kayıtlarını okumaz veya değiştirmez."
-        )
-        if st.button("Tablo yapısı ve ilişkileri doğrula", key="ct_pg_schema_validate"):
-            from scripts.staging_validate import validate_staging_structure
-            status, issues = validate_staging_structure(db_url)
-            if status == "ok":
-                st.success(
-                    "26 uygulama tablosunun sütun tipleri, zorunlu alanları ve "
-                    "PK/UNIQUE/FK ilişkileri beklenen şemayla uyumlu. "
-                    "Bu kontrol gerçek kayıt işlemlerini veya iş kurallarını sınamaz."
-                )
-            elif status == "mismatch":
-                st.error(
-                    f"PostgreSQL test şemasında {len(issues)} yapısal uyumsuzluk bulundu. "
-                    "SQLite verilerini taşıma veya canlı sistemi değiştirme."
-                )
-                for issue in issues[:20]:
-                    st.write("• " + issue)
-                if len(issues) > 20:
-                    st.caption(f"Diğer {len(issues)-20} uyumsuzluk gösterilmedi.")
-            else:
-                st.error(
-                    "Salt okunur şema doğrulaması tamamlanamadı. "
-                    "Bağlantı ve Supabase yetkilerini kontrol edin."
-                )
-
-        with st.expander("PostgreSQL işlem testleri (geri alınır)"):
-            st.warning(
-                "Bu test yalnızca ct_staging üzerinde geçici ve tamamen kurgusal "
-                "müşteri, ürün, teklif, görev, sevkiyat, stok, kalite ve finans "
-                "kayıtlarıyla çalışır. Test sonunda bütün ekleme/güncelleme/silme "
-                "işlemleri geri alınır. Gerçek şirket verilerine dokunmaz; canlı "
-                "SQLite uygulamasını PostgreSQL'e geçirmez."
-            )
-            test_confirm = st.checkbox(
-                "Yalnızca ct_staging test ortamında geri alınacak deneme işlemlerini onaylıyorum.",
-                key="ct_pg_transaction_smoke_confirm",
-            )
-            if st.button(
-                "PostgreSQL işlem testini çalıştır",
-                key="ct_pg_transaction_smoke_run",
-                disabled=not test_confirm or not db_url,
-            ):
-                from scripts.staging_transaction_smoke import (
-                    run_transactional_staging_smoke,
-                )
-                smoke_status, tested = run_transactional_staging_smoke(db_url)
-                if smoke_status == "passed":
-                    st.success(
-                        "PostgreSQL geçici ekleme, okuma, güncelleme ve silme "
-                        "işlemleri başarılı. Tüm deneme kayıtları geri alındı. "
-                        "Kontrol edilen bağlantılar: " + ", ".join(tested) + ". "
-                        "Canlı uygulama hâlâ SQLite kullanıyor."
-                    )
-                elif smoke_status == "schema_mismatch":
-                    st.error(
-                        "Test başlamadı: PostgreSQL tablo yapısı doğrulanamadı. "
-                        "Önce salt okunur tablo yapısı testini çalıştır."
-                    )
-                else:
-                    st.error(
-                        "İşlem testi tamamlanamadı. Deneme değişiklikleri geri "
-                        "alınır; hiçbir gerçek kayıt taşınmadı. "
-                        "Supabase yetkilerini ve veritabanı bağlantısını kontrol et."
-                    )
-
-        with st.expander("PostgreSQL şirket iş akışı pilotu (geri alınır)"):
-            st.info(
-                "Yalnızca ct_staging için kurgusal verilerle CRM → teklif ve maliyet "
-                "→ satın alma → kısmi mal kabul → kalite HOLD → tahsilat → finans "
-                "bağlantılarını doğrular. Bütün işlemler geri alınır; "
-                "gerçek müşteri ve şirket kayıtlarını taşımaz. "
-                "Canlı SQLite uygulaması değişmez."
-            )
-            business_confirm = st.checkbox(
-                "Yalnızca PostgreSQL test ortamında geri alınacak kurgusal "
-                "iş akışını çalıştırmayı onaylıyorum.",
-                key="ct_pg_business_confirm",
-            )
-            if st.button(
-                "Kurgusal iş akışını test et",
-                key="ct_pg_business_pilot_run",
-                disabled=not business_confirm or not db_url,
-            ):
-                from scripts.staging_business_pilot import run_staging_business_pilot
-                status, result = run_staging_business_pilot(db_url)
-                if status == "passed":
-                    st.success(
-                        "PostgreSQL iş akışı testleri başarılı; "
-                        "bütün kurgusal kayıtlar geri alındı."
-                    )
-                    st.caption("Kontrol edilen adımlar: " + ", ".join(result["steps"]))
-                    col_a, col_b, col_c = st.columns(3)
-                    col_a.metric("Kısmi mal kabul (kg)", f'{result["received_kg"]:,.0f}')
-                    col_b.metric("Kalite HOLD (kg)", f'{result["hold_kg"]:,.0f}')
-                    col_c.metric("Kullanılabilir stok (kg)", f'{result["available_kg"]:,.0f}')
-                    st.caption(
-                        "Tamamı kurgusal sonuçlar. "
-                        f'Kalan sipariş: {result["remaining_kg"]:,.0f} kg · '
-                        f'Teklif katkısı: {result["profit_eur_total"]:,.2f} EUR · '
-                        f'Açık alacak: {result["receivable_eur"]:,.2f} EUR · '
-                        f'Kur çevrilmiş açık borç: {result["payable_eur"]:,.2f} EUR.'
-                    )
-                    st.info(
-                        "Bu test veritabanının iş kurallarını sınar; "
-                        "uygulamanın diğer modülleri hâlâ SQLite ile çalışıyor."
-                    )
-                elif status == "schema_mismatch":
-                    st.error(
-                        "Test başlamadı: PostgreSQL test tablosu yapısını "
-                        "önce salt okunur şekilde doğrula."
-                    )
-                else:
-                    st.error(
-                        "Pilot iş akışı tamamlanamadı. Kurgusal işlemler geri alındı. "
-                        "Supabase bağlantısını ve test yetkilerini kontrol et."
-                    )
-
-        with st.expander("PostgreSQL CRM pilot ekranı (kalıcı kurgu veri)"):
-            st.warning(
-                "Bu ekran ilk kez PostgreSQL üzerinde KALICI test kayıtları "
-                "oluşturabilir. Yalnız ct_staging test şemasında tamamen "
-                "kurgusal müşteri, ürün, fırsat ve görevler kullanılır; gerçek "
-                "firma adı veya verisi girilmez. Kayıtlar siz silene kadar "
-                "test ortamında durur. Canlı SQLite ekranları değişmez."
-            )
-            from scripts.staging_crm_adapter import (
-                list_sandbox_crm, create_sandbox_crm,
-                update_sandbox_crm, delete_sandbox_crm,
-            )
-            crm_confirm = st.checkbox(
-                "Yalnızca ct_staging üzerinde kurgusal ve kalıcı CRM "
-                "kayıtlarını oluşturmaya, güncellemeye veya silmeye izin veriyorum.",
-                key="ct_pg_crm_persistent_confirm",
-            )
-            if st.button(
-                "PostgreSQL test CRM kayıtlarını listele",
-                key="ct_pg_crm_list", disabled=not db_url,
-            ):
-                list_status, listed = list_sandbox_crm(db_url)
-                if list_status == "ok":
-                    st.session_state["ct_pg_crm_listed"] = listed
-                    st.success("Yalnızca kurgusal CRM kayıtları okundu.")
-                else:
-                    st.session_state.pop("ct_pg_crm_listed", None)
-                    st.error("CRM test listesi okunamadı. Şema ve bağlantıyı kontrol et.")
-
-            if st.button(
-                "Kurgusal CRM deneme kaydı oluştur (kalıcı)",
-                key="ct_pg_crm_create",
-                disabled=not db_url or not crm_confirm,
-            ):
-                result, created_id = create_sandbox_crm(db_url)
-                if result == "created":
-                    st.success("Kurgusal CRM kayıt seti PostgreSQL test ortamına kaydedildi.")
-                    read_status, listed = list_sandbox_crm(db_url)
-                    if read_status == "ok":
-                        st.session_state["ct_pg_crm_listed"] = listed
-                else:
-                    st.error("Kurgusal CRM kaydı oluşturulamadı. Canlı SQLite değişmedi.")
-
-            listed = st.session_state.get("ct_pg_crm_listed", [])
-            if listed:
-                st.dataframe(
-                    pd.DataFrame(listed).rename(columns={
-                        "id": "Test ID", "customer": "Kurgusal müşteri",
-                        "product": "Kurgusal ürün", "stage": "Fırsat aşaması",
-                        "task_status": "Görev durumu",
-                    }), hide_index=True, width="stretch"
-                )
-                options = [int(item["id"]) for item in listed]
-                selected_id = st.selectbox(
-                    "Üzerinde işlem yapılacak kurgusal kayıt",
-                    options=options,
-                    format_func=lambda x: "Deneme kaydı " + str(-x),
-                    key="ct_pg_crm_selected",
-                )
-                left, right = st.columns(2)
-                with left:
-                    if st.button(
-                        "Kurgusal aşamayı güncelle",
-                        key="ct_pg_crm_update",
-                        disabled=not crm_confirm or not db_url,
-                    ):
-                        result = update_sandbox_crm(db_url, selected_id)
-                        if result == "updated":
-                            st.success("Test fırsatı Numune, görev Tamamlandı oldu.")
-                        else:
-                            st.error("Güncelleme tamamlanamadı; mevcut kayıtlar korundu.")
-                        _, rows = list_sandbox_crm(db_url)
-                        st.session_state["ct_pg_crm_listed"] = rows
-                with right:
-                    if st.button(
-                        "Seçili kurgusal kaydı sil",
-                        key="ct_pg_crm_delete",
-                        disabled=not crm_confirm or not db_url,
-                    ):
-                        result = delete_sandbox_crm(db_url, selected_id)
-                        if result == "deleted":
-                            st.success("Seçili kurgu CRM seti test şemasından silindi.")
-                        else:
-                            st.error("Silme tamamlanamadı; işlem geri alındı.")
-                        _, rows = list_sandbox_crm(db_url)
-                        st.session_state["ct_pg_crm_listed"] = rows
-            else:
-                st.caption(
-                    "Henüz listelenmiş kurgusal CRM seti yok. "
-                    "Varsa önce listele veya açık onayla yeni bir set oluştur."
-                )
-            st.info(
-                "Bu ekran yalnızca CRM modülünün bağımsız PostgreSQL pilotudur. "
-                "Yeniden başlatma sonrasında kayıtların kaldığını test etmek "
-                "için listeleme düğmesine yeniden bas. "
-                "Gerçek müşteri bilgilerini henüz burada kullanma."
-            )
-
-        with st.expander("PostgreSQL operasyon ve finans pilotu (kalıcı kurgu veri)"):
-            st.warning(
-                "Yalnızca ct_staging üzerinde tamamen KURGUSAL satın alma, "
-                "sevkiyat, stok, kalite HOLD ve ödeme kayıtları oluşturur. "
-                "İşlemler PostgreSQL test ortamında kalıcıdır; silmek için "
-                "aşağıdaki seçili set silme işlemini kullan. "
-                "Gerçek firma verileri girilmez. Canlı SQLite değişmez."
-            )
-            from scripts.staging_ops_adapter import (
-                list_ops_pilots, create_ops_pilot, advance_ops_pilot,
-                delete_ops_pilot,
-            )
-            ops_confirm = st.checkbox(
-                "Yalnızca ct_staging içinde kurgusal, kalıcı satın alma/stok/"
-                "finans test kayıtları oluşturmaya ve yönetmeye onay veriyorum.",
-                key="ct_pg_ops_confirm",
-            )
-            if st.button(
-                "PostgreSQL operasyon kayıtlarını listele",
-                key="ct_pg_ops_list", disabled=not db_url,
-            ):
-                ops_status, ops_items = list_ops_pilots(db_url)
-                if ops_status == "ok":
-                    st.session_state["ct_pg_ops_items"] = ops_items
-                    st.success("Kurgusal operasyon kayıtları okundu.")
-                else:
-                    st.session_state.pop("ct_pg_ops_items", None)
-                    st.error("PostgreSQL test kayıtları okunamadı.")
-
-            if st.button(
-                "Kurgusal satın alma seti oluştur (kalıcı)",
-                key="ct_pg_ops_create",
-                disabled=not db_url or not ops_confirm,
-            ):
-                ops_status, _ = create_ops_pilot(db_url)
-                if ops_status == "created":
-                    st.success("Kurgusal sipariş, sevkiyat ve finans temeli oluşturuldu.")
-                else:
-                    st.error("Kurgusal operasyon seti oluşturulamadı.")
-                ls_status, ops_items = list_ops_pilots(db_url)
-                if ls_status == "ok":
-                    st.session_state["ct_pg_ops_items"] = ops_items
-
-            ops_items = st.session_state.get("ct_pg_ops_items", [])
-            if ops_items:
-                st.dataframe(
-                    pd.DataFrame(ops_items).rename(columns={
-                        "id": "Kurgusal ID", "stage": "Son aşama",
-                        "ordered_kg": "Sipariş (kg)",
-                        "received_kg": "Mal kabul (kg)",
-                        "hold_kg": "Kalite HOLD (kg)",
-                        "available_kg": "Kullanılabilir (kg)",
-                        "remaining_kg": "Sipariş kalan (kg)",
-                        "payable_eur": "Açık borç (EUR)",
-                        "bank_eur": "Kurgusal banka (EUR)",
-                    }), width="stretch", hide_index=True
-                )
-                choices = [int(x["id"]) for x in ops_items]
-                selected_ops = st.selectbox(
-                    "Kurgusal operasyon seti",
-                    options=choices,
-                    format_func=lambda x: "Deneme operasyonu " + str(-x),
-                    key="ct_pg_ops_selected",
-                )
-                selected_row = next(x for x in ops_items if x["id"] == selected_ops)
-                next_step = {
-                    "Sipariş": ("receive", "Kısmi mal kabulünü işle (600 kg)"),
-                    "Mal kabul": ("hold", "Kalite HOLD uygula (100 kg)"),
-                    "Kalite HOLD": ("pay", "Kurgusal tedarikçi ödemesi (500 EUR)"),
-                }.get(selected_row["stage"])
-                a, b = st.columns(2)
-                with a:
-                    if next_step and st.button(
-                        next_step[1], key="ct_pg_ops_advance",
-                        disabled=not ops_confirm or not db_url,
-                    ):
-                        outcome = advance_ops_pilot(db_url, selected_ops, next_step[0])
-                        if outcome == "updated":
-                            st.success("Kurgusal operasyon adımı PostgreSQL'e kaydedildi.")
-                        else:
-                            st.error("İşlem tamamlanamadı; işlem geri alındı.")
-                        list_status, new_items = list_ops_pilots(db_url)
-                        if list_status == "ok":
-                            st.session_state["ct_pg_ops_items"] = new_items
-                with b:
-                    if st.button(
-                        "Seçili kurgusal operasyonu sil",
-                        key="ct_pg_ops_delete",
-                        disabled=not ops_confirm or not db_url,
-                    ):
-                        outcome = delete_ops_pilot(db_url, selected_ops)
-                        if outcome == "deleted":
-                            st.success("Seçili kurgusal operasyon seti silindi.")
-                        else:
-                            st.error("Kurgusal set silinemedi; hiçbir kısmi silme yapılmadı.")
-                        list_status, new_items = list_ops_pilots(db_url)
-                        if list_status == "ok":
-                            st.session_state["ct_pg_ops_items"] = new_items
-            else:
-                st.caption(
-                    "Henüz listelenmiş deneme operasyonu yok. "
-                    "Önce listele veya açık onayla bir set oluştur."
-                )
-            st.info(
-                "Sıra: 1. kurgusal sipariş oluştur, 2. mal kabul, "
-                "3. kalite HOLD, 4. ödeme, 5. kayıtları yeniden listele "
-                "ve ardından test setini sil. "
-                "Uygulamayı yeniden açınca listeleyerek kalıcılığı kontrol edebilirsin. "
-                "Bu ekran canlı satın alma, stok ve finans modüllerinin yerine geçmez."
-            )
-
-        with st.expander("Supabase test tablolarını güvenli oluştur"):
-            st.warning(
-                "Yalnızca ct_staging test şemasında boş uygulama tabloları oluşturur. "
-                "Mevcut uygulama tabloları varsa işlemi durdurur. "
-                "SQLite verilerini taşımaz ve canlı uygulamayı PostgreSQL'e geçirmez."
-            )
-            confirm = st.checkbox(
-                "Yalnızca ct_staging test şemasında boş tablolar oluşturulmasını onaylıyorum.",
-                key="ct_pg_bootstrap_confirm",
-            )
-            if st.button(
-                "26 test tablosunu oluştur",
-                key="ct_pg_bootstrap_apply",
-                disabled=not confirm or not db_url,
-            ):
-                from scripts.staging_bootstrap import bootstrap_staging
-                status, created = bootstrap_staging(db_url)
-                if status == "created":
-                    st.success(
-                        f"{created} boş uygulama tablosu ct_staging içinde oluşturuldu. "
-                        "Gerçek veri aktarılmadı; uygulama hâlâ SQLite kullanıyor."
-                    )
-                elif status == "already_present":
-                    st.info("Beklenen tablolar zaten mevcut; hiçbir tablo değiştirilmedi.")
-                elif status == "conflict":
-                    st.error(
-                        "ct_staging içinde beklenmeyen veya kısmen kurulmuş tablolar var. "
-                        "Güvenlik nedeniyle hiçbir değişiklik yapılmadı."
-                    )
-                elif status == "schema_missing":
-                    st.error(
-                        "ct_staging şeması bulunamadı. "
-                        "Önce test şemasının varlığı doğrulanmalı."
-                    )
-                else:
-                    st.error(
-                        "Test tabloları oluşturulamadı; işlem geri alındı. "
-                        "Bağlantı, yetki ve test şeması durumunu kontrol edin."
-                    )
-
-        with st.expander("PostgreSQL test şeması SQL dosyası"):
+        st.info('Aktif veritabanı: PostgreSQL' if database.is_postgres() else 'Aktif veritabanı: SQLite')
+        if not database.is_postgres():
+            st.markdown("#### Supabase PostgreSQL bağlantısı")
             st.caption(
-                "Yalnızca test şeması için çevrimdışı SQL üretir. "
-                "Dosyayı indirmek veritabanını değiştirmez; "
-                "SQL'i uygulamadan önce teknik inceleme gerekir."
+                "Bu kontrol yalnız SELECT 1 çalıştırır; tablo oluşturmaz, "
+                "veri taşımaz ve bağlantı şifresini göstermez."
             )
-            try:
-                from scripts.build_pg_schema import generate
-                staging_sql, staging_tables = generate()
-                st.download_button(
-                    f"{len(staging_tables)} test tablosu SQL dosyasını indir",
-                    data=staging_sql.encode("utf-8"),
-                    file_name="as_control_tower_ct_staging_schema.sql",
-                    mime="application/sql",
-                    key="ct_download_pg_staging_sql",
+            st.info(
+                "Uygulamanın mevcut iş veritabanı hâlâ SQLite. "
+                "Bağlantı testi başarılı olsa bile PostgreSQL'e geçiş yapılmış olmaz."
+            )
+            db_url = _secret("DATABASE_URL")
+            if not db_url:
+                st.warning("DATABASE_URL Streamlit Secrets içinde bulunamadı.")
+            if st.button("Supabase bağlantısını test et", key="ct_postgres_test"):
+                success, reason = test_postgres_connection(db_url)
+                if success:
+                    st.success("Supabase PostgreSQL bağlantısı başarılı (salt okunur test).")
+                elif reason == "missing":
+                    st.error("DATABASE_URL bulunamadı. Streamlit Secrets kaydını kontrol edin.")
+                elif reason == "placeholder":
+                    st.error("Bağlantı adresinde [YOUR-PASSWORD] veya örnek metin kalmış.")
+                elif reason == "invalid_url":
+                    st.error("DATABASE_URL geçerli bir PostgreSQL URI değil.")
+                else:
+                    st.error(
+                        "Supabase bağlantısı kurulamadı. Session pooler URI, "
+                        "veritabanı şifresi, özel karakterlerin URL kodlaması "
+                        "ve projenin aktif olduğunu kontrol edin."
+                    )
+
+            st.markdown("#### PostgreSQL test tabloları (yalnızca kontrol)")
+            st.caption(
+                "Bu bölüm mevcut Supabase tablolarını sadece okur. "
+                "SQLite kayıtlarını taşımaz, PostgreSQL tablolarını oluşturmaz."
+            )
+            if st.button("Supabase test tablolarını kontrol et", key="ct_pg_staging_inspect"):
+                ok, reason, existing = inspect_postgres_staging(db_url)
+                if ok:
+                    from scripts.build_pg_schema import generate
+                    _, expected = generate()
+                    missing = sorted(set(expected) - set(existing))
+                    st.info(
+                        f"ct_staging: {len(existing)} mevcut tablo; "
+                        f"{len(expected)} beklenen uygulama tablosu."
+                    )
+                    if missing:
+                        st.warning(
+                            "Henüz oluşturulmamış tablolar: " + ", ".join(missing)
+                        )
+                    else:
+                        st.success(
+                            "Uygulamanın beklediği tablo adları test şemasında mevcut. "
+                            "Bu kontrol kolonları, ilişkileri veya uygulama işlevlerini "
+                            "henüz doğrulamaz."
+                        )
+                else:
+                    st.error(
+                        "Salt okunur tablo kontrolü tamamlanamadı. "
+                        "DATABASE_URL bağlantısını kontrol edin."
+                    )
+            st.markdown("#### PostgreSQL tablo yapısı doğrulaması")
+            st.caption(
+                "26 uygulama tablosunun sütun adlarını, veri tiplerini, zorunlu alanlarını, "
+                "birincil anahtarlarını, benzersizlik ve yabancı anahtar ilişkilerini "
+                "salt okunur şekilde kontrol eder. Veri kayıtlarını okumaz veya değiştirmez."
+            )
+            if st.button("Tablo yapısı ve ilişkileri doğrula", key="ct_pg_schema_validate"):
+                from scripts.staging_validate import validate_staging_structure
+                status, issues = validate_staging_structure(db_url)
+                if status == "ok":
+                    st.success(
+                        "26 uygulama tablosunun sütun tipleri, zorunlu alanları ve "
+                        "PK/UNIQUE/FK ilişkileri beklenen şemayla uyumlu. "
+                        "Bu kontrol gerçek kayıt işlemlerini veya iş kurallarını sınamaz."
+                    )
+                elif status == "mismatch":
+                    st.error(
+                        f"PostgreSQL test şemasında {len(issues)} yapısal uyumsuzluk bulundu. "
+                        "SQLite verilerini taşıma veya canlı sistemi değiştirme."
+                    )
+                    for issue in issues[:20]:
+                        st.write("• " + issue)
+                    if len(issues) > 20:
+                        st.caption(f"Diğer {len(issues)-20} uyumsuzluk gösterilmedi.")
+                else:
+                    st.error(
+                        "Salt okunur şema doğrulaması tamamlanamadı. "
+                        "Bağlantı ve Supabase yetkilerini kontrol edin."
+                    )
+
+            with st.expander("PostgreSQL işlem testleri (geri alınır)"):
+                st.warning(
+                    "Bu test yalnızca ct_staging üzerinde geçici ve tamamen kurgusal "
+                    "müşteri, ürün, teklif, görev, sevkiyat, stok, kalite ve finans "
+                    "kayıtlarıyla çalışır. Test sonunda bütün ekleme/güncelleme/silme "
+                    "işlemleri geri alınır. Gerçek şirket verilerine dokunmaz; canlı "
+                    "SQLite uygulamasını PostgreSQL'e geçirmez."
                 )
-            except (ValueError, OSError, sqlite3.Error):
-                st.error("Test şeması SQL dosyası hazırlanamadı.")
+                test_confirm = st.checkbox(
+                    "Yalnızca ct_staging test ortamında geri alınacak deneme işlemlerini onaylıyorum.",
+                    key="ct_pg_transaction_smoke_confirm",
+                )
+                if st.button(
+                    "PostgreSQL işlem testini çalıştır",
+                    key="ct_pg_transaction_smoke_run",
+                    disabled=not test_confirm or not db_url,
+                ):
+                    from scripts.staging_transaction_smoke import (
+                        run_transactional_staging_smoke,
+                    )
+                    smoke_status, tested = run_transactional_staging_smoke(db_url)
+                    if smoke_status == "passed":
+                        st.success(
+                            "PostgreSQL geçici ekleme, okuma, güncelleme ve silme "
+                            "işlemleri başarılı. Tüm deneme kayıtları geri alındı. "
+                            "Kontrol edilen bağlantılar: " + ", ".join(tested) + ". "
+                            "Canlı uygulama hâlâ SQLite kullanıyor."
+                        )
+                    elif smoke_status == "schema_mismatch":
+                        st.error(
+                            "Test başlamadı: PostgreSQL tablo yapısı doğrulanamadı. "
+                            "Önce salt okunur tablo yapısı testini çalıştır."
+                        )
+                    else:
+                        st.error(
+                            "İşlem testi tamamlanamadı. Deneme değişiklikleri geri "
+                            "alınır; hiçbir gerçek kayıt taşınmadı. "
+                            "Supabase yetkilerini ve veritabanı bağlantısını kontrol et."
+                        )
+
+            with st.expander("PostgreSQL şirket iş akışı pilotu (geri alınır)"):
+                st.info(
+                    "Yalnızca ct_staging için kurgusal verilerle CRM → teklif ve maliyet "
+                    "→ satın alma → kısmi mal kabul → kalite HOLD → tahsilat → finans "
+                    "bağlantılarını doğrular. Bütün işlemler geri alınır; "
+                    "gerçek müşteri ve şirket kayıtlarını taşımaz. "
+                    "Canlı SQLite uygulaması değişmez."
+                )
+                business_confirm = st.checkbox(
+                    "Yalnızca PostgreSQL test ortamında geri alınacak kurgusal "
+                    "iş akışını çalıştırmayı onaylıyorum.",
+                    key="ct_pg_business_confirm",
+                )
+                if st.button(
+                    "Kurgusal iş akışını test et",
+                    key="ct_pg_business_pilot_run",
+                    disabled=not business_confirm or not db_url,
+                ):
+                    from scripts.staging_business_pilot import run_staging_business_pilot
+                    status, result = run_staging_business_pilot(db_url)
+                    if status == "passed":
+                        st.success(
+                            "PostgreSQL iş akışı testleri başarılı; "
+                            "bütün kurgusal kayıtlar geri alındı."
+                        )
+                        st.caption("Kontrol edilen adımlar: " + ", ".join(result["steps"]))
+                        col_a, col_b, col_c = st.columns(3)
+                        col_a.metric("Kısmi mal kabul (kg)", f'{result["received_kg"]:,.0f}')
+                        col_b.metric("Kalite HOLD (kg)", f'{result["hold_kg"]:,.0f}')
+                        col_c.metric("Kullanılabilir stok (kg)", f'{result["available_kg"]:,.0f}')
+                        st.caption(
+                            "Tamamı kurgusal sonuçlar. "
+                            f'Kalan sipariş: {result["remaining_kg"]:,.0f} kg · '
+                            f'Teklif katkısı: {result["profit_eur_total"]:,.2f} EUR · '
+                            f'Açık alacak: {result["receivable_eur"]:,.2f} EUR · '
+                            f'Kur çevrilmiş açık borç: {result["payable_eur"]:,.2f} EUR.'
+                        )
+                        st.info(
+                            "Bu test veritabanının iş kurallarını sınar; "
+                            "uygulamanın diğer modülleri hâlâ SQLite ile çalışıyor."
+                        )
+                    elif status == "schema_mismatch":
+                        st.error(
+                            "Test başlamadı: PostgreSQL test tablosu yapısını "
+                            "önce salt okunur şekilde doğrula."
+                        )
+                    else:
+                        st.error(
+                            "Pilot iş akışı tamamlanamadı. Kurgusal işlemler geri alındı. "
+                            "Supabase bağlantısını ve test yetkilerini kontrol et."
+                        )
+
+            with st.expander("PostgreSQL CRM pilot ekranı (kalıcı kurgu veri)"):
+                st.warning(
+                    "Bu ekran ilk kez PostgreSQL üzerinde KALICI test kayıtları "
+                    "oluşturabilir. Yalnız ct_staging test şemasında tamamen "
+                    "kurgusal müşteri, ürün, fırsat ve görevler kullanılır; gerçek "
+                    "firma adı veya verisi girilmez. Kayıtlar siz silene kadar "
+                    "test ortamında durur. Canlı SQLite ekranları değişmez."
+                )
+                from scripts.staging_crm_adapter import (
+                    list_sandbox_crm, create_sandbox_crm,
+                    update_sandbox_crm, delete_sandbox_crm,
+                )
+                crm_confirm = st.checkbox(
+                    "Yalnızca ct_staging üzerinde kurgusal ve kalıcı CRM "
+                    "kayıtlarını oluşturmaya, güncellemeye veya silmeye izin veriyorum.",
+                    key="ct_pg_crm_persistent_confirm",
+                )
+                if st.button(
+                    "PostgreSQL test CRM kayıtlarını listele",
+                    key="ct_pg_crm_list", disabled=not db_url,
+                ):
+                    list_status, listed = list_sandbox_crm(db_url)
+                    if list_status == "ok":
+                        st.session_state["ct_pg_crm_listed"] = listed
+                        st.success("Yalnızca kurgusal CRM kayıtları okundu.")
+                    else:
+                        st.session_state.pop("ct_pg_crm_listed", None)
+                        st.error("CRM test listesi okunamadı. Şema ve bağlantıyı kontrol et.")
+
+                if st.button(
+                    "Kurgusal CRM deneme kaydı oluştur (kalıcı)",
+                    key="ct_pg_crm_create",
+                    disabled=not db_url or not crm_confirm,
+                ):
+                    result, created_id = create_sandbox_crm(db_url)
+                    if result == "created":
+                        st.success("Kurgusal CRM kayıt seti PostgreSQL test ortamına kaydedildi.")
+                        read_status, listed = list_sandbox_crm(db_url)
+                        if read_status == "ok":
+                            st.session_state["ct_pg_crm_listed"] = listed
+                    else:
+                        st.error("Kurgusal CRM kaydı oluşturulamadı. Canlı SQLite değişmedi.")
+
+                listed = st.session_state.get("ct_pg_crm_listed", [])
+                if listed:
+                    st.dataframe(
+                        pd.DataFrame(listed).rename(columns={
+                            "id": "Test ID", "customer": "Kurgusal müşteri",
+                            "product": "Kurgusal ürün", "stage": "Fırsat aşaması",
+                            "task_status": "Görev durumu",
+                        }), hide_index=True, width="stretch"
+                    )
+                    options = [int(item["id"]) for item in listed]
+                    selected_id = st.selectbox(
+                        "Üzerinde işlem yapılacak kurgusal kayıt",
+                        options=options,
+                        format_func=lambda x: "Deneme kaydı " + str(-x),
+                        key="ct_pg_crm_selected",
+                    )
+                    left, right = st.columns(2)
+                    with left:
+                        if st.button(
+                            "Kurgusal aşamayı güncelle",
+                            key="ct_pg_crm_update",
+                            disabled=not crm_confirm or not db_url,
+                        ):
+                            result = update_sandbox_crm(db_url, selected_id)
+                            if result == "updated":
+                                st.success("Test fırsatı Numune, görev Tamamlandı oldu.")
+                            else:
+                                st.error("Güncelleme tamamlanamadı; mevcut kayıtlar korundu.")
+                            _, rows = list_sandbox_crm(db_url)
+                            st.session_state["ct_pg_crm_listed"] = rows
+                    with right:
+                        if st.button(
+                            "Seçili kurgusal kaydı sil",
+                            key="ct_pg_crm_delete",
+                            disabled=not crm_confirm or not db_url,
+                        ):
+                            result = delete_sandbox_crm(db_url, selected_id)
+                            if result == "deleted":
+                                st.success("Seçili kurgu CRM seti test şemasından silindi.")
+                            else:
+                                st.error("Silme tamamlanamadı; işlem geri alındı.")
+                            _, rows = list_sandbox_crm(db_url)
+                            st.session_state["ct_pg_crm_listed"] = rows
+                else:
+                    st.caption(
+                        "Henüz listelenmiş kurgusal CRM seti yok. "
+                        "Varsa önce listele veya açık onayla yeni bir set oluştur."
+                    )
+                st.info(
+                    "Bu ekran yalnızca CRM modülünün bağımsız PostgreSQL pilotudur. "
+                    "Yeniden başlatma sonrasında kayıtların kaldığını test etmek "
+                    "için listeleme düğmesine yeniden bas. "
+                    "Gerçek müşteri bilgilerini henüz burada kullanma."
+                )
+
+            with st.expander("PostgreSQL operasyon ve finans pilotu (kalıcı kurgu veri)"):
+                st.warning(
+                    "Yalnızca ct_staging üzerinde tamamen KURGUSAL satın alma, "
+                    "sevkiyat, stok, kalite HOLD ve ödeme kayıtları oluşturur. "
+                    "İşlemler PostgreSQL test ortamında kalıcıdır; silmek için "
+                    "aşağıdaki seçili set silme işlemini kullan. "
+                    "Gerçek firma verileri girilmez. Canlı SQLite değişmez."
+                )
+                from scripts.staging_ops_adapter import (
+                    list_ops_pilots, create_ops_pilot, advance_ops_pilot,
+                    delete_ops_pilot,
+                )
+                ops_confirm = st.checkbox(
+                    "Yalnızca ct_staging içinde kurgusal, kalıcı satın alma/stok/"
+                    "finans test kayıtları oluşturmaya ve yönetmeye onay veriyorum.",
+                    key="ct_pg_ops_confirm",
+                )
+                if st.button(
+                    "PostgreSQL operasyon kayıtlarını listele",
+                    key="ct_pg_ops_list", disabled=not db_url,
+                ):
+                    ops_status, ops_items = list_ops_pilots(db_url)
+                    if ops_status == "ok":
+                        st.session_state["ct_pg_ops_items"] = ops_items
+                        st.success("Kurgusal operasyon kayıtları okundu.")
+                    else:
+                        st.session_state.pop("ct_pg_ops_items", None)
+                        st.error("PostgreSQL test kayıtları okunamadı.")
+
+                if st.button(
+                    "Kurgusal satın alma seti oluştur (kalıcı)",
+                    key="ct_pg_ops_create",
+                    disabled=not db_url or not ops_confirm,
+                ):
+                    ops_status, _ = create_ops_pilot(db_url)
+                    if ops_status == "created":
+                        st.success("Kurgusal sipariş, sevkiyat ve finans temeli oluşturuldu.")
+                    else:
+                        st.error("Kurgusal operasyon seti oluşturulamadı.")
+                    ls_status, ops_items = list_ops_pilots(db_url)
+                    if ls_status == "ok":
+                        st.session_state["ct_pg_ops_items"] = ops_items
+
+                ops_items = st.session_state.get("ct_pg_ops_items", [])
+                if ops_items:
+                    st.dataframe(
+                        pd.DataFrame(ops_items).rename(columns={
+                            "id": "Kurgusal ID", "stage": "Son aşama",
+                            "ordered_kg": "Sipariş (kg)",
+                            "received_kg": "Mal kabul (kg)",
+                            "hold_kg": "Kalite HOLD (kg)",
+                            "available_kg": "Kullanılabilir (kg)",
+                            "remaining_kg": "Sipariş kalan (kg)",
+                            "payable_eur": "Açık borç (EUR)",
+                            "bank_eur": "Kurgusal banka (EUR)",
+                        }), width="stretch", hide_index=True
+                    )
+                    choices = [int(x["id"]) for x in ops_items]
+                    selected_ops = st.selectbox(
+                        "Kurgusal operasyon seti",
+                        options=choices,
+                        format_func=lambda x: "Deneme operasyonu " + str(-x),
+                        key="ct_pg_ops_selected",
+                    )
+                    selected_row = next(x for x in ops_items if x["id"] == selected_ops)
+                    next_step = {
+                        "Sipariş": ("receive", "Kısmi mal kabulünü işle (600 kg)"),
+                        "Mal kabul": ("hold", "Kalite HOLD uygula (100 kg)"),
+                        "Kalite HOLD": ("pay", "Kurgusal tedarikçi ödemesi (500 EUR)"),
+                    }.get(selected_row["stage"])
+                    a, b = st.columns(2)
+                    with a:
+                        if next_step and st.button(
+                            next_step[1], key="ct_pg_ops_advance",
+                            disabled=not ops_confirm or not db_url,
+                        ):
+                            outcome = advance_ops_pilot(db_url, selected_ops, next_step[0])
+                            if outcome == "updated":
+                                st.success("Kurgusal operasyon adımı PostgreSQL'e kaydedildi.")
+                            else:
+                                st.error("İşlem tamamlanamadı; işlem geri alındı.")
+                            list_status, new_items = list_ops_pilots(db_url)
+                            if list_status == "ok":
+                                st.session_state["ct_pg_ops_items"] = new_items
+                    with b:
+                        if st.button(
+                            "Seçili kurgusal operasyonu sil",
+                            key="ct_pg_ops_delete",
+                            disabled=not ops_confirm or not db_url,
+                        ):
+                            outcome = delete_ops_pilot(db_url, selected_ops)
+                            if outcome == "deleted":
+                                st.success("Seçili kurgusal operasyon seti silindi.")
+                            else:
+                                st.error("Kurgusal set silinemedi; hiçbir kısmi silme yapılmadı.")
+                            list_status, new_items = list_ops_pilots(db_url)
+                            if list_status == "ok":
+                                st.session_state["ct_pg_ops_items"] = new_items
+                else:
+                    st.caption(
+                        "Henüz listelenmiş deneme operasyonu yok. "
+                        "Önce listele veya açık onayla bir set oluştur."
+                    )
+                st.info(
+                    "Sıra: 1. kurgusal sipariş oluştur, 2. mal kabul, "
+                    "3. kalite HOLD, 4. ödeme, 5. kayıtları yeniden listele "
+                    "ve ardından test setini sil. "
+                    "Uygulamayı yeniden açınca listeleyerek kalıcılığı kontrol edebilirsin. "
+                    "Bu ekran canlı satın alma, stok ve finans modüllerinin yerine geçmez."
+                )
+
+            with st.expander("Supabase test tablolarını güvenli oluştur"):
+                st.warning(
+                    "Yalnızca ct_staging test şemasında boş uygulama tabloları oluşturur. "
+                    "Mevcut uygulama tabloları varsa işlemi durdurur. "
+                    "SQLite verilerini taşımaz ve canlı uygulamayı PostgreSQL'e geçirmez."
+                )
+                confirm = st.checkbox(
+                    "Yalnızca ct_staging test şemasında boş tablolar oluşturulmasını onaylıyorum.",
+                    key="ct_pg_bootstrap_confirm",
+                )
+                if st.button(
+                    "26 test tablosunu oluştur",
+                    key="ct_pg_bootstrap_apply",
+                    disabled=not confirm or not db_url,
+                ):
+                    from scripts.staging_bootstrap import bootstrap_staging
+                    status, created = bootstrap_staging(db_url)
+                    if status == "created":
+                        st.success(
+                            f"{created} boş uygulama tablosu ct_staging içinde oluşturuldu. "
+                            "Gerçek veri aktarılmadı; uygulama hâlâ SQLite kullanıyor."
+                        )
+                    elif status == "already_present":
+                        st.info("Beklenen tablolar zaten mevcut; hiçbir tablo değiştirilmedi.")
+                    elif status == "conflict":
+                        st.error(
+                            "ct_staging içinde beklenmeyen veya kısmen kurulmuş tablolar var. "
+                            "Güvenlik nedeniyle hiçbir değişiklik yapılmadı."
+                        )
+                    elif status == "schema_missing":
+                        st.error(
+                            "ct_staging şeması bulunamadı. "
+                            "Önce test şemasının varlığı doğrulanmalı."
+                        )
+                    else:
+                        st.error(
+                            "Test tabloları oluşturulamadı; işlem geri alındı. "
+                            "Bağlantı, yetki ve test şeması durumunu kontrol edin."
+                        )
+
+            with st.expander("PostgreSQL test şeması SQL dosyası"):
+                st.caption(
+                    "Yalnızca test şeması için çevrimdışı SQL üretir. "
+                    "Dosyayı indirmek veritabanını değiştirmez; "
+                    "SQL'i uygulamadan önce teknik inceleme gerekir."
+                )
+                try:
+                    from scripts.build_pg_schema import generate
+                    staging_sql, staging_tables = generate()
+                    st.download_button(
+                        f"{len(staging_tables)} test tablosu SQL dosyasını indir",
+                        data=staging_sql.encode("utf-8"),
+                        file_name="as_control_tower_ct_staging_schema.sql",
+                        mime="application/sql",
+                        key="ct_download_pg_staging_sql",
+                    )
+                except (ValueError, OSError, sqlite3.Error):
+                    st.error("Test şeması SQL dosyası hazırlanamadı.")
 
         tables = [
             "customers","opportunities","tasks","product_catalog","quotes",
@@ -941,7 +939,7 @@ def render_system_admin(db_path):
                     rows.append({"Tablo":table,"Kayıt":0,"Durum":"HATA: " + str(exc)})
         st.dataframe(pd.DataFrame(rows),width="stretch",hide_index=True)
         db_file=Path(db_path)
-        if db_file.exists():
+        if not database.is_postgres() and db_file.exists():
             st.metric("Veritabanı boyutu",f"{db_file.stat().st_size/1024/1024:.2f} MB")
 
     with audit_tab:
@@ -954,8 +952,10 @@ def render_system_admin(db_path):
         st.dataframe(audit,width="stretch",hide_index=True)
 
     with backup_tab:
+        if database.is_postgres():
+            st.info("PostgreSQL kullanılıyor. CSV dışa aktarımı tam yedek değildir; geri yüklenebilir yedek için sunucu yedekleme/pg_dump süreci gerekir.")
         db_file = Path(db_path)
-        if db_file.exists():
+        if not database.is_postgres() and db_file.exists():
             st.caption(
                 "Güvenli bir SQLite anlık görüntüsü ve ona ait SHA256 doğrulama "
                 "raporunu aynı oturumda hazırla. İki dosyayı birlikte sakla."

@@ -16,3 +16,4 @@ backups/
 .venv/
 .pytest_cache/
 browser-artifacts/
+browser-artifacts-postgres/
