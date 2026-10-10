@@ -77,6 +77,30 @@ business-rule approval, multi-user permission audit, persistent backup/restore
 and all remaining modules are migrated. No application UI calls these write
 functions yet. There is no automatic dual-write, demo seed or backend switch.
 
+## Real PostgreSQL Docker integration (isolated CI only)
+
+A new GitHub Actions workflow starts a **fresh PostgreSQL 16 service** named
+`ct_ci_control_tower` with fictional credentials. It builds the 26-table
+`ct_app` schema and invokes the actual application operation functions:
+customer/product creation, purchase order, shipment quantity checks, one-time
+receipt, quality HOLD, quality case closure and stock release, AP invoices,
+settlement, duplicate payment rejection across invoices, and account balances.
+These integration tests use a disposable **GitHub runner localhost database**;
+they do not connect to the user's Supabase project and cannot import company
+records. The database is discarded when the CI job ends.
+
+The production PostgreSQL code still demands TLS. A dedicated
+`CT_LOCAL_POSTGRES_TEST=1` flag relaxes SSL *only* when the URI exactly
+identifies loopback port 5432, test user `ct_ci`, test database
+`ct_ci_control_tower`, and has **no URL query overrides**. Never configure
+this CI flag on Streamlit or any internet-facing server.
+
+CI acceptance is a better integration signal than mocked SQL tests alone, but
+it is **not** a substitute for real Supabase access controls, backup/restore
+drills, concurrent-user load tests, auditing, and mobile browser verification.
+The operational write engine remains explicitly **disabled by default** and
+is still not wired into the main Streamlit UI.
+
 ## Release blockers (do not skip)
 
 1. Validate real PostgreSQL schema and integration against an **isolated, non-production** database. The offline adapter test is not a live PostgreSQL test.
@@ -85,7 +109,7 @@ functions yet. There is no automatic dual-write, demo seed or backend switch.
 4. Check real import duties, exchange rates, credit terms and margin calculations against approved sample invoices before financial decisions.
 5. Validate product sourcing results manually against official manufacturer sites and commercial documents.
 6. Verify authentication, secrets, backup/restore and concurrent write behavior with the target hosting configuration.
-7. Obtain explicit owner approval before merging PR #27, deploying or writing any production data.
+7. Obtain explicit owner approval before live backend activation, deployments involving new data flow, or writing production company data. (Earlier development PRs have already merged with owner approval.)
 
 ## Safe review procedure
 
