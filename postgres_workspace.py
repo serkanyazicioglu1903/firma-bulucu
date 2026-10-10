@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from security_admin import current_role
+from scripts.live_backend import postgres_url
 from postgres_master_forms import postgres_master_write_enabled, render_postgres_master_forms
 from scripts.postgres_operational_read import (
     WORKSPACE_QUERIES,
@@ -33,17 +34,15 @@ def render_postgres_workspace():
         st.warning("Supabase bağlantısı yapılandırılmamış.")
         return
 
-    if postgres_master_write_enabled():
-        st.warning(
-            "PostgreSQL ct_app müşteri, ürün ve depo kayıt formları "
-            "sunucu yöneticisi tarafından etkinleştirilmiş. Diğer iş ekranları "
-            "ve finans işlemleri hâlâ SQLite / pilot durumundadır."
+    if postgres_url():
+        st.success(
+            "Canlı PostgreSQL ct_app işletim modu: tüm Control Tower iş "
+            "ekranları aynı kalıcı veritabanını kullanır."
         )
+    elif postgres_master_write_enabled():
+        st.warning("PostgreSQL kayıt formları etkin, SQLite pilot ekranları ayrı.")
     else:
-        st.info(
-            "Bu panel PostgreSQL ct_app kullanır; diğer Control Tower ekranları "
-            "henüz SQLite üzerindedir. Veri girişi, ödeme ve otomatik geçiş kapalıdır."
-        )
+        st.info("PostgreSQL ct_app salt okunur; eski iş ekranları SQLite'dadır.")
     if st.button("PostgreSQL genel durumu yenile", key="ct_pg_360_refresh"):
         status, counts = read_operational_counts(url)
         if status != "ok":
@@ -87,13 +86,16 @@ def render_postgres_workspace():
                 width="stretch", hide_index=True,
             )
 
-    # Write UI is only mounted after BOTH independent server-side flags are
-    # deliberately enabled. Default release remains completely read-only.
-    if postgres_master_write_enabled():
+    # The standard business tabs are now canonical when PostgreSQL cutover
+    # is active. Keep this 360 view read-only to avoid duplicate entry paths.
+    if postgres_url():
+        st.caption(
+            "Kalıcı kayıt işlemleri için üstteki CRM, Ürün Kataloğu, "
+            "Satın Alma, Stok ve Finans sekmelerini kullanın. "
+            "PostgreSQL 360 kayıt görüntüleme ekranıdır."
+        )
+    elif postgres_master_write_enabled():
         with st.expander("🔒 PostgreSQL kayıt yönetimi — kalıcı kayıt"):
             render_postgres_master_forms(url)
     else:
-        st.caption(
-            "PostgreSQL müşteri, ürün ve depo formları geliştirme olarak hazır; "
-            "tam güvenlik ve geçiş onayına kadar kayıt işlevi kapalıdır."
-        )
+        st.caption("PostgreSQL salt okunur; pilot yazma formları kapalı.")

@@ -10,12 +10,17 @@ from ai_manager import render_ai_manager
 from sales_matching import normalize, matched_sectors
 from management_reports import render_management_reports
 from postgres_workspace import render_postgres_workspace
+from postgres_system import render_postgres_system
+from scripts.live_backend import postgres_url, ready_for_live
+from scripts.postgres_compat import CompatConnection, pg_query_df
+from scripts.postgres_operational_write import verified_live_request
 from role_portal import render_role_portal
 from security_admin import (
     audit_sql_write,
     authorize_write,
     can_access,
     current_role,
+    current_user,
     init_security_tables,
     login_gate,
     logout_button,
@@ -55,6 +60,9 @@ ACTIVITY_TYPES = [
 
 
 def get_conn():
+    url = postgres_url()
+    if url:
+        return CompatConnection(url)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
@@ -66,10 +74,14 @@ def execute(sql, params=()):
     with get_conn() as conn:
         conn.execute(sql, params)
         conn.commit()
-    audit_sql_write(DB_PATH, sql)
+    if not postgres_url():
+        audit_sql_write(DB_PATH, sql)
 
 
 def query_df(sql, params=()):
+    url = postgres_url()
+    if url:
+        return pg_query_df(url, sql, params)
     with get_conn() as conn:
         return pd.read_sql_query(sql, conn, params=params)
 
@@ -1258,7 +1270,37 @@ def stock_snapshot():
     return df
 
 
+
+def _postgres_transaction_message(status, label):
+    explanations = {
+        "ok": label + " PostgreSQL'e kaydedildi.",
+        "already_received_or_cancelled": "Sevkiyat zaten stoğa alındı veya iptal edilmiş.",
+        "over_receipt": "Sevkiyat miktarı kalan siparişi aşıyor.",
+        "overpayment": "Ödeme açık borç miktarını aşıyor.",
+        "over_collection": "Tahsilat açık alacak miktarını aşıyor.",
+        "duplicate_payment": "Bu banka ödeme referansı daha önce işlendi.",
+        "duplicate_collection": "Bu banka tahsilat referansı daha önce işlendi.",
+        "quality_hold_blocks_payment": "Açık kalite HOLD nedeniyle ödeme durduruldu.",
+        "currency_mismatch": "Para birimleri eşleşmiyor.",
+        "insufficient_funds": "Banka bakiyesi yetersiz.",
+        "forbidden": "Bu işlem için yetkiniz yok.",
+        "disabled": "PostgreSQL canlı yazma işlemi etkin değil.",
+        "invalid_id": "Önce geçerli bir banka / kayıt seçin.",
+        "reference_required": "Tekrarlı işlem riskini önlemek için banka referansı zorunlu.",
+        "failed": "PostgreSQL işleminde hata oluştu, işlem geri alındı.",
+    }
+    return status == "ok", explanations.get(status, "İşlem güvenli biçimde tamamlanamadı.")
+
 def receive_shipment_to_stock(shipment_id):
+    if postgres_url():
+        from scripts.postgres_operational_write import receive_shipment
+        user = current_user() or {}
+        result, _ = receive_shipment(
+            postgres_url(), current_role(), int(shipment_id),
+            actor=user.get("username"),
+        )
+        return _postgres_transaction_message(result, "Sevkiyat")
+
     with get_conn() as conn:
         row = conn.execute(
             """SELECT s.*, po.product_id, po.product_name, po.unit_price, po.currency,
@@ -1479,6 +1521,15 @@ def cash_forecast(base_currency="EUR", horizons=(30,60,90)):
 
 def record_receivable_payment(receivable_id, amount, transaction_date,
                               account_id, reference, notes):
+    if postgres_url():
+        from scripts.postgres_operational_write import collect_customer_payment
+        user = current_user() or {}
+        result, _ = collect_customer_payment(
+            postgres_url(), current_role(), int(receivable_id),
+            int(account_id) if account_id else 0, amount,
+            reference, str(transaction_date), actor=user.get("username"),
+        )
+        return _postgres_transaction_message(result, "Tahsilat")
     amount = float(amount or 0)
     if amount <= 0:
         return False, "Tahsilat tutarı sıfırdan büyük olmalı."
@@ -1554,6 +1605,15 @@ def record_receivable_payment(receivable_id, amount, transaction_date,
 
 def record_payable_payment(payable_id, amount, transaction_date,
                            account_id, reference, notes):
+    if postgres_url():
+        from scripts.postgres_operational_write import pay_supplier
+        user = current_user() or {}
+        result, _ = pay_supplier(
+            postgres_url(), current_role(), int(payable_id),
+            int(account_id) if account_id else 0, amount,
+            reference, str(transaction_date), actor=user.get("username"),
+        )
+        return _postgres_transaction_message(result, "Tedarikçi ödemesi")
     amount = float(amount or 0)
     if amount <= 0:
         return False, "Ödeme tutarı sıfırdan büyük olmalı."
@@ -2003,14 +2063,37 @@ def sync_quote_to_opportunity(opportunity_id, quote_status,
 
 
 def render_control_tower():
-    init_db()
-    init_security_tables(DB_PATH)
+    """Fail closed on PostgreSQL errors, never fall back to demo/ephemeral data."""
+    url = postgres_url()
+    if url:
+        status = ready_for_live(url, DB_PATH)
+        if status != "ready":
+            st.error(
+                "Canlı PostgreSQL geçiş ön kontrolü tamamlanamadı: " + {
+                    "invalid_url": "DATABASE_URL geçersiz.",
+                    "schema_mismatch": "ct_app şeması beklenen yapıda değil.",
+                    "sqlite_data_present": "SQLite içinde taşınmamış kayıt var. "
+                                           "Güvenli yedek ve aktarım gerekli.",
+                    "sqlite_integrity_unknown": "SQLite kaynak bütünlüğü doğrulanamadı.",
+                    "connection_failed": "PostgreSQL bağlantısına erişilemedi.",
+                }.get(status, "Doğrulama gerekli.")
+            )
+            st.info("Güvenlik gereği eski SQLite verisine otomatik dönüş yapılmadı.")
+            return
+        with verified_live_request():
+            return _render_control_tower_interface(live_postgres=True)
+    return _render_control_tower_interface(live_postgres=False)
+
+
+def _render_control_tower_interface(live_postgres=False):
+    if not live_postgres:
+        init_db()
+        init_security_tables(DB_PATH)
     if not login_gate():
         return
-    # Do not silently populate a real workspace with fictional records.
-    # Existing data is retained; demo setup requires explicit opt-in.
-    import os
-    if os.environ.get("AS_CONTROL_TOWER_DEMO_SEED", "").strip() == "1":
+    if not live_postgres and os.environ.get(
+        "AS_CONTROL_TOWER_DEMO_SEED", ""
+    ).strip() == "1":
         seed_once()
         seed_product_catalog()
         seed_warehouses()
@@ -2051,10 +2134,16 @@ def render_control_tower():
 
     st.subheader("🧭 AS CONTROL TOWER")
     st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
-    st.caption(
-        "🟠 Pilot veri modu: Bu sürüm SQLite kullanıyor. Kalıcı şirket verisi için "
-        "PostgreSQL/Supabase geçişi tamamlanmadan kritik production verisi girmeyin."
-    )
+    if live_postgres:
+        st.success(
+            "🟢 Canlı veri modu: Bütün Control Tower iş ekranları "
+            "Supabase PostgreSQL ct_app üzerinden çalışıyor. SQLite kullanılmıyor."
+        )
+    else:
+        st.caption(
+            "🟠 Pilot veri modu: Bu sürüm SQLite kullanıyor. "
+            "Kalıcı kayıt için PostgreSQL bağlantısı yapılandırılmalı."
+        )
 
     dashboard, customers_tab, intelligence_tab, pricing_tab, procurement_tab, finance_tab, quality_tab, pipeline_tab, followup_tab, tasks_tab, ai_tab, reports_tab, ceo_tab, system_tab, postgres_tab = st.tabs(
         [
@@ -3320,7 +3409,10 @@ def render_control_tower():
                     WHERE po.status NOT IN ('Tamamlandı','İptal')
                     GROUP BY po.id,po.po_number,po.supplier,po.product_name,
                              po.quantity_kg,po.destination_warehouse_id
-                    HAVING remaining_to_ship_kg > 0.001
+                    HAVING po.quantity_kg - COALESCE(SUM(
+                        CASE WHEN COALESCE(s.status,'')!='İptal'
+                             THEN s.quantity_kg ELSE 0 END
+                    ),0) > 0.001
                     ORDER BY po.id DESC
                 """)
                 warehouses_s=query_df("SELECT id,name FROM warehouses WHERE active=1 ORDER BY name")
@@ -4821,7 +4913,10 @@ def render_control_tower():
             FROM customers c
             LEFT JOIN receivables r ON r.customer_id=c.id
             GROUP BY c.id,c.name,c.credit_limit
-            HAVING açık_risk_eur>0
+            HAVING COALESCE(SUM(CASE
+                WHEN r.status!='İptal' AND r.base_currency='EUR'
+                 AND r.amount-r.paid_amount>0
+                THEN (r.amount-r.paid_amount)*r.fx_to_base ELSE 0 END),0)>0
             ORDER BY gecikme_gün DESC,açık_risk_eur DESC
             LIMIT 10
         """)
@@ -4928,7 +5023,10 @@ def render_control_tower():
             st.success("Şu anda kritik gecikmiş satış takibi görünmüyor.")
 
     with system_tab:
-        render_system_admin(DB_PATH)
+        if live_postgres:
+            render_postgres_system(postgres_url())
+        else:
+            render_system_admin(DB_PATH)
 
     with postgres_tab:
         render_postgres_workspace()

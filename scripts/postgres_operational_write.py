@@ -11,6 +11,8 @@ security, backup/restore, real-database integration and feature-parity testing
 are complete. ct_staging is never touched by this module.
 """
 from datetime import date
+from contextvars import ContextVar
+from contextlib import contextmanager
 import os
 from decimal import Decimal, InvalidOperation
 
@@ -19,6 +21,20 @@ from scripts.staging_transaction_smoke import validate_test_url
 from scripts.staging_validate import validate_staging_structure
 
 SCHEMA = "ct_app"
+
+# Request-local opt-in from the authenticated PostgreSQL application.
+# Never use global os.environ mutation to enable writes in Streamlit threads.
+_REQUEST_LIVE_WRITES = ContextVar("ct_app_verified_live_writes", default=False)
+
+
+@contextmanager
+def verified_live_request():
+    token = _REQUEST_LIVE_WRITES.set(True)
+    try:
+        yield
+    finally:
+        _REQUEST_LIVE_WRITES.reset(token)
+
 
 _ALLOWED_ROLES = {
     "create_customer": frozenset(("ADMIN", "SALES")),
@@ -31,6 +47,7 @@ _ALLOWED_ROLES = {
     "release_inventory_lot": frozenset(("ADMIN", "QUALITY")),
     "create_payable": frozenset(("ADMIN", "FINANCE")),
     "pay_supplier": frozenset(("ADMIN", "FINANCE")),
+    "collect_customer_payment": frozenset(("ADMIN", "FINANCE")),
 }
 
 
@@ -91,6 +108,7 @@ _AUDIT_TABLE = {
     "release_inventory_lot": "quality_cases",
     "create_payable": "payables",
     "pay_supplier": "finance_transactions",
+    "collect_customer_payment": "finance_transactions",
 }
 
 
@@ -99,7 +117,8 @@ def _execute(url, role, operation, action, actor=None):
     if role not in _ALLOWED_ROLES[operation]:
         return "forbidden", None
     # Preparation-only by default; full cutover requires explicit opt-in.
-    if os.environ.get("AS_CONTROL_TOWER_PG_WRITES_ENABLED") != "1":
+    if (os.environ.get("AS_CONTROL_TOWER_PG_WRITES_ENABLED") != "1"
+            and not _REQUEST_LIVE_WRITES.get()):
         return "disabled", None
     if not validate_test_url(url):
         return "invalid_url", None
@@ -210,7 +229,7 @@ def create_warehouse(url, role, name, city="", warehouse_type="Normal Depo", act
 
 
 def create_purchase_order(url, role, po_number, supplier, product_id,
-                          warehouse_id, quantity_kg, unit_price, currency):
+                          warehouse_id, quantity_kg, unit_price, currency, actor=None):
     """Validate product and warehouse in one transaction before creating PO."""
     def action(cur):
         number = _text(po_number, label="invalid_po")
@@ -247,10 +266,10 @@ def create_purchase_order(url, role, po_number, supplier, product_id,
             (number, vendor, product, item[0], quantity, price, money, warehouse),
         )
         return int(cur.fetchone()[0])
-    return _execute(url, role, "create_purchase_order", action)
+    return _execute(url, role, "create_purchase_order", action, actor=actor)
 
 
-def create_shipment(url, role, purchase_order_id, shipment_ref, quantity_kg):
+def create_shipment(url, role, purchase_order_id, shipment_ref, quantity_kg, actor=None):
     """Serialize reservation of ordered quantity across concurrent shipments."""
     def action(cur):
         po = _id(purchase_order_id)
@@ -286,10 +305,10 @@ def create_shipment(url, role, purchase_order_id, shipment_ref, quantity_kg):
             (po, number, quantity, order[2]),
         )
         return int(cur.fetchone()[0])
-    return _execute(url, role, "create_shipment", action)
+    return _execute(url, role, "create_shipment", action, actor=actor)
 
 
-def receive_shipment(url, role, shipment_id):
+def receive_shipment(url, role, shipment_id, actor=None):
     """Atomically post a shipment once, update inventory and PO status.
 
     Lock PO before the shipment so concurrent receipts cannot overshoot ordered
@@ -361,10 +380,10 @@ def receive_shipment(url, role, shipment_id):
             (status, po_id),
         )
         return lot_id
-    return _execute(url, role, "receive_shipment", action)
+    return _execute(url, role, "receive_shipment", action, actor=actor)
 
 
-def hold_inventory_lot(url, role, lot_id, case_no, hold_kg, reason):
+def hold_inventory_lot(url, role, lot_id, case_no, hold_kg, reason, actor=None):
     """Create a quality claim and prevent held stock from appearing sellable."""
     def action(cur):
         lot = _id(lot_id)
@@ -402,11 +421,11 @@ def hold_inventory_lot(url, role, lot_id, case_no, hold_kg, reason):
             ("HOLD",held,case_id,lot),
         )
         return case_id
-    return _execute(url, role, "hold_inventory_lot", action)
+    return _execute(url, role, "hold_inventory_lot", action, actor=actor)
 
 
 
-def release_inventory_lot(url, role, lot_id, resolution):
+def release_inventory_lot(url, role, lot_id, resolution, actor=None):
     """Close a linked quality case and atomically unblock held inventory.
 
     The case relationship must match the locked lot. Replaying a release cannot
@@ -443,11 +462,11 @@ def release_inventory_lot(url, role, lot_id, resolution):
             ("Released", lot),
         )
         return case_id
-    return _execute(url, role, "release_inventory_lot", action)
+    return _execute(url, role, "release_inventory_lot", action, actor=actor)
 
 
 def create_payable(url, role, supplier, purchase_order_id, invoice_no,
-                   due_date, amount, currency):
+                   due_date, amount, currency, actor=None):
     """Create an AP invoice with advisory-locked duplicate detection."""
     def action(cur):
         po = _id(purchase_order_id)
@@ -481,11 +500,11 @@ def create_payable(url, role, supplier, purchase_order_id, invoice_no,
             (vendor,po,invoice,due,balance,money),
         )
         return int(cur.fetchone()[0])
-    return _execute(url, role, "create_payable", action)
+    return _execute(url, role, "create_payable", action, actor=actor)
 
 
 def pay_supplier(url, role, payable_id, account_id, amount, reference,
-                 payment_date):
+                 payment_date, actor=None):
     """Atomic AP settlement; lock invoice and bank, guard HOLD and reference."""
     def action(cur):
         payable = _id(payable_id)
@@ -554,4 +573,64 @@ def pay_supplier(url, role, payable_id, account_id, amount, reference,
             'WHERE id=%s', (paid_now,bank),
         )
         return payment_id
-    return _execute(url, role, "pay_supplier", action)
+    return _execute(url, role, "pay_supplier", action, actor=actor)
+
+
+def collect_customer_payment(url, role, receivable_id, account_id, amount,
+                             reference, payment_date, actor=None):
+    """Receive customer funds exactly once; lock AR and matching cash account."""
+    def action(cur):
+        invoice_id = _id(receivable_id)
+        bank = _id(account_id)
+        received = _positive(amount)
+        transfer = _text(reference, label="reference_required")
+        when = _date(payment_date)
+        cur.execute(
+            'SELECT amount,paid_amount,currency,status '
+            'FROM "ct_app"."receivables" WHERE id=%s FOR UPDATE',
+            (invoice_id,),
+        )
+        invoice = cur.fetchone()
+        if invoice is None or invoice[3] == "İptal":
+            raise OperationRejected("unknown_receivable")
+        remaining = Decimal(str(invoice[0] or 0)) - Decimal(str(invoice[1] or 0))
+        if remaining <= 0 or received > remaining:
+            raise OperationRejected("over_collection")
+        cur.execute(
+            'SELECT currency,balance,active FROM "ct_app"."cash_accounts" '
+            'WHERE id=%s FOR UPDATE',
+            (bank,),
+        )
+        account = cur.fetchone()
+        if account is None or not account[2]:
+            raise OperationRejected("unknown_account")
+        if account[0] != invoice[2]:
+            raise OperationRejected("currency_mismatch")
+        cur.execute(
+            'SELECT 1 FROM "ct_app"."finance_transactions" '
+            "WHERE transaction_type='Tahsilat' AND reference=%s "
+            "AND (receivable_id=%s OR account_id=%s) LIMIT 1",
+            (transfer, invoice_id, bank),
+        )
+        if cur.fetchone() is not None:
+            raise OperationRejected("duplicate_collection")
+        status = "Kapandı" if remaining == received else "Kısmi"
+        cur.execute(
+            'UPDATE "ct_app"."receivables" '
+            'SET paid_amount=paid_amount+%s,status=%s WHERE id=%s',
+            (received, status, invoice_id),
+        )
+        cur.execute(
+            'INSERT INTO "ct_app"."finance_transactions" '
+            '(transaction_type,receivable_id,transaction_date,amount,currency,'
+            'account_id,reference) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id',
+            ("Tahsilat", invoice_id, when, received, invoice[2], bank, transfer),
+        )
+        record_id = int(cur.fetchone()[0])
+        cur.execute(
+            'UPDATE "ct_app"."cash_accounts" '
+            'SET balance=balance+%s WHERE id=%s',
+            (received, bank),
+        )
+        return record_id
+    return _execute(url, role, "collect_customer_payment", action, actor=actor)

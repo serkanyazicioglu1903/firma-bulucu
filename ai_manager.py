@@ -5,14 +5,23 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from scripts.live_backend import postgres_url
+from scripts.postgres_compat import CompatConnection, pg_query_df
+
 
 def connect(db_path):
+    url = postgres_url()
+    if url:
+        return CompatConnection(url)
     conn = sqlite3.connect(Path(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def query_df(db_path, sql, params=()):
+    url = postgres_url()
+    if url:
+        return pg_query_df(url, sql, params)
     with connect(db_path) as conn:
         return pd.read_sql_query(sql, conn, params=params)
 
