@@ -12,3 +12,6 @@ __pycache__/
 *.sqlite-shm
 private_backups/
 backups/
+
+.venv/
+.pytest_cache/

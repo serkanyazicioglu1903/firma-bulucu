@@ -1,4 +1,6 @@
 import sqlite3
+import os
+import math
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -20,7 +22,7 @@ from security_admin import (
     render_system_admin,
 )
 
-DB_PATH = Path(__file__).with_name("as_control_tower.db")
+DB_PATH = Path(os.environ.get("AS_CONTROL_TOWER_DB", Path(__file__).with_name("as_control_tower.db")))
 
 STAGES = [
     "Lead", "Temas", "Numune", "Deneme", "Teklif", "Pazarlık",
@@ -1251,7 +1253,10 @@ def stock_snapshot():
 
 
 def receive_shipment_to_stock(shipment_id):
+    if not authorize_write("UPDATE inventory_lots SET id=id"):
+        return False, "Bu işlem için yetkiniz yok."
     with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             """SELECT s.*, po.product_id, po.product_name, po.unit_price, po.currency,
                       po.quantity_kg AS ordered_kg, po.status AS po_status,
@@ -1471,16 +1476,27 @@ def cash_forecast(base_currency="EUR", horizons=(30,60,90)):
 
 def record_receivable_payment(receivable_id, amount, transaction_date,
                               account_id, reference, notes):
+    if not authorize_write("UPDATE receivables SET id=id"):
+        return False, "Bu işlem için yetkiniz yok."
     amount = float(amount or 0)
-    if amount <= 0:
+    if not math.isfinite(amount) or amount <= 0:
         return False, "Tahsilat tutarı sıfırdan büyük olmalı."
 
     with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT * FROM receivables WHERE id=?", (int(receivable_id),)
         ).fetchone()
         if row is None:
             return False, "Alacak kaydı bulunamadı."
+
+        if row["status"] == "İptal":
+            return False, "İptal edilmiş kayıt için işlem yapılamaz."
+        if reference and conn.execute(
+            "SELECT 1 FROM finance_transactions WHERE receivable_id=? AND reference=?",
+            (int(receivable_id), reference),
+        ).fetchone():
+            return False, "Bu işlem referansı daha önce kaydedilmiş."
 
         outstanding = max(float(row["amount"] or 0)-float(row["paid_amount"] or 0),0)
         if amount > outstanding + 0.0001:
@@ -1534,16 +1550,27 @@ def record_receivable_payment(receivable_id, amount, transaction_date,
 
 def record_payable_payment(payable_id, amount, transaction_date,
                            account_id, reference, notes):
+    if not authorize_write("UPDATE payables SET id=id"):
+        return False, "Bu işlem için yetkiniz yok."
     amount = float(amount or 0)
-    if amount <= 0:
+    if not math.isfinite(amount) or amount <= 0:
         return False, "Ödeme tutarı sıfırdan büyük olmalı."
 
     with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT * FROM payables WHERE id=?", (int(payable_id),)
         ).fetchone()
         if row is None:
             return False, "Borç kaydı bulunamadı."
+
+        if row["status"] == "İptal":
+            return False, "İptal edilmiş kayıt için işlem yapılamaz."
+        if reference and conn.execute(
+            "SELECT 1 FROM finance_transactions WHERE payable_id=? AND reference=?",
+            (int(payable_id), reference),
+        ).fetchone():
+            return False, "Bu işlem referansı daha önce kaydedilmiş."
 
         outstanding = max(float(row["amount"] or 0)-float(row["paid_amount"] or 0),0)
         if amount > outstanding + 0.0001:
@@ -2044,6 +2071,8 @@ def render_control_tower():
     )
 
     with dashboard:
+        from integrated_workflow import render_workflow
+        render_workflow()
         customer_count = int(query_df("SELECT COUNT(*) n FROM customers").iloc[0]["n"])
         active_opps = int(query_df(
             "SELECT COUNT(*) n FROM opportunities WHERE stage NOT IN ('Kazanıldı','Kaybedildi')"
@@ -2664,7 +2693,7 @@ def render_control_tower():
                         """SELECT c.name AS müşteri,s.status AS durum,
                                   s.current_supplier AS mevcut_tedarikçi,
                                   s.annual_volume_tons AS yıllık_hacim_ton,
-                                  s.notes AS not
+                                  s.notes AS "not"
                            FROM customer_product_status s
                            JOIN customers c ON c.id=s.customer_id
                            WHERE s.product_id=?

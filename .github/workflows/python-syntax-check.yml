@@ -60,6 +60,9 @@ jobs:
       - name: Recommendation UI regression test
         run: pytest -q tests/test_streamlit_recommendation_ui.py
 
+      - name: Complete isolated regression suite
+        run: python -m pytest -q
+
       - name: Streamlit startup smoke test
         run: |
           python - <<'PY'

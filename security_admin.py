@@ -1,3 +1,4 @@
+import os
 import hashlib
 import hmac
 import io
@@ -56,6 +57,8 @@ def init_security_tables(db_path):
 
 
 def _secret(name, default=""):
+    if name in os.environ:
+        return os.environ[name]
     try:
         return st.secrets.get(name, default)
     except Exception:
