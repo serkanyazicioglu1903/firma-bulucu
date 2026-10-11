@@ -17,6 +17,10 @@ except Exception:
 
 from control_tower import render_control_tower
 from security_admin import login_gate, logout_button
+from scoped_company_workspace_ui import (
+    company_review_mode_state, render_scoped_company_workspace,
+)
+from scripts.live_backend import postgres_url
 
 st.set_page_config(
     page_title="AS İleri | Control Tower",
@@ -163,6 +167,33 @@ st.markdown(
 if not login_gate():
     st.stop()
 logout_button()
+
+# Global, exclusive gate for the separately approved review-only mode.
+# Without this, the two sourcing/acquisition tabs would still render next to
+# the tenant-scoped Control Tower panel, bypassing the intended exclusive UI.
+# This branch does not activate the flag; existing legacy mode is unchanged.
+review_mode = company_review_mode_state()
+if review_mode != "disabled":
+    if review_mode != "review":
+        st.error(
+            "Dört şirket inceleme modu ayarı geçersiz veya çelişkili. "
+            "Güvenlik gereği tüm eski ekranlar kapatıldı."
+        )
+        st.stop()
+    url = postgres_url()
+    if not url:
+        st.error(
+            "Şirket bazlı inceleme için doğrulanmış PostgreSQL bağlantısı "
+            "gerekiyor. Eski ekranlar güvenlik nedeniyle açılmadı."
+        )
+        st.stop()
+    st.warning(
+        "Yalnızca imzalı kullanıcı oturumu ve veritabanı şirket izniyle "
+        "salt okunur inceleme modu. Eski CRM, finans, tedarikçi arama, "
+        "rapor ve dışa aktarma ekranları kapalı."
+    )
+    render_scoped_company_workspace(url)
+    st.stop()
 
 # =========================================================
 # ORTAK AYARLAR
