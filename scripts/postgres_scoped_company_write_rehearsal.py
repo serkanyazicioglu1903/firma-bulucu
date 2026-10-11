@@ -26,11 +26,21 @@ _ALLOWED = {
     "create_purchase_order": frozenset(("PURCHASING", "ADMIN")),
     "create_shipment": frozenset(("PURCHASING", "ADMIN")),
     "create_payable": frozenset(("FINANCE", "ADMIN")),
+    "receive_shipment": frozenset(("PURCHASING", "ADMIN")),
+    "hold_inventory_lot": frozenset(("QUALITY", "ADMIN")),
+    "release_inventory_lot": frozenset(("QUALITY", "ADMIN")),
+    "pay_supplier": frozenset(("FINANCE", "ADMIN")),
+    "collect_customer_payment": frozenset(("FINANCE", "ADMIN")),
 }
 _ACTION_TABLE = {
     "create_purchase_order": "purchase_orders",
     "create_shipment": "shipments",
     "create_payable": "payables",
+    "receive_shipment": "inventory_lots",
+    "hold_inventory_lot": "quality_cases",
+    "release_inventory_lot": "quality_cases",
+    "pay_supplier": "finance_transactions",
+    "collect_customer_payment": "finance_transactions",
 }
 
 
@@ -294,10 +304,301 @@ def create_payable_on_cursor(cur, company_id, *,
     return int(cur.fetchone()[0])
 
 
+
+def receive_shipment_on_cursor(cur, company_id, *, shipment_id):
+    """Lock matching PO before shipment; receive once into same-company stock."""
+    shipment = _checked_id(shipment_id)
+    cur.execute(
+        'SELECT purchase_order_id FROM "ct_app"."shipments" '
+        'WHERE id=%s AND legal_entity_id=%s',
+        (shipment, company_id),
+    )
+    selected = cur.fetchone()
+    if selected is None:
+        raise ScopedWriteDenied("wrong_company_shipment")
+    po_id = int(selected[0])
+    cur.execute(
+        'SELECT product_id,product_name,quantity_kg,unit_price,currency,'
+        'destination_warehouse_id,status FROM "ct_app"."purchase_orders" '
+        'WHERE id=%s AND legal_entity_id=%s FOR UPDATE',
+        (po_id, company_id),
+    )
+    po = cur.fetchone()
+    if po is None or po[6] == "İptal":
+        raise ScopedWriteDenied("wrong_company_po")
+    cur.execute(
+        'SELECT purchase_order_id,quantity_kg,received_to_stock,status,'
+        'destination_warehouse_id,lot_number,expiry_date '
+        'FROM "ct_app"."shipments" '
+        'WHERE id=%s AND legal_entity_id=%s FOR UPDATE',
+        (shipment, company_id),
+    )
+    row = cur.fetchone()
+    if row is None or row[0] != po_id:
+        raise ScopedWriteDenied("wrong_company_shipment")
+    if row[2] or row[3] == "İptal":
+        raise ScopedWriteDenied("already_received_or_cancelled")
+    qty = _positive(row[1])
+    warehouse = row[4] or po[5]
+    if warehouse is None:
+        raise ScopedWriteDenied("warehouse_required")
+    _assigned_warehouse(cur, company_id, int(warehouse))
+    cur.execute(
+        'SELECT COALESCE(SUM(quantity_kg),0) FROM "ct_app"."shipments" '
+        'WHERE purchase_order_id=%s AND legal_entity_id=%s '
+        "AND received_to_stock=1 AND status!='İptal'",
+        (po_id, company_id),
+    )
+    already_received = Decimal(str(cur.fetchone()[0]))
+    ordered = Decimal(str(po[2]))
+    if already_received + qty > ordered + Decimal("0.001"):
+        raise ScopedWriteDenied("over_receipt")
+    cur.execute(
+        'INSERT INTO "ct_app"."inventory_lots" '
+        '(product_id,product_name,warehouse_id,lot_number,expiry_date,'
+        'quantity_received_kg,quantity_available_kg,quantity_reserved_kg,'
+        'unit_cost,currency,purchase_order_id,shipment_id,received_date,notes,'
+        'legal_entity_id) '
+        'VALUES (%s,%s,%s,%s,%s,%s,%s,0,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
+        (po[0],po[1],warehouse,row[5] or "",row[6] or "",qty,qty,
+         po[3],po[4],po_id,shipment,date.today().isoformat(),
+         "CI company-scoped receipt",company_id),
+    )
+    lot_id = int(cur.fetchone()[0])
+    cur.execute(
+        'UPDATE "ct_app"."shipments" SET received_to_stock=1, '
+        "status='Teslim Edildi',delivery_date=%s "
+        'WHERE id=%s AND legal_entity_id=%s',
+        (date.today().isoformat(),shipment,company_id),
+    )
+    new_status = ("Tamamlandı" if already_received + qty +
+                  Decimal("0.001") >= ordered else "Kısmi Sevk")
+    cur.execute(
+        'UPDATE "ct_app"."purchase_orders" SET status=%s '
+        'WHERE id=%s AND legal_entity_id=%s',
+        (new_status,po_id,company_id),
+    )
+    return lot_id
+
+
+def hold_inventory_lot_on_cursor(cur, company_id, *,
+                                 lot_id, case_no, hold_kg, reason):
+    """A quality hold is tied only to a company-owned lot and its parent PO."""
+    lot = _checked_id(lot_id)
+    case = _checked_text(case_no)
+    description = _checked_text(reason, max_length=1500)
+    held = _positive(hold_kg)
+    cur.execute(
+        'SELECT product_id,product_name,quantity_available_kg,'
+        'quantity_reserved_kg,quality_status,quality_hold_kg,'
+        'purchase_order_id,shipment_id FROM "ct_app"."inventory_lots" '
+        'WHERE id=%s AND legal_entity_id=%s FOR UPDATE',
+        (lot,company_id),
+    )
+    row = cur.fetchone()
+    if row is None:
+        raise ScopedWriteDenied("wrong_company_lot")
+    if row[4] not in (None,"Released",""):
+        raise ScopedWriteDenied("lot_already_held")
+    available = Decimal(str(row[2] or 0))-Decimal(str(row[3] or 0))
+    if Decimal(str(row[5] or 0))>0 or held>available:
+        raise ScopedWriteDenied("hold_exceeds_available")
+    cur.execute(
+        'INSERT INTO "ct_app"."quality_cases" '
+        '(case_no,opened_date,product_id,product_name,inventory_lot_id,'
+        'purchase_order_id,shipment_id,affected_quantity_kg,description,'
+        'legal_entity_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
+        (case,date.today().isoformat(),row[0],row[1],lot,row[6],row[7],
+         held,description,company_id),
+    )
+    case_id=int(cur.fetchone()[0])
+    cur.execute(
+        'UPDATE "ct_app"."inventory_lots" SET quality_status=%s,'
+        'quality_hold_kg=%s,quality_case_id=%s '
+        'WHERE id=%s AND legal_entity_id=%s',
+        ("HOLD",held,case_id,lot,company_id),
+    )
+    return case_id
+
+
+def release_inventory_lot_on_cursor(cur, company_id, *, lot_id, resolution):
+    """Release only its own matching, open quality case."""
+    lot = _checked_id(lot_id)
+    reason = _checked_text(resolution, max_length=1500)
+    cur.execute(
+        'SELECT quality_status,quality_case_id '
+        'FROM "ct_app"."inventory_lots" '
+        'WHERE id=%s AND legal_entity_id=%s FOR UPDATE',
+        (lot,company_id),
+    )
+    stock=cur.fetchone()
+    if stock is None:
+        raise ScopedWriteDenied("wrong_company_lot")
+    if stock[0]!="HOLD" or stock[1] is None:
+        raise ScopedWriteDenied("lot_not_on_hold")
+    case_id=int(stock[1])
+    cur.execute(
+        'SELECT inventory_lot_id,status FROM "ct_app"."quality_cases" '
+        'WHERE id=%s AND legal_entity_id=%s FOR UPDATE',
+        (case_id,company_id),
+    )
+    claim=cur.fetchone()
+    if claim is None or claim[0]!=lot or claim[1]=="Kapandı":
+        raise ScopedWriteDenied("case_mismatch")
+    cur.execute(
+        'UPDATE "ct_app"."quality_cases" '
+        'SET status=%s,final_resolution=%s,closed_date=%s '
+        'WHERE id=%s AND legal_entity_id=%s',
+        ("Kapandı",reason,date.today().isoformat(),case_id,company_id),
+    )
+    cur.execute(
+        'UPDATE "ct_app"."inventory_lots" '
+        'SET quality_status=%s,quality_hold_kg=0 '
+        'WHERE id=%s AND legal_entity_id=%s',
+        ("Released",lot,company_id),
+    )
+    return case_id
+
+
+def _company_bank_for_update(cur, company_id, account_id):
+    bank=_checked_id(account_id)
+    cur.execute(
+        'SELECT currency,balance,active FROM "ct_app"."cash_accounts" '
+        'WHERE id=%s AND legal_entity_id=%s FOR UPDATE',
+        (bank,company_id),
+    )
+    account=cur.fetchone()
+    if account is None or not account[2]:
+        raise ScopedWriteDenied("wrong_company_account")
+    return bank,account
+
+
+def pay_supplier_on_cursor(cur, company_id, *, payable_id, account_id, amount,
+                           reference, payment_date):
+    """Pay only own company AP from own bank, never with active quality HOLD."""
+    payable=_checked_id(payable_id)
+    paid_now=_positive(amount)
+    ref=_checked_text(reference)
+    when=_calendar_date(payment_date)
+    cur.execute(
+        'SELECT purchase_order_id,amount,paid_amount,currency,status '
+        'FROM "ct_app"."payables" '
+        'WHERE id=%s AND legal_entity_id=%s FOR UPDATE',
+        (payable,company_id),
+    )
+    invoice=cur.fetchone()
+    if invoice is None or invoice[4]=="İptal":
+        raise ScopedWriteDenied("wrong_company_payable")
+    outstanding=Decimal(str(invoice[1] or 0))-Decimal(str(invoice[2] or 0))
+    if outstanding<=0 or paid_now>outstanding:
+        raise ScopedWriteDenied("overpayment")
+    if invoice[0] is not None:
+        cur.execute(
+            'SELECT EXISTS (SELECT 1 FROM "ct_app"."inventory_lots" '
+            'WHERE purchase_order_id=%s AND legal_entity_id=%s AND '
+            "(COALESCE(quality_hold_kg,0)>0 OR "
+            "COALESCE(quality_status,'Released')!='Released'))",
+            (invoice[0],company_id),
+        )
+        if cur.fetchone()[0]:
+            raise ScopedWriteDenied("quality_hold_blocks_payment")
+    bank,account=_company_bank_for_update(cur,company_id,account_id)
+    if account[0]!=invoice[3]:
+        raise ScopedWriteDenied("currency_mismatch")
+    if Decimal(str(account[1] or 0))<paid_now:
+        raise ScopedWriteDenied("insufficient_funds")
+    cur.execute(
+        'SELECT 1 FROM "ct_app"."finance_transactions" '
+        "WHERE transaction_type='Ödeme' AND reference=%s AND "
+        'legal_entity_id=%s AND (payable_id=%s OR account_id=%s) LIMIT 1',
+        (ref,company_id,payable,bank),
+    )
+    if cur.fetchone() is not None:
+        raise ScopedWriteDenied("duplicate_payment")
+    state="Kapandı" if paid_now==outstanding else "Kısmi"
+    cur.execute(
+        'UPDATE "ct_app"."payables" '
+        'SET paid_amount=paid_amount+%s,status=%s '
+        'WHERE id=%s AND legal_entity_id=%s',
+        (paid_now,state,payable,company_id),
+    )
+    cur.execute(
+        'INSERT INTO "ct_app"."finance_transactions" '
+        '(transaction_type,payable_id,transaction_date,amount,currency,'
+        'account_id,reference,legal_entity_id) '
+        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
+        ("Ödeme",payable,when,paid_now,invoice[3],bank,ref,company_id),
+    )
+    record_id=int(cur.fetchone()[0])
+    cur.execute(
+        'UPDATE "ct_app"."cash_accounts" SET balance=balance-%s '
+        'WHERE id=%s AND legal_entity_id=%s',
+        (paid_now,bank,company_id),
+    )
+    return record_id
+
+
+def collect_customer_payment_on_cursor(cur, company_id, *, receivable_id,
+                                       account_id, amount, reference, payment_date):
+    """Collect one company AR into the SAME company's bank and currency."""
+    receivable=_checked_id(receivable_id)
+    received=_positive(amount)
+    ref=_checked_text(reference)
+    when=_calendar_date(payment_date)
+    cur.execute(
+        'SELECT amount,paid_amount,currency,status '
+        'FROM "ct_app"."receivables" '
+        'WHERE id=%s AND legal_entity_id=%s FOR UPDATE',
+        (receivable,company_id),
+    )
+    invoice=cur.fetchone()
+    if invoice is None or invoice[3]=="İptal":
+        raise ScopedWriteDenied("wrong_company_receivable")
+    outstanding=Decimal(str(invoice[0] or 0))-Decimal(str(invoice[1] or 0))
+    if outstanding<=0 or received>outstanding:
+        raise ScopedWriteDenied("over_collection")
+    bank,account=_company_bank_for_update(cur,company_id,account_id)
+    if account[0]!=invoice[2]:
+        raise ScopedWriteDenied("currency_mismatch")
+    cur.execute(
+        'SELECT 1 FROM "ct_app"."finance_transactions" '
+        "WHERE transaction_type='Tahsilat' AND reference=%s "
+        'AND legal_entity_id=%s AND (receivable_id=%s OR account_id=%s) LIMIT 1',
+        (ref,company_id,receivable,bank),
+    )
+    if cur.fetchone() is not None:
+        raise ScopedWriteDenied("duplicate_collection")
+    state="Kapandı" if outstanding==received else "Kısmi"
+    cur.execute(
+        'UPDATE "ct_app"."receivables" SET paid_amount=paid_amount+%s,'
+        'status=%s WHERE id=%s AND legal_entity_id=%s',
+        (received,state,receivable,company_id),
+    )
+    cur.execute(
+        'INSERT INTO "ct_app"."finance_transactions" '
+        '(transaction_type,receivable_id,transaction_date,amount,currency,'
+        'account_id,reference,legal_entity_id) '
+        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
+        ("Tahsilat",receivable,when,received,invoice[2],bank,ref,company_id),
+    )
+    record_id=int(cur.fetchone()[0])
+    cur.execute(
+        'UPDATE "ct_app"."cash_accounts" SET balance=balance+%s '
+        'WHERE id=%s AND legal_entity_id=%s',
+        (received,bank,company_id),
+    )
+    return record_id
+
+
 _ACTIONS = {
     "create_purchase_order": create_purchase_order_on_cursor,
     "create_shipment": create_shipment_on_cursor,
     "create_payable": create_payable_on_cursor,
+    "receive_shipment": receive_shipment_on_cursor,
+    "hold_inventory_lot": hold_inventory_lot_on_cursor,
+    "release_inventory_lot": release_inventory_lot_on_cursor,
+    "pay_supplier": pay_supplier_on_cursor,
+    "collect_customer_payment": collect_customer_payment_on_cursor,
 }
 
 
