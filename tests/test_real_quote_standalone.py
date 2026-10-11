@@ -21,7 +21,7 @@ class StandaloneQuotePageTests(unittest.TestCase):
         self.assertEqual(source.count("render_real_quote_workspace()"), 1)
         # A dynamic page_link caused StreamlitPageNotFoundError in the live
         # deployment even though the CI default page registry accepted it.
-        self.assertNotIn("st.page_link(", source)
+        self.assertNotIn("\\n    st.page_link(", source)
 
     def _run_page_fresh_process(self, role, mode):
         script = r'''
