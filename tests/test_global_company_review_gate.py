@@ -86,7 +86,7 @@ class GlobalCompanyGateTests(unittest.TestCase):
             "doğrulanmış kullanıcı oturumu yok" in item.message
             for item in app.error
         ))
-        self.assertEqual(len(app.get("button")), 0)
+        self.assertEqual(len(app.get("download_button")), 0)
 
     @patch.object(ct, "render_scoped_company_workspace")
     @patch.object(ct, "scoped_company_view_enabled", return_value=False)
