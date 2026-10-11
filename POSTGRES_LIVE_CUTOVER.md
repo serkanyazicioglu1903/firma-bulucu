@@ -128,6 +128,27 @@ araştırmaz; yalnızca yönetici tarafından onaylı CSV içeriğini kaydeder.
 Kaynak şablonlar gerçek şirket verileriyle doldurulmadan gerçek şirket
 kayıtlarının yüklendiği iddia edilemez.
 
+## Salt okunur PostgreSQL güvenlik durumu
+
+**🔐 PostgreSQL güvenlik kontrolü — hızlı erişim**, yalnızca yetkili
+ADMIN kullanıcı düğmeye bastığında TLS kullanımını, mevcut PostgreSQL
+rolünün süper kullanıcı/rol oluşturma/RLS atlama izinlerini, `ct_app`
+tablolarında RLS etkinliğini ve asgari CRM/denetim günlüğü yetkilerini
+kontrol eder. Bu SQL işlemlerinin tümü read-only transaction içindedir;
+kullanıcı adı, veritabanı adresi, şifre, firma kayıtları veya token
+görüntülenmez.
+
+RLS kullanımının gerekliliği mimariye bağlıdır: yalnızca sunucu taraflı
+Streamlit bağlantısıyla uygulama rolleri denetleniyorsa doğrudan istemci
+erişimi olan bir sistemden farklıdır. Gelişigüzel canlı şema/RLS değişikliği
+yapılmaz; ayrı gözden geçirilmelidir.
+
+Bu araç Supabase proje ayarlarına/Management API'ye erişmediğinden
+**otomatik yedekleme, saklama süresi, Point-in-Time Recovery, firewall,
+restore tatbikatı ve key rotation** durumunu daima *hesaptan
+doğrulanmalı* olarak gösterir. Salt SQL sorgusundan genel
+`production_ready` sonucu üretmez.
+
 ## Critical limitations and rollback
 
 - The GitHub CI test verifies the code against PostgreSQL 16 but **does not
