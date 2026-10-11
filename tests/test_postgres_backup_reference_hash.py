@@ -2,7 +2,9 @@
 import hashlib
 import unittest
 
-from scripts.postgres_backup_reference_hash import (\n    MAX_ALLOWED, compare_saved_sha256,\n)
+from scripts.postgres_backup_reference_hash import (
+    MAX_ALLOWED, compare_saved_sha256,
+)
 
 
 class BackupReferenceTests(unittest.TestCase):
