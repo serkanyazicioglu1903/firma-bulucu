@@ -29,18 +29,18 @@ class PostgresSecurityAuditTests(unittest.TestCase):
         db = connect.return_value.__enter__.return_value
         cursor = db.cursor.return_value.__enter__.return_value
         cursor.fetchone.side_effect = [
-            (True,), (False, False, False), (26, 26), (True, True),
+            (True,), (False, False, False), (26, 26), (True, True), (0, 0),
         ]
         result = audit.audit_postgres_security(TEST_URL)
         self.assertEqual(result["status"], "review_required")
-        self.assertEqual(len(result["checks"]), 4)
+        self.assertEqual(len(result["checks"]), 5)
         self.assertTrue(all(c["status"] == "uygun" for c in result["checks"]))
         self.assertEqual(len(result["external"]), 4)
         rendered = str(result)
         self.assertNotIn("never-print-password", rendered)
         sql = [call.args[0] for call in cursor.execute.call_args_list]
         self.assertEqual(sql[0], "SET TRANSACTION READ ONLY")
-        self.assertEqual(len(sql), 7)
+        self.assertEqual(len(sql), 8)
         self.assertFalse(any(
             statement.lstrip().upper().startswith(
                 ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE")
@@ -54,13 +54,31 @@ class PostgresSecurityAuditTests(unittest.TestCase):
         db = connect.return_value.__enter__.return_value
         cursor = db.cursor.return_value.__enter__.return_value
         cursor.fetchone.side_effect = [
-            (True,), (True, True, True), (26, 0), (True, False),
+            (True,), (True, True, True), (26, 0), (True, False), (2, 3),
         ]
         result = audit.audit_postgres_security(TEST_URL)
         self.assertEqual(result["status"], "review_required")
         self.assertTrue(any(c["status"] == "incele" for c in result["checks"]))
         self.assertTrue(any(c["status"] == "uyarı" for c in result["checks"]))
         self.assertTrue(any("Supabase" in x for x in result["external"]))
+
+    @patch.object(audit, "validate_staging_structure", return_value=("ok", []))
+    @patch("psycopg.connect")
+    def test_rls_off_but_no_api_grants_does_not_claim_public_exposure(
+        self, connect, schema,
+    ):
+        db = connect.return_value.__enter__.return_value
+        cursor = db.cursor.return_value.__enter__.return_value
+        cursor.fetchone.side_effect = [
+            (True,), (False, False, False), (26, 0), (True, True), (0, 0),
+        ]
+        result = audit.audit_postgres_security(TEST_URL)
+        self.assertEqual(result["status"], "review_required")
+        api = next(x for x in result["checks"] if "API rolleri" in x["label"])
+        rls = next(x for x in result["checks"] if "RLS" in x["label"])
+        self.assertEqual(api["status"], "uygun")
+        self.assertEqual(rls["status"], "incele")
+        self.assertIn("doğrudan erişim izni bulunmadı", api["detail"])
 
     @patch.object(audit, "validate_staging_structure", return_value=("ok", []))
     @patch("psycopg.connect", side_effect=RuntimeError(
