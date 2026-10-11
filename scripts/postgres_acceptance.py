@@ -5,6 +5,7 @@ This report is advisory; it neither approves production finance nor writes data.
 """
 from scripts.postgres_operational_read import read_operational_counts
 from scripts.postgres_reconciliation import check_operational_consistency
+from scripts.postgres_company_scope import assess_company_scope
 
 WORKFLOW_TABLES = {
     "CRM / Müşteri": ("customers",),
@@ -23,6 +24,24 @@ def evaluate_acceptance(url):
     integrity = check_operational_consistency(url)
     if integrity["status"] not in ("ok", "issues_found"):
         return {"status": "failed", "areas": [], "critical": None}
+
+    # Check structural legal-entity ownership without fetching company data.
+    # Both businesses must not share unlabelled financial / stock ledgers.
+    company_scope = assess_company_scope(url)
+    if company_scope["status"] != "review_required":
+        return {"status": "failed", "areas": [], "critical": None}
+    untagged = company_scope["without_direct_entity"]
+    if untagged:
+        company_gate = (
+            f"Tüzel kişi ayrımı: {len(untagged)} kritik operasyon/finans tablosunda "
+            "doğrudan şirket sahipliği alanı görünmüyor; dolaylı bağlar, "
+            "yetkiler ve şirket bazlı muhasebe incelenmeden canlı onay yok."
+        )
+    else:
+        company_gate = (
+            "Tüzel kişi alanları mevcut; şirket bazlı erişim, belgeler ve "
+            "banka/finans kayıtlarının yalıtımı henüz doğrulanmadı."
+        )
 
     critical = sum(
         x["count"] for x in integrity["checks"]
@@ -49,7 +68,9 @@ def evaluate_acceptance(url):
         "critical": critical,
         "warnings": warning,
         "checks_executed": len(integrity["checks"]),
+        "company_scope": company_scope,
         "external_gates": (
+            company_gate,
             "Geri yükleme tatbikatı: doğrulanmadı",
             "Supabase otomatik yedek saklama politikası: doğrulanmadı",
             "Eşzamanlı kullanıcı ve banka mutabakatı: canlıda doğrulanmadı",
