@@ -31,7 +31,7 @@ def export_postgres_backup(url):
 
         import psycopg
         from psycopg import sql
-        from psycopg.rows import dict_row
+        from psycopg.rows import dict_row, tuple_row
 
         with sqlite_schema() as definitions:
             tables = [
@@ -64,8 +64,12 @@ def export_postgres_backup(url):
                     # Once ownership/grant migrations start it would omit
                     # new company registry and permissions. Never present
                     # this ZIP as a restorable, complete group-company backup.
-                    if company_schema_status_on_cursor(cur) != "legacy_schema_only":
-                        return "company_scope_unsupported", None
+                    # The existing export cursor has dict_row for ZIP
+                    # serialization. Metadata checking deliberately uses
+                    # tuple_row for predictable (row[0], bool tuple) results.
+                    with conn.cursor(row_factory=tuple_row) as scope_cur:
+                        if company_schema_status_on_cursor(scope_cur) != "legacy_schema_only":
+                            return "company_scope_unsupported", None
                     with zipfile.ZipFile(
                         output, mode="w", compression=zipfile.ZIP_DEFLATED,
                     ) as archive:
