@@ -198,6 +198,158 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                 denied = inspect_blueprint_fks_on_cursor(cur, blueprint)
                 self.assertEqual(denied["issue_codes"], ("nullable_parent_fk",))
 
+    def test_company_crm_customer_contact_rights_on_disposable_postgres(self):
+        """Real FK, roles, two-company rows, zero live DB modifications.
+
+        The entire synthetic migration, grants and fictional records roll
+        back. Even a syntactically valid company code cannot bypass DB grants.
+        """
+        from scripts.group_company_catalog import COMPANY_LABELS
+        from scripts.postgres_company_scope import CRITICAL_TABLES
+        from scripts.postgres_legal_entity_rehearsal import (
+            additive_ddl, enforcement_ddl,
+        )
+        from scripts.postgres_scoped_company_read import grant_table_rehearsal_ddl
+        from scripts.postgres_scoped_company_crm_read import (
+            company_crm_structure_ready_on_cursor, read_company_crm_on_cursor,
+        )
+        import psycopg
+
+        class ExpectedCrmRollback(Exception):
+            pass
+
+        owner_a, owner_b = tuple(COMPANY_LABELS)[:2]
+        try:
+            with self.conn.transaction():
+                with self.conn.cursor() as cur:
+                    self.assertFalse(company_crm_structure_ready_on_cursor(cur))
+                    for statement in additive_ddl():
+                        cur.execute(statement)
+                    cur.execute(
+                        'INSERT INTO "ct_app"."legal_entities" '
+                        '(code,legal_name) VALUES (%s,%s),(%s,%s)',
+                        (owner_a, "CI Fictional Company A",
+                         owner_b, "CI Fictional Company B"),
+                    )
+                    cur.execute(
+                        'SELECT id,code FROM "ct_app"."legal_entities"'
+                    )
+                    owners = {code: ident for ident, code in cur.fetchall()}
+                    for table in CRITICAL_TABLES:
+                        cur.execute(
+                            f'UPDATE "ct_app"."{table}" SET legal_entity_id=%s '
+                            'WHERE legal_entity_id IS NULL',
+                            (owners[owner_a],),
+                        )
+                    for statement in enforcement_ddl():
+                        cur.execute(statement)
+                    for statement in grant_table_rehearsal_ddl():
+                        cur.execute(statement)
+                    cur.execute(
+                        'INSERT INTO "ct_app"."company_read_grants" '
+                        '(principal_id,legal_entity_id,can_read) '
+                        'VALUES (%s,%s,TRUE)',
+                        ("ci-crm-reader", owners[owner_a]),
+                    )
+                    for table in ("customers", "contacts"):
+                        cur.execute(
+                            f'ALTER TABLE "ct_app"."{table}" '
+                            'ADD COLUMN legal_entity_id BIGINT NULL REFERENCES '
+                            '"ct_app"."legal_entities"(id)'
+                        )
+                        cur.execute(
+                            f'UPDATE "ct_app"."{table}" SET legal_entity_id=%s '
+                            'WHERE legal_entity_id IS NULL',
+                            (owners[owner_a],),
+                        )
+                        cur.execute(
+                            f'ALTER TABLE "ct_app"."{table}" '
+                            'ALTER COLUMN legal_entity_id SET NOT NULL'
+                        )
+                    cur.execute(
+                        'CREATE UNIQUE INDEX ci_crm_customer_owner_unique '
+                        'ON "ct_app"."customers" (id,legal_entity_id)'
+                    )
+                    cur.execute(
+                        'ALTER TABLE "ct_app"."contacts" '
+                        'ADD CONSTRAINT ci_crm_contact_owner_fk '
+                        'FOREIGN KEY (customer_id,legal_entity_id) '
+                        'REFERENCES "ct_app"."customers"(id,legal_entity_id)'
+                    )
+                    self.assertTrue(company_crm_structure_ready_on_cursor(cur))
+                    customer_ids = {}
+                    for code in (owner_a, owner_b):
+                        cur.execute(
+                            'INSERT INTO "ct_app"."customers" '
+                            '(name,legal_entity_id) VALUES (%s,%s) RETURNING id',
+                            ("CI Fictional " + code, owners[code]),
+                        )
+                        customer_ids[code] = cur.fetchone()[0]
+                        cur.execute(
+                            'INSERT INTO "ct_app"."contacts" '
+                            '(customer_id,name,legal_entity_id) '
+                            'VALUES (%s,%s,%s)',
+                            (customer_ids[code], "CI Contact " + code,
+                             owners[code]),
+                        )
+
+                    status, rows = read_company_crm_on_cursor(
+                        cur, "ci-crm-reader", owner_a, "Müşteriler"
+                    )
+                    self.assertEqual(status, "ok")
+                    self.assertIn(customer_ids[owner_a],
+                                  {row["id"] for row in rows})
+                    self.assertNotIn(customer_ids[owner_b],
+                                     {row["id"] for row in rows})
+                    status, rows = read_company_crm_on_cursor(
+                        cur, "ci-crm-reader", owner_a, "İrtibat Kişileri"
+                    )
+                    self.assertEqual(status, "ok")
+                    self.assertTrue(any(
+                        row["customer_id"] == customer_ids[owner_a]
+                        for row in rows
+                    ))
+                    self.assertFalse(any(
+                        row["customer_id"] == customer_ids[owner_b]
+                        for row in rows
+                    ))
+                    for section in ("Müşteriler", "İrtibat Kişileri"):
+                        self.assertEqual(
+                            read_company_crm_on_cursor(
+                                cur, "ci-crm-reader", owner_b, section
+                            ), ("forbidden", []),
+                        )
+                        self.assertEqual(
+                            read_company_crm_on_cursor(
+                                cur, "ci-ungranted", owner_a, section
+                            ), ("forbidden", []),
+                        )
+
+                    # A contact cannot be relabelled to B while its customer
+                    # remains owned by A, regardless of application bugs.
+                    cur.execute("SAVEPOINT ci_reject_foreign_customer")
+                    with self.assertRaises(psycopg.errors.ForeignKeyViolation):
+                        cur.execute(
+                            'UPDATE "ct_app"."contacts" SET legal_entity_id=%s '
+                            'WHERE customer_id=%s',
+                            (owners[owner_b], customer_ids[owner_a]),
+                        )
+                    cur.execute("ROLLBACK TO SAVEPOINT ci_reject_foreign_customer")
+                    cur.execute("RELEASE SAVEPOINT ci_reject_foreign_customer")
+                    raise ExpectedCrmRollback()
+        except ExpectedCrmRollback:
+            pass
+
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM information_schema.columns WHERE "
+                "table_schema='ct_app' AND table_name IN ('customers','contacts') "
+                "AND column_name='legal_entity_id'"
+            )
+            self.assertEqual(cur.fetchone()[0], 0)
+            cur.execute("SELECT to_regclass('ct_app.company_read_grants')")
+            self.assertIsNone(cur.fetchone()[0])
+
     def test_legal_entity_constraints_rehearsed_then_rolled_back(self):
         """Four fictional entities, real FK checks, disposable CI only.
 
