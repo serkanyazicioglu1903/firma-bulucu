@@ -293,6 +293,69 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                                 'WHERE id=%s', (row["id"],),
                             )
                             self.assertEqual(cur.fetchone()[0], ids[key])
+                    # Verified aggregate KPI: per-company counts and
+                    # balances, never leaking bank/PO data from B or C.
+                    from scripts.postgres_company_executive_snapshot import (
+                        company_executive_snapshot_on_cursor,
+                    )
+                    for forbidden_code in (group_codes[1], group_codes[2]):
+                        status, payload = company_executive_snapshot_on_cursor(
+                            cur, "ci-scoped-reader", forbidden_code
+                        )
+                        self.assertEqual((status, payload), ("forbidden", {}))
+                    for key, code in (("CI_A", group_codes[0]),
+                                      ("CI_D", group_codes[3])):
+                        status, overview = company_executive_snapshot_on_cursor(
+                            cur, "ci-scoped-reader", code
+                        )
+                        self.assertEqual(status, "ok")
+                        self.assertFalse(overview["consolidation_verified"])
+                        self.assertFalse(overview["cross_company_totals"])
+                        cur.execute(
+                            'SELECT COUNT(*) FROM "ct_app"."cash_accounts" '
+                            'WHERE legal_entity_id=%s', (ids[key],),
+                        )
+                        self.assertEqual(
+                            overview["counts"]["cash_accounts"],
+                            cur.fetchone()[0],
+                        )
+                        cur.execute(
+                            'SELECT COUNT(*) FROM "ct_app"."purchase_orders" '
+                            'WHERE legal_entity_id=%s', (ids[key],),
+                        )
+                        self.assertEqual(
+                            overview["counts"]["purchase_orders"],
+                            cur.fetchone()[0],
+                        )
+                        self.assertTrue(
+                            any(
+                                line["currency"] == "EUR"
+                                for line in overview["finance_by_currency"]["cash"]
+                            )
+                        )
+                    # Currency is a dimension, not an implied conversion.
+                    cur.execute(
+                        'INSERT INTO "ct_app"."cash_accounts" '
+                        '(name,currency,balance,legal_entity_id) VALUES (%s,%s,%s,%s)',
+                        ("CI D ONLY GBP", "GBP", 300, ids["CI_D"]),
+                    )
+                    status, overview = company_executive_snapshot_on_cursor(
+                        cur, "ci-scoped-reader", group_codes[3]
+                    )
+                    self.assertEqual(status, "ok")
+                    self.assertIn(
+                        "GBP",
+                        {row["currency"] for row in
+                         overview["finance_by_currency"]["cash"]},
+                    )
+                    self.assertIn(
+                        "EUR",
+                        {row["currency"] for row in
+                         overview["finance_by_currency"]["cash"]},
+                    )
+                    self.assertNotIn(
+                        "total_converted", overview
+                    )
                     # Even a string called "admin" is not privileged.
                     self.assertEqual(
                         read_company_records_on_cursor(
