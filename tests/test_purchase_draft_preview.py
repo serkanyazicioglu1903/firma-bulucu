@@ -53,7 +53,7 @@ class PurchaseDraftPreviewTests(unittest.TestCase):
                 self.assertEqual(rows["Tedarikçi mal bedeli"],
                                  ("57600.0", "EUR"))
                 self.assertIn("İmza", rows["Uyarı"][0])
-                self.assertIn("Gerçek PO numarası", rows["Kayıt"][0])
+                self.assertIn("gerçek PO numarası oluşmadı", rows["Kayıt"][0])
                 self.assertNotIn("company_write_grants", data.decode("utf-8-sig"))
                 self.assertNotIn("legal_entity_id", data.decode("utf-8-sig"))
 
