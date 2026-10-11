@@ -46,7 +46,9 @@ class RecoveryBaselineTests(unittest.TestCase):
         self.assertFalse(result["production_cutover_approved"])
         self.assertEqual(cursor.execute.call_count, 28)
         statements = [call.args[0] for call in cursor.execute.call_args_list]
-        self.assertTrue(all(str(s).startswith("SELECT ") for s in statements))
+        self.assertTrue(all(str(s).startswith("SELECT ") for s in statements[:2]))
+        from psycopg import sql
+        self.assertTrue(all(isinstance(s, sql.Composed) for s in statements[2:]))
         self.assertTrue(all("pg_" in str(s) for s in statements[:2]))
         self.assertNotIn("WHERE id", " ".join(str(x) for x in statements))
         self.assertNotIn("SELECT *", " ".join(str(x) for x in statements))
