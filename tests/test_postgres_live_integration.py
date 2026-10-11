@@ -662,6 +662,70 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                     )
                     self.assertEqual(cur.fetchone()[0],16)
 
+                    # Real PostgreSQL owner graph is READ-ONLY and uses
+                    # only IDs/FKs/row hashes. These CI entities have synthetic
+                    # ownership assigned earlier INSIDE THIS ROLLBACK TEST.
+                    # NEVER derive a production manifest from owner fields.
+                    from scripts.postgres_company_owner_mapping_preflight import (
+                        read_owner_graph_on_cursor, snapshot_digest,
+                        evaluate_owner_mapping,
+                    )
+                    graph = read_owner_graph_on_cursor(cur)
+                    self.assertEqual(len(graph), 8)
+                    synthetic_owner_codes = {
+                        ids["CI_A"]: group_codes[0],
+                        ids["CI_B"]: group_codes[1],
+                        ids["CI_C"]: group_codes[2],
+                        ids["CI_D"]: group_codes[3],
+                    }
+                    manifest = {"source_sha256": snapshot_digest(graph),
+                                "allocations": {}}
+                    for table in CRITICAL_TABLES:
+                        cur.execute(
+                            f'SELECT id,legal_entity_id FROM "ct_app"."{table}"'
+                        )
+                        from_db = dict(cur.fetchall())
+                        manifest["allocations"][table] = [
+                            {
+                                "record_id": row["id"],
+                                "company_code": synthetic_owner_codes[
+                                    from_db[row["id"]]
+                                ],
+                                "evidence_ref": "FICTIONAL_CI_ONLY_SOURCE",
+                            }
+                            for row in graph[table]
+                        ]
+                    verified = evaluate_owner_mapping(graph, manifest)
+                    self.assertEqual(verified["status"], "review_required")
+                    self.assertFalse(verified["isolation_verified"])
+                    self.assertTrue(verified["source_fingerprint_matches"])
+                    # Missing mapping row must fail even though DB FKs pass.
+                    plan_missing = {
+                        "source_sha256": manifest["source_sha256"],
+                        "allocations": {
+                            table: list(rows)
+                            for table, rows in manifest["allocations"].items()
+                        },
+                    }
+                    plan_missing["allocations"]["cash_accounts"].pop()
+                    self.assertEqual(
+                        evaluate_owner_mapping(graph, plan_missing)["status"],
+                        "blocked",
+                    )
+                    # A correct but stale plan must never pass after a row
+                    # fingerprint changes.
+                    changed_graph = {
+                        table: [dict(row) for row in rows]
+                        for table, rows in graph.items()
+                    }
+                    changed_graph["cash_accounts"][0]["row_hash"] = "a" * 32
+                    self.assertIn(
+                        "stale_or_invalid_source",
+                        evaluate_owner_mapping(
+                            changed_graph, manifest
+                        )["issue_codes"],
+                    )
+
                     # Even a string called "admin" is not privileged.
                     self.assertEqual(
                         read_company_records_on_cursor(
