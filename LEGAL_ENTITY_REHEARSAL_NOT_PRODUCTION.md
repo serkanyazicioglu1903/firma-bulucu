@@ -37,13 +37,13 @@ enforcement **does not by itself provide row-level access controls**.
 
 ## Actual CI acceptance and limits
 
-The disposable PostgreSQL test inserts TWO **synthetic** companies,
+The disposable PostgreSQL test inserts FOUR **synthetic** companies,
 assigns existing *synthetic CI* rows inside a single transaction, applies
 both phases, proves a valid same-company shipment is accepted, a
-cross-company shipment is rejected, and an ownerless bank entry is rejected.
+cross-company shipment and bank/finance links are rejected across all four\nentities, and an ownerless bank entry is rejected.
 It **rolls back all temporary DDL and records** before other tests.
 
-DO NOT copy this CI backfill into production. Real ownership must be
+The owner confirmed four incorporated group companies: AS İleri Gıda, Planet\nIngredients, AS Food Global Ltd, and AS İleri Holding A.Ş. These are **display\nlabels**, not verified full registry legal names or production database IDs. The\nreview-only `scripts/group_company_catalog.py` exposes stable internal codes\nfor all four and rejects company access without an **explicit server-side\ngrant**; it does not grant access from a phone or admin role by itself.\n\nHolding ownership does not automatically authorize accessing another group's\nfinancial ledger. Group consolidated P&L / balance sheet will require currency\nconversion dates, intercompany matching and eliminations, entity-specific\naccounting mappings, and reconciliation sign-off before being described as\nready. No automatic consolidation is live.\n\nDO NOT copy this CI backfill into production. Real ownership must be
 reconciled with finance and operations before any changes.
 
 Still needed for live use: signed entity/legal-name master, accountant-approved
