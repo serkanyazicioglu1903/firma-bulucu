@@ -124,7 +124,11 @@ def verify_disposable_backup_restore(url, payload):
 
         import psycopg
         from psycopg import sql
-        from psycopg.rows import dict_row
+        from psycopg.rows import dict_row, tuple_row
+        from scripts.postgres_recovery_baseline import (
+            capture_legacy_baseline_on_cursor,
+            compare_isolated_restore_baselines,
+        )
 
         restored_rows = 0
         with psycopg.connect(
@@ -142,6 +146,15 @@ def verify_disposable_backup_restore(url, payload):
                         )
                         if cur.fetchone()["exists"]:
                             return "existing_schema", None
+                        # Establish an independent read-only source baseline
+                        # before the disposable restore; never infer source
+                        # ownership or expose raw business rows in the result.
+                        with connection.cursor(row_factory=tuple_row) as base_cur:
+                            source_baseline = capture_legacy_baseline_on_cursor(
+                                base_cur, schema="ct_app"
+                            )
+                        if source_baseline["status"] != "baseline_captured":
+                            raise ValueError("Source recovery baseline incomplete")
                         cur.execute('CREATE SCHEMA "' + _RESTORE_SCHEMA + '"')
                         cur.execute(
                             'SET LOCAL search_path TO "' + _RESTORE_SCHEMA
@@ -198,6 +211,20 @@ def verify_disposable_backup_restore(url, payload):
                         for statement in foreign_keys:
                             cur.execute(statement)
 
+                        # Compare all 26 source/restored table counts and
+                        # physical column metadata while restore is still in
+                        # the transaction. The existing loop below additionally
+                        # checks *every row*, primary keys and child FKs.
+                        with connection.cursor(row_factory=tuple_row) as base_cur:
+                            restore_baseline = capture_legacy_baseline_on_cursor(
+                                base_cur, schema=_RESTORE_SCHEMA
+                            )
+                        comparison = compare_isolated_restore_baselines(
+                            source_baseline, restore_baseline
+                        )
+                        if comparison["status"] != "review_required":
+                            raise ValueError("Restore baseline drift")
+
                         for name in names:
                             sort_col = "setting_key" if name == "system_settings" else "id"
                             cur.execute(
@@ -222,6 +249,8 @@ def verify_disposable_backup_restore(url, payload):
                     "tables": len(names),
                     "rows": restored_rows,
                     "rolled_back": True,
+                    "schema_counts_match": True,
+                    "provider_restore_verified": False,
                 }
     except Exception:
         return "failed", None
