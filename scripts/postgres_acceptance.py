@@ -6,6 +6,7 @@ This report is advisory; it neither approves production finance nor writes data.
 from scripts.postgres_operational_read import read_operational_counts
 from scripts.postgres_reconciliation import check_operational_consistency
 from scripts.postgres_company_scope import assess_company_scope
+from scripts.postgres_group_readiness import group_preview
 
 WORKFLOW_TABLES = {
     "CRM / Müşteri": ("customers",),
@@ -26,14 +27,14 @@ def evaluate_acceptance(url):
         return {"status": "failed", "areas": [], "critical": None}
 
     # Check structural legal-entity ownership without fetching company data.
-    # Both businesses must not share unlabelled financial / stock ledgers.
+    # All four incorporated companies must not share unlabelled ledgers.
     company_scope = assess_company_scope(url)
     if company_scope["status"] != "review_required":
         return {"status": "failed", "areas": [], "critical": None}
     untagged = company_scope["without_direct_entity"]
     if untagged:
         company_gate = (
-            f"Tüzel kişi ayrımı: {len(untagged)} kritik operasyon/finans tablosunda "
+            f"Tüzel kişi ayrımı (4 şirket): {len(untagged)} kritik operasyon/finans tablosunda "
             "doğrudan şirket sahipliği alanı görünmüyor; dolaylı bağlar, "
             "yetkiler ve şirket bazlı muhasebe incelenmeden canlı onay yok."
         )
@@ -69,6 +70,8 @@ def evaluate_acceptance(url):
         "warnings": warning,
         "checks_executed": len(integrity["checks"]),
         "company_scope": company_scope,
+        "group_company_count": group_preview()["company_count"],
+        "group_isolation_verified": False,
         "external_gates": (
             company_gate,
             "Geri yükleme tatbikatı: doğrulanmadı",
