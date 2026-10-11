@@ -52,6 +52,24 @@ SQLite'a geçmez. Bu bir güvenlik kilididir, canlı geçiş otomasyonu değil.
   owner migration → 8 owner kolon/grant tabloları → tümünü geri alan
   transaction; kilit davranışı her aşamada doğrulanır.
 
+## Eksik ZIP yedeğinin otomatik engellenmesi
+
+`scripts/postgres_backup.py` eski 26 tablodan ZIP üretiyor. Yeni
+`legal_entities`, `company_read_grants`, `company_write_grants` ve
+`company_warehouse_scope` tabloları bu ZIP formatının parçası değil.
+Dolayısıyla şirket migrasyonu başladığında bu formatın kullanımına
+izin vermek, **eksik kurtarma dosyasına tam yedek demek** olur.
+
+Bu PR, mevcut AES ve normal ZIP export yolunda, veri satırlarına
+girmeden önce aynı metadata kilidini çağırıyor. Owner/grant yapısı
+algılanırsa `company_scope_unsupported` ile indirme engelleniyor;
+içerik üretilmiyor ve telefondaki yedek ekranı nedeni açıkça gösteriyor.
+
+Bu **yedek almamak** anlamına gelmemeli: grup şirketli şema için
+ayrı hazırlanmış eksiksiz veri + şema + izinler + dış depo yedeği
+ve bağımsız bir geri yükleme testi zorunlu. Bu PR böyle bir yedekleme
+mekanizması veya gerçek Supabase restore testi sağlamaz.
+
 ## Hâlâ canlıya hazır değil
 
 Bu kilit **eski şema devam ederken var olan şirketler arası erişimi
