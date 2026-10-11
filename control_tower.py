@@ -12,6 +12,7 @@ from management_reports import render_management_reports
 from postgres_workspace import render_postgres_workspace
 from group_readiness_ui import render_group_readiness_quick
 from tenant_security_ui import render_company_access_security_quick
+from company_ownership_coverage_ui import render_company_ownership_coverage_quick
 from scoped_company_workspace_ui import (scoped_company_view_enabled, render_scoped_company_workspace)
 from postgres_system import render_postgres_quick_encrypted_backup, render_postgres_quick_backup_verify, render_postgres_system, render_postgres_quick_backup, render_postgres_quick_reconciliation, render_postgres_quick_acceptance, render_postgres_master_import, render_postgres_quick_security
 from scripts.live_backend import postgres_url, ready_for_live
@@ -2172,6 +2173,7 @@ def _render_control_tower_interface(live_postgres=False):
         render_group_readiness_quick(postgres_url())
         # Explicit administrator click only; no business rows or writes.
         render_company_access_security_quick(postgres_url())
+        render_company_ownership_coverage_quick(postgres_url())
         # Keep an ADMIN-only backup entry outside the 15 main tabs; this
         # remains reachable even when iOS Safari fails to paint nested tabs.
         render_postgres_quick_backup(postgres_url())
