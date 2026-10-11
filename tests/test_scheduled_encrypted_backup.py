@@ -43,6 +43,12 @@ class ScheduledEncryptedBackupTests(unittest.TestCase):
         self.assertEqual(decrypt_export_zip(ciphertext, PASS)[1], archive)
         self.assertNotIn("password", str(summary).lower())
 
+    def test_weak_key_rejected_before_private_database_is_read(self):
+        with patch.object(backup, "export_postgres_backup") as exporter:
+            result = backup.generate_encrypted_backup(DUMMY_URL, "aaaaaaaaaaaaaaa")
+        self.assertEqual(result, ("weak_passphrase", None, None))
+        exporter.assert_not_called()
+
     def test_invalid_export_never_produces_an_artifact(self):
         with patch.object(
             backup, "export_postgres_backup", return_value=("failed", None)
