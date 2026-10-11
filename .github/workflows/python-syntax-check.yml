@@ -51,34 +51,33 @@ jobs:
       - name: Legacy review regression tests
         run: python -m unittest discover -s tests -v
 
-      # Separate process: Streamlit AppTest form context can leak across the
-    # large in-process unittest suite, producing false nested-form errors.
-    - name: Independent iPad quote route smoke test
-      run: |
-        python - <<'PY'
-        from streamlit.testing.v1 import AppTest
+      # Isolate AppTest from prior unittest form context.
+      - name: Independent iPad quote route smoke test
+        run: |
+          python - <<'PY'
+          from streamlit.testing.v1 import AppTest
 
-        at = AppTest.from_file("app.py", default_timeout=60)
-        at.secrets["CONTROL_TOWER_PASSWORD"] = "ci-test-password"
-        at.session_state["ct_user"] = {
-            "username": "ci-admin",
-            "display_name": "CI Admin",
-            "role": "ADMIN",
-        }
-        at.session_state["ct_session_id"] = "ci-quote-session"
-        at.query_params["page"] = "quote"
-        at.run()
-        assert not at.exception, str(at.exception)
-        assert not at.tabs, "Standalone quote page must not render legacy tabs"
-        labels = {widget.label for widget in at.number_input}
-        assert "Miktar (kg)" in labels, labels
-        assert any("Alış fiyatı" in label for label in labels)
-        assert any("Navlun" in label for label in labels)
-        assert any("Müşteri tahsilat vadesi" in label for label in labels)
-        print("Standalone quote route renders without invoking legacy Control Tower.")
-        PY
+          at = AppTest.from_file("app.py", default_timeout=60)
+          at.secrets["CONTROL_TOWER_PASSWORD"] = "ci-test-password"
+          at.session_state["ct_user"] = {
+              "username": "ci-admin",
+              "display_name": "CI Admin",
+              "role": "ADMIN",
+          }
+          at.session_state["ct_session_id"] = "ci-quote-session"
+          at.query_params["page"] = "quote"
+          at.run()
+          assert not at.exception, str(at.exception)
+          assert not at.tabs, "Standalone quote must skip legacy tabs"
+          labels = {widget.label for widget in at.number_input}
+          assert "Miktar (kg)" in labels, labels
+          assert any("Alış fiyatı" in label for label in labels)
+          assert any("Navlun" in label for label in labels)
+          assert any("Müşteri tahsilat vadesi" in label for label in labels)
+          print("Standalone quote screen rendered.")
+          PY
 
-    - name: Premium business flow tests
+      - name: Premium business flow tests
         run: pytest -q tests/test_premium_flows.py
 
       - name: Search quality tests
