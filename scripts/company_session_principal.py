@@ -8,6 +8,7 @@ accepted as a legal-entity grant. PostgreSQL independently validates grants.
 """
 import hashlib
 import hmac
+import json
 
 from security_admin import _secret, current_user, load_users
 
@@ -25,7 +26,20 @@ def _signing_key():
 
 def _user_registry_explicitly_configured():
     raw = _secret("APP_USERS_JSON", "")
-    return isinstance(raw, str) and bool(raw.strip())
+    if not isinstance(raw, str) or not raw.strip():
+        return False
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return False
+    if isinstance(parsed, dict):
+        parsed = parsed.get("users")
+    # Do not mistake an invalid APP_USERS_JSON + legacy password fallback
+    # for a configured user directory that supports legal-entity identity.
+    return isinstance(parsed, list) and any(
+        isinstance(item, dict) and bool(str(item.get("username") or "").strip())
+        for item in parsed
+    )
 
 
 def _signature(username, role, session_id, key):
