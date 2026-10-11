@@ -224,7 +224,7 @@ class MobileSystemTests(unittest.TestCase):
     ):
         from unittest.mock import MagicMock
         uploaded = MagicMock()
-        uploaded.getvalue.return_value = b"name,country\\nOnayli CI Musteri,Turkiye\\n"
+        uploaded.getvalue.return_value = b"name,country\nOnayli CI Musteri,Turkiye\n"
         st.selectbox.return_value = "Müşteriler"
         st.file_uploader.return_value = uploaded
         st.checkbox.return_value = False
@@ -245,7 +245,7 @@ class MobileSystemTests(unittest.TestCase):
         from unittest.mock import MagicMock
         from scripts.postgres_master_import import APPROVAL
         uploaded = MagicMock()
-        uploaded.getvalue.return_value = b"name,country\\nOnayli CI Musteri,Turkiye\\n"
+        uploaded.getvalue.return_value = b"name,country\nOnayli CI Musteri,Turkiye\n"
         st.selectbox.return_value = "Müşteriler"
         st.file_uploader.return_value = uploaded
         st.checkbox.return_value = True
