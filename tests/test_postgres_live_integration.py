@@ -1216,6 +1216,21 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
         self.assertEqual(api["status"], "uygun")
         self.assertEqual(len(result["external"]), 4)
 
+        # Real disposable pg_catalog RLS vs actual grants, no business rows.
+        from scripts.postgres_tenant_security_preflight import (
+            inspect_company_access_security,
+        )
+        security = inspect_company_access_security(self.url)
+        self.assertEqual(security["status"], "tenant_migration_incomplete")
+        self.assertEqual(security["total_tables"], 26)
+        self.assertEqual(security["rls_enabled"], 0)
+        self.assertEqual(security["owner_columns"], 0)
+        self.assertEqual(security["registry_tables"], 0)
+        self.assertEqual(security["api_direct_access"]["anon"], 0)
+        self.assertEqual(security["api_direct_access"]["authenticated"], 0)
+        self.assertFalse(security["actual_backup_restore_verified"])
+        self.assertFalse(security["ready_for_production_cutover"])
+
     def test_postgres_live_backup_has_26_tables_and_hash_manifest(self):
         """Export a consistent, real, read-only backup of fictional Docker data."""
         import io
