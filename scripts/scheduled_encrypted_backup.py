@@ -17,7 +17,7 @@ import tempfile
 
 from scripts.postgres_backup import export_postgres_backup
 from scripts.postgres_encrypted_backup import (
-    encrypt_export_zip, inspect_encrypted_export,
+    _acceptable_password, encrypt_export_zip, inspect_encrypted_export,
 )
 
 OUTPUT_PREFIX = "as-control-tower-encrypted-"
@@ -31,6 +31,9 @@ def generate_encrypted_backup(url, password):
     """
     if not isinstance(url, str) or not url or not isinstance(password, str):
         return "missing_configuration", None, None
+    # Reject weak or invalid encryption keys BEFORE ever reading private data.
+    if not _acceptable_password(password):
+        return "weak_passphrase", None, None
     status, plain_zip = export_postgres_backup(url)
     if status != "ok" or not isinstance(plain_zip, bytes):
         return "backup_failed", None, None
