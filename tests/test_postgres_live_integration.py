@@ -371,6 +371,8 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                     )
                     shared_product_id = int(cur.fetchone()[0])
                     scoped_purchases = {}
+                    scoped_shipments = {}
+                    scoped_payables = {}
                     scoped_bank_warehouses = {}
                     for key, company_code in (("CI_A", group_codes[0]),
                                               ("CI_D", group_codes[3])):
@@ -410,6 +412,7 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                             shipment_ref=f"CI ATOMIC SHIPMENT {key}",
                             quantity_kg=7,
                         )
+                        scoped_shipments[key] = shipment
                         payable = run_scoped_write_on_cursor(
                             cur,"ci-scoped-reader",company_code,"FINANCE",
                             "create_payable",purchase_order_id=po,
@@ -419,6 +422,7 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                             amount=21,
                             currency="EUR",
                         )
+                        scoped_payables[key] = payable
                         for table, ident in (
                             ("purchase_orders",po),("shipments",shipment),
                             ("payables",payable)
@@ -435,6 +439,167 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                         )
                         self.assertEqual(cur.fetchone()[0],3)
 
+                    # Four-company stock, QA, payment and collection test:
+                    # only synthetic owned data and inside the same rollback.
+                    cur.execute(
+                        'INSERT INTO "ct_app"."customers" (name) VALUES (%s) '
+                        'RETURNING id',
+                        ("CI FOUR COMPANY PAYMENTS CUSTOMER",),
+                    )
+                    payment_customer_id = int(cur.fetchone()[0])
+                    for company_key, company_code in (
+                        ("CI_A",group_codes[0]), ("CI_D",group_codes[3])
+                    ):
+                        other_key = "CI_D" if company_key == "CI_A" else "CI_A"
+                        cur.execute(
+                            'UPDATE "ct_app"."cash_accounts" SET balance=%s '
+                            'WHERE id=%s AND legal_entity_id=%s',
+                            (1000,ids[company_key+"_bank"],ids[company_key]),
+                        )
+                        cur.execute(
+                            'INSERT INTO "ct_app"."receivables" '
+                            '(customer_id,due_date,amount,currency,legal_entity_id) '
+                            'VALUES (%s,%s,%s,%s,%s) RETURNING id',
+                            (payment_customer_id,"2026-12-01",60,"EUR",
+                             ids[company_key]),
+                        )
+                        ar_id=int(cur.fetchone()[0])
+                        if company_key == "CI_A":
+                            receivable_A=ar_id
+                        else:
+                            receivable_D=ar_id
+                        lot_id = run_scoped_write_on_cursor(
+                            cur,"ci-scoped-reader",company_code,"PURCHASING",
+                            "receive_shipment",
+                            shipment_id=scoped_shipments[company_key],
+                        )
+                        cur.execute(
+                            'SELECT legal_entity_id,quantity_available_kg '
+                            'FROM "ct_app"."inventory_lots" WHERE id=%s',
+                            (lot_id,),
+                        )
+                        lot_owner, lot_qty = cur.fetchone()
+                        self.assertEqual(lot_owner,ids[company_key])
+                        self.assertEqual(lot_qty,7)
+                        self.assertEqual(
+                            cur.execute(
+                                'SELECT 1 FROM "ct_app"."inventory_lots" '
+                                'WHERE shipment_id=%s AND legal_entity_id=%s',
+                                (scoped_shipments[company_key],ids[other_key]),
+                            ).fetchone(),
+                            None,
+                        )
+                        qa_id=run_scoped_write_on_cursor(
+                            cur,"ci-scoped-reader",company_code,"QUALITY",
+                            "hold_inventory_lot",lot_id=lot_id,
+                            case_no=f"CI FOUR COMPANY QA {company_key}",
+                            hold_kg=3,reason="CI fictional quality claim",
+                        )
+                        with self.assertRaises(ScopedWriteDenied) as blocked:
+                            run_scoped_write_on_cursor(
+                                cur,"ci-scoped-reader",company_code,"FINANCE",
+                                "pay_supplier",
+                                payable_id=scoped_payables[company_key],
+                                account_id=ids[company_key+"_bank"],
+                                amount=10,reference=f"CI PAY {company_key}",
+                                payment_date="2026-10-11",
+                            )
+                        self.assertEqual(blocked.exception.code,
+                                         "quality_hold_blocks_payment")
+                        resolved_id=run_scoped_write_on_cursor(
+                            cur,"ci-scoped-reader",company_code,"QUALITY",
+                            "release_inventory_lot",lot_id=lot_id,
+                            resolution="CI quality cleared",
+                        )
+                        self.assertEqual(resolved_id,qa_id)
+                        pay_id=run_scoped_write_on_cursor(
+                            cur,"ci-scoped-reader",company_code,"FINANCE",
+                            "pay_supplier",
+                            payable_id=scoped_payables[company_key],
+                            account_id=ids[company_key+"_bank"],
+                            amount=10,reference=f"CI PAY {company_key}",
+                            payment_date="2026-10-11",
+                        )
+                        incoming_id=run_scoped_write_on_cursor(
+                            cur,"ci-scoped-reader",company_code,"FINANCE",
+                            "collect_customer_payment",receivable_id=ar_id,
+                            account_id=ids[company_key+"_bank"],
+                            amount=12,reference=f"CI RECEIVE {company_key}",
+                            payment_date="2026-10-11",
+                        )
+                        for txn_id in (pay_id,incoming_id):
+                            cur.execute(
+                                'SELECT legal_entity_id FROM '
+                                '"ct_app"."finance_transactions" WHERE id=%s',
+                                (txn_id,),
+                            )
+                            self.assertEqual(cur.fetchone()[0],ids[company_key])
+                        cur.execute(
+                            'SELECT balance FROM "ct_app"."cash_accounts" '
+                            'WHERE id=%s AND legal_entity_id=%s',
+                            (ids[company_key+"_bank"],ids[company_key]),
+                        )
+                        self.assertEqual(cur.fetchone()[0],1002)
+                        cur.execute(
+                            'SELECT legal_entity_id,status FROM '
+                            '"ct_app"."quality_cases" WHERE id=%s',
+                            (qa_id,),
+                        )
+                        self.assertEqual(cur.fetchone(),(ids[company_key],"Kapandı"))
+                        cur.execute(
+                            'SELECT count(*) FROM "ct_app"."company_operation_audit" '
+                            'WHERE principal_id=%s AND legal_entity_id=%s',
+                            ("ci-scoped-reader",ids[company_key]),
+                        )
+                        self.assertEqual(cur.fetchone()[0],8)
+
+                    # Cross-company documents/banks/lots cannot be reused.
+                    company_a=group_codes[0]
+                    rejected_operations=(
+                        ("receive_shipment",dict(shipment_id=scoped_shipments["CI_D"])),
+                        ("hold_inventory_lot",dict(
+                            lot_id=lot_id,case_no="CI WRONG QA",hold_kg=1,
+                            reason="CI wrong owner")),
+                        ("release_inventory_lot",dict(
+                            lot_id=lot_id,resolution="CI wrong company")),
+                        ("pay_supplier",dict(
+                            payable_id=scoped_payables["CI_D"],
+                            account_id=ids["CI_A_bank"],
+                            amount=1,reference="CI WRONG AP",payment_date="2026-10-11")),
+                        ("pay_supplier",dict(
+                            payable_id=scoped_payables["CI_A"],
+                            account_id=ids["CI_D_bank"],
+                            amount=1,reference="CI WRONG BANK",payment_date="2026-10-11")),
+                        ("collect_customer_payment",dict(
+                            receivable_id=receivable_D,
+                            account_id=ids["CI_A_bank"],amount=1,
+                            reference="CI WRONG AR",payment_date="2026-10-11")),
+                        ("collect_customer_payment",dict(
+                            receivable_id=receivable_A,
+                            account_id=ids["CI_D_bank"],amount=1,
+                            reference="CI WRONG INCOME BANK",
+                            payment_date="2026-10-11")),
+                    )
+                    for action,inputs in rejected_operations:
+                        with self.subTest(rejected_action=action,inputs=inputs):
+                            with self.assertRaises(ScopedWriteDenied):
+                                run_scoped_write_on_cursor(
+                                    cur,"ci-scoped-reader",company_a,
+                                    "ADMIN",action,**inputs,
+                                )
+                    with self.assertRaises(ScopedWriteDenied) as duplicate:
+                        run_scoped_write_on_cursor(
+                            cur,"ci-scoped-reader",company_a,"FINANCE",
+                            "pay_supplier",payable_id=scoped_payables["CI_A"],
+                            account_id=ids["CI_A_bank"],amount=1,
+                            reference="CI PAY CI_A",payment_date="2026-10-11",
+                        )
+                    self.assertEqual(duplicate.exception.code,"duplicate_payment")
+                    cur.execute(
+                        'SELECT count(*) FROM "ct_app"."company_operation_audit" '
+                        'WHERE principal_id=%s', ("ci-scoped-reader",),
+                    )
+                    self.assertEqual(cur.fetchone()[0],16)
                     # Wrong tenant and wrong warehouse are denied before INSERT.
                     for target_code in (group_codes[1],group_codes[2]):
                         with self.assertRaises(ScopedWriteDenied):
@@ -495,7 +660,7 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                         'WHERE principal_id=%s',
                         ("ci-scoped-reader",),
                     )
-                    self.assertEqual(cur.fetchone()[0],6)
+                    self.assertEqual(cur.fetchone()[0],16)
 
                     # Even a string called "admin" is not privileged.
                     self.assertEqual(
