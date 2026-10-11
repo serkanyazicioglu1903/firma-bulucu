@@ -10,7 +10,7 @@ from ai_manager import render_ai_manager
 from sales_matching import normalize, matched_sectors
 from management_reports import render_management_reports
 from postgres_workspace import render_postgres_workspace
-from postgres_system import render_postgres_system, render_postgres_quick_backup, render_postgres_quick_reconciliation
+from postgres_system import render_postgres_system, render_postgres_quick_backup, render_postgres_quick_reconciliation, render_postgres_quick_acceptance
 from scripts.live_backend import postgres_url, ready_for_live
 from scripts.postgres_compat import CompatConnection, pg_query_df
 from scripts.postgres_operational_write import verified_live_request
@@ -2143,6 +2143,7 @@ def _render_control_tower_interface(live_postgres=False):
         # remains reachable even when iOS Safari fails to paint nested tabs.
         render_postgres_quick_backup(postgres_url())
         render_postgres_quick_reconciliation(postgres_url())
+        render_postgres_quick_acceptance(postgres_url())
     else:
         st.caption(
             "🟠 Pilot veri modu: Bu sürüm SQLite kullanıyor. "
