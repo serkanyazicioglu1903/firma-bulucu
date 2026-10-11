@@ -22,14 +22,31 @@ MODE_SECRET = "CT_COMPANY_SCOPED_VIEW_MODE"
 REVIEW_MODE = "REVIEW_ONLY_WITH_SIGNED_SESSION"
 
 
-def scoped_company_view_enabled():
-    """An explicit reviewer-activated mode, NOT enabled by this PR."""
+def company_review_mode_state():
+    """Return disabled, review or invalid; never silently downgrade a typo.
+
+    Conflicting Streamlit Secret and environment values block the entire app.
+    The only enabled value is the explicit read-only, signed-session mode.
+    An invalid configuration must NOT silently restore unscoped legacy tabs.
+    """
     try:
-        setting = st.secrets.get(MODE_SECRET, "")
+        secret_value = st.secrets.get(MODE_SECRET, "")
     except Exception:
-        setting = ""
-    setting = setting or os.environ.get(MODE_SECRET, "")
-    return isinstance(setting, str) and setting == REVIEW_MODE
+        secret_value = ""
+    environment_value = os.environ.get(MODE_SECRET, "")
+    if not all(isinstance(v, str) for v in (secret_value, environment_value)):
+        return "invalid"
+    configured = [v for v in (secret_value, environment_value) if v]
+    if not configured:
+        return "disabled"
+    if all(value == REVIEW_MODE for value in configured):
+        return "review"
+    return "invalid"
+
+
+def scoped_company_view_enabled():
+    """True ONLY for a valid, explicit, signed-session review configuration."""
+    return company_review_mode_state() == "review"
 
 
 def render_scoped_company_workspace(url):
