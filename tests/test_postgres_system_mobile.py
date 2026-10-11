@@ -196,5 +196,89 @@ class MobileSystemTests(unittest.TestCase):
         ))
 
 
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="VIEWER")
+    def test_bulk_import_never_available_to_non_admin(self, role, st):
+        system.render_postgres_master_import(URL)
+        st.expander.assert_not_called()
+        st.file_uploader.assert_not_called()
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    def test_bulk_import_initially_template_only_no_writes(self, role, st):
+        st.selectbox.return_value = "Müşteriler"
+        st.file_uploader.return_value = None
+        with patch("scripts.postgres_master_import.import_new_masters") as create:
+            system.render_postgres_master_import(URL)
+        create.assert_not_called()
+        st.download_button.assert_called_once()
+        self.assertTrue(
+            st.download_button.call_args.kwargs["data"].startswith(b"\xef\xbb\xbf")
+        )
+        st.button.assert_not_called()
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    def test_bulk_import_preview_without_confirmation_is_read_only(
+        self, role, st,
+    ):
+        from unittest.mock import MagicMock
+        uploaded = MagicMock()
+        from scripts.postgres_master_import import template_csv, parse_master_csv
+        uploaded.getvalue.return_value = (
+            template_csv("Müşteriler") + b"Onayli CI Musteri,Turkiye,,,,,,\r\n"
+        )
+        self.assertEqual(
+            parse_master_csv(uploaded.getvalue(), "Müşteriler")[0],
+            "ok", "The actual CSV template must be valid before UI submission.",
+        )
+        st.selectbox.return_value = "Müşteriler"
+        st.file_uploader.return_value = uploaded
+        st.checkbox.return_value = False
+        st.text_input.return_value = ""
+        st.button.return_value = False
+        with patch("scripts.postgres_master_import.import_new_masters") as create:
+            system.render_postgres_master_import(URL)
+        self.assertTrue(st.dataframe.called, repr(st.error.call_args_list))
+        self.assertEqual(st.button.call_args.kwargs["disabled"], True)
+        create.assert_not_called()
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    @patch.object(system, "current_user", return_value={"username": "ci-admin"})
+    def test_bulk_import_confirmed_real_data_batch_is_explicitly_requested(
+        self, user, role, st,
+    ):
+        from unittest.mock import MagicMock
+        from scripts.postgres_master_import import APPROVAL
+        uploaded = MagicMock()
+        from scripts.postgres_master_import import template_csv, parse_master_csv
+        uploaded.getvalue.return_value = (
+            template_csv("Müşteriler") + b"Onayli CI Musteri,Turkiye,,,,,,\r\n"
+        )
+        self.assertEqual(
+            parse_master_csv(uploaded.getvalue(), "Müşteriler")[0],
+            "ok", "The actual CSV template must be valid before UI submission.",
+        )
+        st.selectbox.return_value = "Müşteriler"
+        st.file_uploader.return_value = uploaded
+        st.checkbox.return_value = True
+        st.text_input.return_value = APPROVAL
+        st.button.return_value = True
+        with patch(
+            "scripts.postgres_master_import.import_new_masters",
+            return_value=("ok", 1),
+        ) as create:
+            system.render_postgres_master_import(URL)
+        self.assertTrue(create.called, repr(st.error.call_args_list))
+        kwargs = create.call_args.kwargs
+        self.assertEqual(kwargs["role"], "ADMIN")
+        self.assertEqual(kwargs["actor"], "ci-admin")
+        self.assertEqual(kwargs["domain"], "Müşteriler")
+        self.assertEqual(kwargs["confirmation"], APPROVAL)
+        self.assertIs(kwargs["backup_confirmed"], True)
+        st.success.assert_called()
+
+
 if __name__ == "__main__":
     unittest.main()

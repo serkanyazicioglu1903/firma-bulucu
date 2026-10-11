@@ -99,6 +99,35 @@ geri yüklenebildiğini gösterebilir, ancak kullanıcının iPhone'da indirdiğ
 yapılandırmasını veya felaket kurtarma planını da doğrulamaz. Bu iki canlı
 ortam kalemi ayrıca kontrol edilmeden tam üretim sertifikası verilmez.
 
+## Gerçek şirket kayıtlarının kontrollü CSV aktarımı
+
+Canlı PostgreSQL ekranındaki **📥 Şirket verilerini içe aktar — hızlı erişim**
+bölümü yalnızca ADMIN kullanıcıya açıktır. Buradan üç ayrı boş UTF-8 CSV
+şablonu indirilebilir: Müşteriler, Ürünler (üretici/tedarikçi bilgisi dahil)
+ve Depolar. Uygulama hiçbir hayali veri önceden doldurmaz.
+
+Dosya seçildikten sonra (en fazla 150 kayıt / 512 KB) bütün alanlar,
+zorunlu değerler, maksimum uzunluklar, aynı dosyadaki mükerrer adlar ve
+para birimi/depo tipi doğrulanır. İlk 20 satır önizlenir; **önizleme hiçbir
+veritabanı işlemi yapmaz**. Kalıcı içe aktarım ancak aynı işlem sırasında:
+
+1. Yönetici olarak giriş yapılmışsa;
+2. Güncel PostgreSQL yedeğinin güvenli saklandığı onay kutusuyla belirtilmişse;
+3. `ONAYLI_KALICI_AKTARIM` ifadesi yazılmışsa; ve
+4. **Yeni kayıt ekle** düğmesine açıkça basılmışsa
+
+çalışır. Her satır yeniden doğrulanır. Mevcut PostgreSQL `ct_app` üzerinde
+her kaydın adı kontrol edilir. Dosyadaki tek bir mevcut ad bile tüm toplu
+işlemi durdurur; daha önce bu dosyadan eklenen kayıtlar aynı transaction
+içinde geri alınır. Başarılı eklemelerin tamamı aktörü belirtilmiş
+`audit_log` satırlarıyla aynı transaction içinde saklanır.
+
+**İçe aktarma finans, satın alma siparişleri veya stok hareketi yaratmaz.**
+İçe aktarım, müşteri ve tedarikçi isimlerini veya ticari koşulları kendisi
+araştırmaz; yalnızca yönetici tarafından onaylı CSV içeriğini kaydeder.
+Kaynak şablonlar gerçek şirket verileriyle doldurulmadan gerçek şirket
+kayıtlarının yüklendiği iddia edilemez.
+
 ## Critical limitations and rollback
 
 - The GitHub CI test verifies the code against PostgreSQL 16 but **does not
