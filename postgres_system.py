@@ -29,6 +29,14 @@ def _render_backup(url, key_prefix):
 
         with st.spinner("26 PostgreSQL tablosu salt okunur yedekleniyor..."):
             status, archive = export_postgres_backup(url)
+        if status == "company_scope_unsupported":
+            st.error(
+                "Dört şirketli şema algılandı. Eski 26-tablo ZIP dosyası "
+                "şirket kayıtları ve izinleri dahil TAM yedek değildir. "
+                "Bu indirme güvenlik için engellendi. Onaylı sağlayıcı "
+                "tam yedeği ve bağımsız geri yükleme tatbikatı gerekir."
+            )
+            return
         if status != "ok":
             st.error("Yedek hazırlanamadı; şema, bağlantı veya boyut sınırını kontrol edin.")
             return
@@ -94,7 +102,14 @@ def render_postgres_quick_encrypted_backup(url):
                     enc_status, payload = encrypt_export_zip(archive, pw)
                 else:
                     enc_status, payload = "export_failed", None
-            if enc_status != "encrypted":
+            if status == "company_scope_unsupported":
+                st.error(
+                    "Dört şirketli şema algılandı. Eski 26-tablo ZIP/AES "
+                    "yedeği yeni şirket ve yetki tablolarını kapsamaz. "
+                    "Eksik yedek oluşturulmadı; tam sağlayıcı yedeği ve "
+                    "ayrı geri yükleme doğrulaması gerekir."
+                )
+            elif enc_status != "encrypted":
                 st.error(
                     "Şifreli yedek hazırlanamadı. Veri değiştirilmedi. "
                     "Yedekleme sınırlarını ve parolanı kontrol et."
