@@ -356,6 +356,147 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                     self.assertNotIn(
                         "total_converted", overview
                     )
+                    # CI-ONLY atomic writes with exact entity/role grants;
+                    # every DDL and fictional row is rolled back below.
+                    from scripts.postgres_scoped_company_write_rehearsal import (
+                        ScopedWriteDenied, rehearsal_extra_ddl,
+                        run_scoped_write_on_cursor,
+                    )
+                    for statement in rehearsal_extra_ddl():
+                        cur.execute(statement)
+                    cur.execute(
+                        'INSERT INTO "ct_app"."product_catalog" '
+                        '(name,supplier) VALUES (%s,%s) RETURNING id',
+                        ("CI SHARED ATOMIC WRITE PRODUCT","CI VENDOR"),
+                    )
+                    shared_product_id = int(cur.fetchone()[0])
+                    scoped_purchases = {}
+                    scoped_bank_warehouses = {}
+                    for key, company_code in (("CI_A", group_codes[0]),
+                                              ("CI_D", group_codes[3])):
+                        cur.execute(
+                            'INSERT INTO "ct_app"."warehouses" '
+                            '(name,city) VALUES (%s,%s) RETURNING id',
+                            (f"CI OWNED DEPOT {key}", "CI City"),
+                        )
+                        warehouse_id = int(cur.fetchone()[0])
+                        scoped_bank_warehouses[key] = warehouse_id
+                        cur.execute(
+                            'INSERT INTO "ct_app"."company_warehouse_scope" '
+                            '(warehouse_id,legal_entity_id) VALUES (%s,%s)',
+                            (warehouse_id,ids[key]),
+                        )
+                        cur.execute(
+                            'INSERT INTO "ct_app"."company_write_grants" '
+                            '(principal_id,legal_entity_id,can_write) '
+                            'VALUES (%s,%s,TRUE)',
+                            ("ci-scoped-reader",ids[key]),
+                        )
+                        po = run_scoped_write_on_cursor(
+                            cur,"ci-scoped-reader",company_code,"PURCHASING",
+                            "create_purchase_order",
+                            po_number=f"CI ATOMIC PO {key}",
+                            supplier="CI VENDOR",
+                            product_id=shared_product_id,
+                            warehouse_id=warehouse_id,
+                            quantity_kg=10,
+                            unit_price=3,
+                            currency="EUR",
+                        )
+                        scoped_purchases[key] = po
+                        shipment = run_scoped_write_on_cursor(
+                            cur,"ci-scoped-reader",company_code,"PURCHASING",
+                            "create_shipment", purchase_order_id=po,
+                            shipment_ref=f"CI ATOMIC SHIPMENT {key}",
+                            quantity_kg=7,
+                        )
+                        payable = run_scoped_write_on_cursor(
+                            cur,"ci-scoped-reader",company_code,"FINANCE",
+                            "create_payable",purchase_order_id=po,
+                            supplier="CI VENDOR",
+                            invoice_no=f"CI ATOMIC INVOICE {key}",
+                            due_date="2026-12-01",
+                            amount=21,
+                            currency="EUR",
+                        )
+                        for table, ident in (
+                            ("purchase_orders",po),("shipments",shipment),
+                            ("payables",payable)
+                        ):
+                            cur.execute(
+                                f'SELECT legal_entity_id FROM "ct_app"."{table}" '
+                                'WHERE id=%s',(ident,),
+                            )
+                            self.assertEqual(cur.fetchone()[0], ids[key])
+                        cur.execute(
+                            'SELECT count(*) FROM "ct_app"."company_operation_audit" '
+                            'WHERE principal_id=%s AND legal_entity_id=%s',
+                            ("ci-scoped-reader",ids[key]),
+                        )
+                        self.assertEqual(cur.fetchone()[0],3)
+
+                    # Wrong tenant and wrong warehouse are denied before INSERT.
+                    for target_code in (group_codes[1],group_codes[2]):
+                        with self.assertRaises(ScopedWriteDenied):
+                            run_scoped_write_on_cursor(
+                                cur,"ci-scoped-reader",target_code,"PURCHASING",
+                                "create_shipment",
+                                purchase_order_id=scoped_purchases["CI_A"],
+                                shipment_ref="CI REJECTED SHIPMENT",
+                                quantity_kg=1,
+                            )
+                    for payload in (
+                        ("create_shipment", dict(
+                            purchase_order_id=scoped_purchases["CI_D"],
+                            shipment_ref="CI WRONG COMPANY SHIPMENT",
+                            quantity_kg=1)),
+                        ("create_payable",dict(
+                            purchase_order_id=scoped_purchases["CI_D"],
+                            supplier="CI VENDOR",invoice_no="CI WRONG COMPANY INVOICE",
+                            due_date="2026-12-01",amount=10,currency="EUR")),
+                        ("create_purchase_order",dict(
+                            po_number="CI WRONG WAREHOUSE",supplier="CI VENDOR",
+                            product_id=shared_product_id,
+                            warehouse_id=scoped_bank_warehouses["CI_D"],
+                            quantity_kg=10,unit_price=1,currency="EUR")),
+                    ):
+                        operation, params = payload
+                        with self.assertRaises(ScopedWriteDenied):
+                            run_scoped_write_on_cursor(
+                                cur,"ci-scoped-reader",group_codes[0],
+                                "ADMIN",operation,**params,
+                            )
+                    with self.assertRaises(ScopedWriteDenied):
+                        run_scoped_write_on_cursor(
+                            cur,"ci-scoped-reader",group_codes[0],
+                            "VIEWER","create_purchase_order",
+                            po_number="CI VIEWER DENIED",supplier="CI VENDOR",
+                            product_id=shared_product_id,
+                            warehouse_id=scoped_bank_warehouses["CI_A"],
+                            quantity_kg=10,unit_price=1,currency="EUR",
+                        )
+                    # Removing write access blocks NEW writes even while
+                    # read access remains; the prior three operations remain.
+                    cur.execute(
+                        'UPDATE "ct_app"."company_write_grants" SET can_write=FALSE '
+                        'WHERE principal_id=%s AND legal_entity_id=%s',
+                        ("ci-scoped-reader",ids["CI_A"]),
+                    )
+                    with self.assertRaises(ScopedWriteDenied):
+                        run_scoped_write_on_cursor(
+                            cur,"ci-scoped-reader",group_codes[0],
+                            "PURCHASING","create_shipment",
+                            purchase_order_id=scoped_purchases["CI_A"],
+                            shipment_ref="CI REVOKED WRITE",
+                            quantity_kg=1,
+                        )
+                    cur.execute(
+                        'SELECT count(*) FROM "ct_app"."company_operation_audit" '
+                        'WHERE principal_id=%s',
+                        ("ci-scoped-reader",),
+                    )
+                    self.assertEqual(cur.fetchone()[0],6)
+
                     # Even a string called "admin" is not privileged.
                     self.assertEqual(
                         read_company_records_on_cursor(
@@ -385,6 +526,12 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                 "AND c.relname='legal_entities'"
             )
             self.assertEqual(cur.fetchone()[0], 0)
+            for table in ("company_read_grants", "company_write_grants",
+                          "company_warehouse_scope", "company_operation_audit"):
+                cur.execute(
+                    "SELECT to_regclass(%s)", ("ct_app." + table,)
+                )
+                self.assertIsNone(cur.fetchone()[0])
             cur.execute(
                 "SELECT COUNT(*) FROM information_schema.columns "
                 "WHERE table_schema='ct_app' AND column_name='legal_entity_id'"
