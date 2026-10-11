@@ -144,6 +144,47 @@ def render_postgres_quick_reconciliation(url):
         _render_reconciliation(url, "ct_pg_quick_reconciliation_run")
 
 
+def render_postgres_quick_acceptance(url):
+    """Conservative operator launch status; never alters Supabase rows."""
+    if current_role() != "ADMIN":
+        return
+    with st.expander("📋 Canlı kullanım kabul raporu — hızlı erişim"):
+        st.caption(
+            "Boş stok veya finans tablolarında sıfır tutarsızlık, "
+            "o iş akışının gerçek ortamda sınandığı anlamına gelmez."
+        )
+        if st.button("Kabul durumunu salt okunur kontrol et", key="ct_pg_acceptance_run"):
+            from scripts.postgres_acceptance import evaluate_acceptance
+
+            with st.spinner("Canlı veri durumunu inceliyorum..."):
+                report = evaluate_acceptance(url)
+            if report["status"] == "failed":
+                st.error("Kabul kontrolü başarısız; PostgreSQL şemasını kontrol edin.")
+                return
+            if report["critical"]:
+                st.error(
+                    f"{report['critical']} kritik veri tutarsızlığı bulundu; "
+                    "iş kayıtlarına devam etmeden inceleyin."
+                )
+            else:
+                st.info(
+                    "Veri bütünlüğü kurallarında kritik hata bulunmadı; "
+                    "ancak üretim kabulü ve finans doğrulaması tamamlanmadı."
+                )
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Bölüm": area["area"],
+                        "Kayıt": area["record_count"],
+                        "Değerlendirme": area["status"],
+                    }
+                    for area in report["areas"]
+                ]), width="stretch", hide_index=True,
+            )
+            for gate in report["external_gates"]:
+                st.caption("• " + gate)
+
+
 def render_postgres_system(url):
     st.markdown("### ⚙️ Sistem Yönetimi — PostgreSQL")
     if current_role() != "ADMIN":
