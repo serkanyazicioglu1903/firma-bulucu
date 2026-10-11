@@ -11,6 +11,7 @@ from sales_matching import normalize, matched_sectors
 from management_reports import render_management_reports
 from postgres_workspace import render_postgres_workspace
 from group_readiness_ui import render_group_readiness_quick
+from scoped_company_workspace_ui import (scoped_company_view_enabled, render_scoped_company_workspace)
 from postgres_system import render_postgres_quick_encrypted_backup, render_postgres_quick_backup_verify, render_postgres_system, render_postgres_quick_backup, render_postgres_quick_reconciliation, render_postgres_quick_acceptance, render_postgres_master_import, render_postgres_quick_security
 from scripts.live_backend import postgres_url, ready_for_live
 from scripts.postgres_compat import CompatConnection, pg_query_df
@@ -2091,6 +2092,12 @@ def _render_control_tower_interface(live_postgres=False):
         init_db()
         init_security_tables(DB_PATH)
     if not login_gate():
+        return
+    # Explicit opt-in review mode is a COMPLETE replacement for the
+    # unscoped legacy business UI, not an extra tab alongside it.
+    # Never show unscoped CRM, finance, dashboards, backups or exports here.
+    if live_postgres and scoped_company_view_enabled():
+        render_scoped_company_workspace(postgres_url())
         return
     if not live_postgres and os.environ.get(
         "AS_CONTROL_TOWER_DEMO_SEED", ""
