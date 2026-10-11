@@ -2,8 +2,7 @@
 import hashlib
 import unittest
 
-from scripts.postgres_backup_reference_hash import compare_saved_sha256
-from scripts.postgres_backup_verify import MAX_FILE_BYTES
+from scripts.postgres_backup_reference_hash import (\n    MAX_ALLOWED, compare_saved_sha256,\n)
 
 
 class BackupReferenceTests(unittest.TestCase):
@@ -28,11 +27,7 @@ class BackupReferenceTests(unittest.TestCase):
         for ref in ("BAD", "0"*63, "0"*65, "g"*64, 42, True):
             self.assertEqual(compare_saved_sha256(b"sample", ref), "invalid_reference")
         for data in ("text", None, b"", bytearray(b"sample"),
-                     b"a" * (MAX_FILE_BYTES + 1024)):
-            # A slight oversize above ZIP is still below the encrypted
-            # transport bound: reject oversize at the absolute maximum.
-            if isinstance(data, bytes) and len(data) <= MAX_FILE_BYTES + 1024:
-                continue
+                     b"a" * (MAX_ALLOWED + 1)):
             self.assertEqual(
                 compare_saved_sha256(data, hashlib.sha256(b"sample").hexdigest()),
                 "invalid_file",
