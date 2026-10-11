@@ -258,6 +258,27 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
 
 
 
+    def test_live_security_posture_is_read_only_and_never_certifies_supabase(self):
+        """Security audit introspects disposable Docker PostgreSQL only."""
+        from scripts.postgres_security_audit import audit_postgres_security
+
+        before = self.execute(
+            'SELECT COUNT(*) FROM "ct_app"."audit_log"'
+        )[0]
+        report = audit_postgres_security(self.url)
+        self.assertEqual(report["status"], "review_required")
+        self.assertEqual(len(report["checks"]), 4)
+        self.assertEqual(len(report["external"]), 4)
+        self.assertTrue(any(
+            "Supabase" in item for item in report["external"]
+        ))
+        # PostgreSQL Docker test role may be elevated and TLS is disabled
+        # ONLY because it uses the narrowly allowed localhost CI database.
+        self.assertEqual(
+            self.execute('SELECT COUNT(*) FROM "ct_app"."audit_log"')[0],
+            before,
+        )
+
     def test_master_csv_import_is_atomic_and_audited_on_disposable_postgres(self):
         """Real CI-only test of customer/product/warehouse import and rollback."""
         from scripts.postgres_master_import import (
