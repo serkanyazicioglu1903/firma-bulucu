@@ -69,7 +69,7 @@ def verified_company_principal(session_state):
     if not key or not _user_registry_explicitly_configured():
         return None
     user = current_user()
-    if not isinstance(user, dict) or not isinstance(session_state, dict):
+    if not isinstance(user, dict) or not callable(getattr(session_state, "get", None)):
         return None
     username = user.get("username")
     role = user.get("role")
