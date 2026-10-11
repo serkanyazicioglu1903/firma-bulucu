@@ -56,8 +56,10 @@ def render_scoped_company_workspace(url):
     """Scoped read only. No other legacy admin widgets are reachable here."""
     st.subheader("🏢 Şirket Bazlı Operasyonlar — Güvenli İnceleme")
     st.warning(
-        "Bu mod yalnızca kayıtları görüntüler. Çok şirketli muhasebe, "
-        "CRM, stok hareketi, para transferi, içe aktarım, toplu rapor ve "
+        "Bu mod yalnızca yetkili şirket kayıtlarını görüntüler. "
+        "Müşteri ve irtibat kişi okuması ayrıca şirket sahipliği ile "
+        "fiziksel bağlantı doğrulaması ister. CRM kayıt değişikliği, "
+        "stok hareketi, para transferi, içe aktarım, toplu rapor ve "
         "konsolidasyon henüz üretim kullanımına onaylanmadı."
     )
     principal = verified_company_principal(st.session_state)
