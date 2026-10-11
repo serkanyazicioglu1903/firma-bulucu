@@ -129,7 +129,10 @@ class OwnerMappingPreflightTests(unittest.TestCase):
 
     def test_read_only_query_is_fixed_allowlisted_and_bounded(self):
         cur=MagicMock()
-        cur.fetchall.return_value=[(11,HASH,*([None]*2))]
+        cur.fetchall.side_effect=[
+            [(11,HASH,*([None]*len(p.PARENT_FKS[table])))]
+            for table in p.CRITICAL_TABLES
+        ]
         graph=p.read_owner_graph_on_cursor(cur)
         self.assertEqual(set(graph),set(p.CRITICAL_TABLES))
         self.assertEqual(cur.execute.call_count,8)
