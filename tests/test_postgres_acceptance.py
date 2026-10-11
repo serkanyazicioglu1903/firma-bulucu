@@ -39,6 +39,8 @@ class LiveAcceptanceTests(unittest.TestCase):
             next(x for x in report["areas"] if x["area"] == "Finans")["status"],
         )
         self.assertEqual(len(report["external_gates"]), 4)
+        self.assertEqual(report["group_company_count"], 4)
+        self.assertFalse(report["group_isolation_verified"])
         self.assertIn("Tüzel kişi ayrımı", report["external_gates"][0])
         self.assertFalse(report["company_scope"]["isolation_verified"])
 

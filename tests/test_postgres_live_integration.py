@@ -626,6 +626,13 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                             ),
                             "Mobile quick-access PostgreSQL backup is missing.",
                         )
+                        self.assertTrue(
+                            any(
+                                "Grup Şirketleri" in e.label
+                                for e in app.get("expander")
+                            ),
+                            "Mobile four-company readiness panel is missing.",
+                        )
 
 
     def test_encrypted_backup_roundtrip_on_disposable_postgres(self):
