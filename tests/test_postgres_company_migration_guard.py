@@ -11,19 +11,19 @@ TABLES = tuple(guard.ALLOWED_TABLES)
 class CompanyMigrationGuardTests(unittest.TestCase):
     def test_existing_legacy_schema_keeps_current_path(self):
         self.assertEqual(
-            guard.classify_schema_metadata(TABLES, (), (False, False, False)),
+            guard.classify_schema_metadata(TABLES, (), (False, False, False, False, False)),
             "legacy_schema_only",
         )
 
     def test_any_migration_marker_or_owner_column_blocks_legacy(self):
         for owner_rows, markers in (
-            ((), (True, False, False)),
-            ((), (False, True, False)),
-            ((), (False, False, True)),
-            (("purchase_orders",), (True, False, False)),
-            (TABLES[:-1], (True, True, True)),
-            (TABLES, (False, False, False)),
-            (TABLES, (True, True, False)),
+            ((), (True, False, False, False, False)),
+            ((), (False, True, False, False, False)),
+            ((), (False, False, True, False, False)),
+            (("purchase_orders",), (True, False, False, False, False)),
+            (TABLES[:-1], (True, True, True, True, True)),
+            (TABLES, (False, False, False, False, False)),
+            (TABLES, (True, True, False, False, False)),
         ):
             with self.subTest(owner=owner_rows, markers=markers):
                 self.assertEqual(
@@ -31,19 +31,19 @@ class CompanyMigrationGuardTests(unittest.TestCase):
                     "partial_company_schema",
                 )
         self.assertEqual(
-            guard.classify_schema_metadata(TABLES, TABLES, (True, True, True)),
+            guard.classify_schema_metadata(TABLES, TABLES, (True, True, True, True, True)),
             "company_schema_present",
         )
 
     def test_unexpected_or_incomplete_metadata_denied(self):
         bad = [
-            (TABLES[:-1], (), (False, False, False)),
-            (TABLES, ("unknown_table",), (False, False, False)),
-            (TABLES, ("payables", "payables"), (True, False, False)),
-            (TABLES, (), ("false", False, False)),
+            (TABLES[:-1], (), (False, False, False, False, False)),
+            (TABLES, ("unknown_table",), (False, False, False, False, False)),
+            (TABLES, ("payables", "payables"), (True, False, False, False, False)),
+            (TABLES, (), ("false", False, False, False, False)),
             (TABLES, (), None),
             (TABLES, (), (False, False)),
-            (TABLES, (), (True, 1, False)),
+            (TABLES, (), (True, 1, False, False, False)),
         ]
         for tables, cols, markers in bad:
             with self.subTest(tables=tables, cols=cols):
@@ -57,7 +57,7 @@ class CompanyMigrationGuardTests(unittest.TestCase):
         cur.fetchall.side_effect = [
             [(value,) for value in TABLES], [("payables",)],
         ]
-        cur.fetchone.return_value = (True, False, False)
+        cur.fetchone.return_value = (True, False, False, False, False)
         self.assertEqual(
             guard.company_schema_status_on_cursor(cur),
             "partial_company_schema",
