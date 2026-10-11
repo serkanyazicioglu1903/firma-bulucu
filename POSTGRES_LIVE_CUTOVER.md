@@ -78,6 +78,27 @@ A finding requires manual investigation by the responsible business team.
 The checks are also tested on a disposable local PostgreSQL CI service, with
 fictional bad-stock input to establish that anomalies are detected.
 
+## Yedekten geri yükleme tatbikatı — gerçek fakat izole PostgreSQL
+
+GitHub Actions, 26 tabloluk uygulama yedeğinin manifestini ve SHA-256
+kontrollerini doğrulayarak ZIP içeriğini yalnızca **geçici yerel PostgreSQL CI**
+veritabanındaki `ct_restore_verify` şemasına geri yükler. Bütün satırları,
+sütunları ve yabancı anahtar ilişkilerini tekrar kontrol eder. Geri yükleme
+ayrı bir transaction içinde yapılır ve doğrulama başarılı olsa bile
+**kesinlikle ROLLBACK** edilir. Böylece veritabanında kalıcı test şeması
+veya sahte kayıt kalmaz.
+
+Geri yükleme aracında üretim/Supabase URL'leri açıkça yasaklanmıştır;
+yalnızca `CT_LOCAL_POSTGRES_TEST=1` ile belirtilen sabit localhost CI
+kullanıcısı, veritabanı ve portu kabul edilir. Streamlit arayüzünde geri
+yükleme komutu veya butonu yoktur.
+
+**Sınır:** Bu tatbikat ZIP formatının bir test PostgreSQL sunucusunda
+geri yüklenebildiğini gösterebilir, ancak kullanıcının iPhone'da indirdiği
+özgül dosyaya erişmez. Supabase'in kendi otomatik yedek/PITR hizmetinin
+yapılandırmasını veya felaket kurtarma planını da doğrulamaz. Bu iki canlı
+ortam kalemi ayrıca kontrol edilmeden tam üretim sertifikası verilmez.
+
 ## Critical limitations and rollback
 
 - The GitHub CI test verifies the code against PostgreSQL 16 but **does not
