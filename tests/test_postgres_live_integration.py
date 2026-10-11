@@ -267,7 +267,7 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
         )[0]
         report = audit_postgres_security(self.url)
         self.assertEqual(report["status"], "review_required")
-        self.assertEqual(len(report["checks"]), 4)
+        self.assertEqual(len(report["checks"]), 5)
         self.assertEqual(len(report["external"]), 4)
         self.assertTrue(any(
             "Supabase" in item for item in report["external"]
@@ -494,6 +494,18 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
         decrypt_status, restored_zip = decrypt_export_zip(cipher, passphrase)
         self.assertEqual(decrypt_status, "decrypted")
         self.assertEqual(restored_zip, archive)
+
+    def test_security_role_access_audit_on_disposable_postgres(self):
+        """Read-only pg_catalog security metadata, including absent API roles."""
+        from scripts.postgres_security_audit import audit_postgres_security
+        result = audit_postgres_security(self.url)
+        self.assertEqual(result["status"], "review_required")
+        self.assertEqual(len(result["checks"]), 5)
+        api = next(
+            x for x in result["checks"] if "API rolleri" in x["label"]
+        )
+        self.assertEqual(api["status"], "uygun")
+        self.assertEqual(len(result["external"]), 4)
 
     def test_postgres_live_backup_has_26_tables_and_hash_manifest(self):
         """Export a consistent, real, read-only backup of fictional Docker data."""

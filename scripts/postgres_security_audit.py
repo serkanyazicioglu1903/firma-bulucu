@@ -3,7 +3,7 @@
 This is not a Supabase Management API client. Provider-managed PITR, scheduled
 backups, backup retention, network firewalls, password rotation and application
 permission settings cannot be proved solely by SQL and remain explicitly
-unverified. No secrets, database role names, usernames or company rows are
+unverified. No secrets, private database-login names, usernames or company rows are
 returned. Caller/UI must enforce an authenticated ADMIN session.
 """
 from scripts.postgres_connection import sslmode_for
@@ -75,6 +75,34 @@ def audit_postgres_security(url):
                     customer_read = bool(rights and rights[0])
                     audit_write = bool(rights and rights[1])
 
+                    # Check ACTUAL current API-role permissions. RLS alone
+                    # does not prove internet exposure when USAGE/GRANT is
+                    # absent. Only fixed pg_catalog aggregates are returned.
+                    cur.execute(
+                        "SELECT "
+                        "COUNT(*) FILTER (WHERE r.rolname='anon' "
+                        "AND has_schema_privilege(r.oid,n.oid,'USAGE') "
+                        "AND (has_table_privilege(r.oid,c.oid,'SELECT') "
+                        "OR has_table_privilege(r.oid,c.oid,'INSERT') "
+                        "OR has_table_privilege(r.oid,c.oid,'UPDATE') "
+                        "OR has_table_privilege(r.oid,c.oid,'DELETE'))), "
+                        "COUNT(*) FILTER (WHERE r.rolname='authenticated' "
+                        "AND has_schema_privilege(r.oid,n.oid,'USAGE') "
+                        "AND (has_table_privilege(r.oid,c.oid,'SELECT') "
+                        "OR has_table_privilege(r.oid,c.oid,'INSERT') "
+                        "OR has_table_privilege(r.oid,c.oid,'UPDATE') "
+                        "OR has_table_privilege(r.oid,c.oid,'DELETE'))) "
+                        "FROM pg_roles r "
+                        "JOIN pg_namespace n ON n.nspname='ct_app' "
+                        "JOIN pg_class c ON c.relnamespace=n.oid "
+                        "AND c.relkind='r' "
+                        "WHERE r.rolname IN ('anon','authenticated')"
+                    )
+                    grants = cur.fetchone()
+                    if grants is None:
+                        raise ValueError("Could not assess API-role privileges")
+                    anon_access, authenticated_access = (int(v) for v in grants)
+
         checks = [
             {
                 "label": "PostgreSQL TLS bağlantısı",
@@ -105,6 +133,26 @@ def audit_postgres_security(url):
                     "Streamlit yalnızca sunucu bağlantısı kullanıyorsa "
                     "RLS isteğe bağlı olabilir; doğrudan istemci erişimi varsa "
                     "güvenlik politikası mutlaka değerlendirilmelidir."
+                ),
+            },
+            {
+                "label": "Supabase API rolleri için fiili ct_app erişimi",
+                "status": (
+                    "uyarı" if (anon_access or authenticated_access)
+                    and rls_tables < total_tables else
+                    "incele" if (anon_access or authenticated_access)
+                    else "uygun"
+                ),
+                "detail": (
+                    f"Anonim rolün {anon_access}, oturum açmış API rolünün "
+                    f"{authenticated_access} tabloya şema ve tablo izinleriyle "
+                    "erişim hakkı var. RLS politika ve açık API yüzeyi "
+                    "ayrıca incelenmeli."
+                    if anon_access or authenticated_access else
+                    "Şu anda anon veya authenticated API rolleri için ct_app "
+                    "tablolarında doğrudan erişim izni bulunmadı. RLS yine de "
+                    "savunma amaçlı değerlendirilmeli; gelecekte izinler "
+                    "değişirse bu sonuç da değişebilir."
                 ),
             },
             {
