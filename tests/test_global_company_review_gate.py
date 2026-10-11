@@ -70,21 +70,21 @@ class GlobalCompanyGateTests(unittest.TestCase):
         self.assertFalse(app.exception, str(app.exception))
         self.assertEqual(len(app.tabs), 0)
         self.assertTrue(any(
-            "geçersiz" in item.message.lower() for item in app.error
+            "geçersiz" in item.value.lower() for item in app.error
         ))
 
     def test_review_mode_requires_postgres_before_any_tab(self):
         app = signed_mode_app(_REVIEW, "")
         self.assertFalse(app.exception, str(app.exception))
         self.assertEqual(len(app.tabs), 0)
-        self.assertTrue(any("PostgreSQL" in item.message for item in app.error))
+        self.assertTrue(any("PostgreSQL" in item.value for item in app.error))
 
     def test_review_mode_denies_unsigned_user_without_showing_tabs(self):
         app = signed_mode_app(_REVIEW, "postgresql://ci.invalid/fictional")
         self.assertFalse(app.exception, str(app.exception))
         self.assertEqual(len(app.tabs), 0)
         self.assertTrue(any(
-            "doğrulanmış kullanıcı oturumu yok" in item.message
+            "doğrulanmış kullanıcı oturumu yok" in item.value
             for item in app.error
         ))
         self.assertEqual(len(app.get("download_button")), 0)
