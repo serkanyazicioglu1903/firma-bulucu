@@ -267,7 +267,7 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
         )[0]
         report = audit_postgres_security(self.url)
         self.assertEqual(report["status"], "review_required")
-        self.assertEqual(len(report["checks"]), 4)
+        self.assertEqual(len(report["checks"]), 5)
         self.assertEqual(len(report["external"]), 4)
         self.assertTrue(any(
             "Supabase" in item for item in report["external"]
