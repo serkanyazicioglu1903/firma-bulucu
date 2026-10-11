@@ -73,6 +73,77 @@ class CompanyMigrationGuardTests(unittest.TestCase):
             self.assertNotIn("DELETE ", sql)
             self.assertNotIn("SELECT *", sql)
 
+    def _extended_rows(self, modified=None):
+        flags = modified or {}
+        return [
+            (name,) + tuple(flags.get(name, (False,) * 5))
+            for name in sorted(guard.EXPECTED_TABLES)
+        ]
+
+    def test_clean_26_table_metadata_preserves_existing_legacy_route(self):
+        cur = MagicMock()
+        cur.fetchall.side_effect = [
+            [(name,) for name in TABLES],
+            [],
+            self._extended_rows(),
+        ]
+        cur.fetchone.return_value = (False, False, False, False, False)
+        self.assertEqual(
+            guard.company_schema_status_on_cursor(cur), "legacy_schema_only"
+        )
+        self.assertEqual(cur.execute.call_count, 4)
+        statements = [call.args[0] for call in cur.execute.call_args_list]
+        self.assertTrue(all(sql.startswith("SELECT ") for sql in statements))
+        self.assertIn("pg_roles", statements[-1])
+        self.assertIn("pg_policy", statements[-1])
+        self.assertNotIn("FROM ct_app.", " ".join(statements))
+
+    def test_any_noncritical_owner_rls_policy_or_api_grant_blocks_legacy(self):
+        self.assertIn("customers", guard.EXPECTED_TABLES - guard.ALLOWED_TABLES)
+        for index, name in enumerate((
+            "owner_column", "rls", "force_rls", "policy", "api_grant"
+        )):
+            with self.subTest(signal=name):
+                signal = [False] * 5
+                signal[index] = True
+                cur = MagicMock()
+                cur.fetchall.side_effect = [
+                    [(table,) for table in TABLES], [],
+                    self._extended_rows({"customers": tuple(signal)}),
+                ]
+                cur.fetchone.return_value = (
+                    False, False, False, False, False
+                )
+                self.assertEqual(
+                    guard.company_schema_status_on_cursor(cur),
+                    "partial_company_schema",
+                )
+
+    def test_untrusted_or_incomplete_extended_metadata_fails_closed(self):
+        correct = self._extended_rows()
+        for bad in (
+            correct[:-1],
+            correct + [correct[-1]],
+            correct[:-1] + [("unknown",) + (False,) * 5],
+            correct[:-1] + [(correct[-1][0], "false") + (False,) * 4],
+            correct[:-1] + [("customers",) + (False,) * 5],
+            None,
+        ):
+            with self.subTest(case=str(bad)[-45:]):
+                status = guard.classify_extended_migration_signals(bad)
+                self.assertIsNone(status)
+                cur = MagicMock()
+                cur.fetchall.side_effect = [
+                    [(table,) for table in TABLES], [], bad,
+                ]
+                cur.fetchone.return_value = (
+                    False, False, False, False, False
+                )
+                self.assertEqual(
+                    guard.company_schema_status_on_cursor(cur),
+                    "metadata_unavailable",
+                )
+
     @patch("psycopg.connect")
     def test_invalid_url_never_connects(self, connect):
         self.assertEqual(
