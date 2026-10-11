@@ -221,6 +221,96 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                     cur.execute("ROLLBACK TO SAVEPOINT reject_ownerless")
                     cur.execute("RELEASE SAVEPOINT reject_ownerless")
 
+                    # Test-only DB grants: never map a real user or seed
+                    # these permissions into production.
+                    from scripts.group_company_catalog import COMPANY_LABELS
+                    from scripts.postgres_scoped_company_read import (
+                        grant_table_rehearsal_ddl, read_company_records_on_cursor,
+                    )
+                    for stmt in grant_table_rehearsal_ddl():
+                        cur.execute(stmt)
+                    group_codes = tuple(COMPANY_LABELS)
+                    fictional_ids = ("CI_A", "CI_B", "CI_C", "CI_D")
+                    for key, company_code in zip(fictional_ids, group_codes):
+                        cur.execute(
+                            'UPDATE "ct_app"."legal_entities" SET code=%s WHERE id=%s',
+                            (company_code, ids[key]),
+                        )
+                    # Grant only companies A and D to a fictional reader.
+                    for key in ("CI_A", "CI_D"):
+                        cur.execute(
+                            'INSERT INTO "ct_app"."company_read_grants" '
+                            '(principal_id,legal_entity_id,can_read) '
+                            'VALUES (%s,%s,TRUE)',
+                            ("ci-scoped-reader", ids[key]),
+                        )
+                    # A viewer of one company must not see B or C ledgers.
+                    for code in (group_codes[1], group_codes[2]):
+                        for workspace in ("Satın Alma", "Banka / Kasa",
+                                          "Finans Hareketleri"):
+                            result, rows = read_company_records_on_cursor(
+                                cur, "ci-scoped-reader", code, workspace
+                            )
+                            self.assertEqual((result, rows), ("forbidden", []))
+                    for key, code in (("CI_A", group_codes[0]),
+                                      ("CI_D", group_codes[3])):
+                        result, rows = read_company_records_on_cursor(
+                            cur, "ci-scoped-reader", code, "Satın Alma"
+                        )
+                        self.assertEqual(result, "ok")
+                        # Earlier synthetic CI tests may have already created
+                        # additional A-owned records; cardinality != 1 is OK.
+                        self.assertIn(
+                            ids[key + "_po"], {row["id"] for row in rows}
+                        )
+                        for row in rows:
+                            cur.execute(
+                                'SELECT legal_entity_id FROM "ct_app"."purchase_orders" '
+                                'WHERE id=%s', (row["id"],),
+                            )
+                            self.assertEqual(cur.fetchone()[0], ids[key])
+                        result, rows = read_company_records_on_cursor(
+                            cur, "ci-scoped-reader", code, "Banka / Kasa"
+                        )
+                        self.assertEqual(result, "ok")
+                        self.assertIn(
+                            ids[key + "_bank"], {row["id"] for row in rows}
+                        )
+                        for row in rows:
+                            cur.execute(
+                                'SELECT legal_entity_id FROM "ct_app"."cash_accounts" '
+                                'WHERE id=%s', (row["id"],),
+                            )
+                            self.assertEqual(cur.fetchone()[0], ids[key])
+                        result, rows = read_company_records_on_cursor(
+                            cur, "ci-scoped-reader", code, "Finans Hareketleri"
+                        )
+                        self.assertEqual(result, "ok")
+                        self.assertTrue(any(row["amount"] == 1 for row in rows))
+                        for row in rows:
+                            cur.execute(
+                                'SELECT legal_entity_id FROM "ct_app"."finance_transactions" '
+                                'WHERE id=%s', (row["id"],),
+                            )
+                            self.assertEqual(cur.fetchone()[0], ids[key])
+                    # Even a string called "admin" is not privileged.
+                    self.assertEqual(
+                        read_company_records_on_cursor(
+                            cur, "admin", group_codes[3], "Banka / Kasa"
+                        ), ("forbidden", []),
+                    )
+                    # Explicitly revoke A inside the disposable transaction.
+                    cur.execute(
+                        'UPDATE "ct_app"."company_read_grants" SET can_read=FALSE '
+                        'WHERE principal_id=%s AND legal_entity_id=%s',
+                        ("ci-scoped-reader", ids["CI_A"]),
+                    )
+                    self.assertEqual(
+                        read_company_records_on_cursor(
+                            cur, "ci-scoped-reader", group_codes[0], "Banka / Kasa"
+                        ), ("forbidden", []),
+                    )
+
                 raise IntentionallyRollback()
         except IntentionallyRollback:
             pass
