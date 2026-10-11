@@ -19,7 +19,9 @@ class StandaloneQuotePageTests(unittest.TestCase):
         source = (ROOT / "app.py").read_text(encoding="utf-8")
         self.assertLess(source.index("with main_tab4:"), source.index("with main_tab3:"))
         self.assertEqual(source.count("render_real_quote_workspace()"), 1)
-        self.assertIn('"pages/01_real_quote.py"', source)
+        # A dynamic page_link caused StreamlitPageNotFoundError in the live
+        # deployment even though the CI default page registry accepted it.
+        self.assertFalse(any(line.lstrip().startswith("st.page_link(") for line in source.splitlines()))
 
     def _run_page_fresh_process(self, role, mode):
         script = r'''
@@ -62,6 +64,45 @@ print("STANDALONE_QUOTE_OK")
             (outcome.stdout + "\n" + outcome.stderr)[-5500:],
         )
         self.assertIn("STANDALONE_QUOTE_OK", outcome.stdout)
+
+    def test_main_app_quote_survives_unavailable_page_registry(self):
+        """The primary quote form must never depend on page discovery."""
+        script = r'''
+import os
+from pathlib import Path
+from unittest.mock import patch
+import streamlit as st
+from streamlit.testing.v1 import AppTest
+
+app = AppTest.from_file("app.py", default_timeout=60)
+app.session_state["ct_user"] = {
+    "username": "fictional-operator", "display_name": "CI",
+    "role": "ADMIN",
+}
+app.session_state["ct_session_id"] = "fictional-session"
+with patch.object(st, "page_link", side_effect=RuntimeError("no page registry")):
+    app.run()
+assert not app.exception, str(app.exception)
+assert any("Gerçek Teklif" in sub.value for sub in app.subheader)
+assert any("Miktar (kg)" in inp.label for inp in app.get("number_input"))
+print("ROOT_QUOTE_NO_PAGE_REGISTRY_OK")
+'''
+        env = dict(os.environ)
+        env["CT_COMPANY_SCOPED_VIEW_MODE"] = ""
+        env.pop("AS_CONTROL_TOWER_DEMO_SEED", None)
+        with __import__("tempfile").TemporaryDirectory() as directory:
+            env["AS_CONTROL_TOWER_DB_PATH"] = str(
+                Path(directory) / "throwaway_ui_test.db"
+            )
+            outcome = subprocess.run(
+                [sys.executable, "-c", script], cwd=ROOT, env=env,
+                text=True, capture_output=True, timeout=90, check=False,
+            )
+        self.assertEqual(
+            outcome.returncode, 0,
+            (outcome.stdout + "\\n" + outcome.stderr)[-5000:],
+        )
+        self.assertIn("ROOT_QUOTE_NO_PAGE_REGISTRY_OK", outcome.stdout)
 
     def test_isolated_page_shows_zero_input_quote_controls(self):
         self._run_page_fresh_process("ADMIN", "")
