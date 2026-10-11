@@ -10,6 +10,7 @@ import zipfile
 from scripts.postgres_live_schema import schema_ddl_steps
 from scripts.postgres_restore_drill import (
     _parse_and_verify_zip, verify_disposable_backup_restore,
+    verify_disposable_encrypted_restore,
 )
 
 LOCAL_URL = "postgresql://ct_ci:ci-dummy-only@127.0.0.1:5432/ct_ci_control_tower"
@@ -50,6 +51,38 @@ class RestoreDrillGuardTests(unittest.TestCase):
                 PRODUCTION_URL, zip_sample()[0]
             )
         self.assertEqual((result, data), ("forbidden", None))
+
+    def test_encrypted_restore_disallows_supabase_even_with_test_flags(self):
+        from scripts.postgres_encrypted_backup import encrypt_export_zip
+
+        _, encrypted = encrypt_export_zip(
+            zip_sample()[0], "fictional-strong-passphrase-for-CI"
+        )
+        with patch.dict(os.environ, {"CT_LOCAL_POSTGRES_TEST": "1"}):
+            self.assertEqual(
+                verify_disposable_encrypted_restore(
+                    PRODUCTION_URL, encrypted, "fictional-strong-passphrase-for-CI"
+                ), ("forbidden", None),
+            )
+        with patch.dict(os.environ, {"CT_LOCAL_POSTGRES_TEST": "0"}):
+            self.assertEqual(
+                verify_disposable_encrypted_restore(
+                    LOCAL_URL, encrypted, "fictional-strong-passphrase-for-CI"
+                ), ("forbidden", None),
+            )
+
+    def test_encrypted_bad_password_does_not_touch_test_database(self):
+        from scripts.postgres_encrypted_backup import encrypt_export_zip
+
+        _, encrypted = encrypt_export_zip(
+            zip_sample()[0], "fictional-strong-passphrase-for-CI"
+        )
+        with patch.dict(os.environ, {"CT_LOCAL_POSTGRES_TEST": "1"}):
+            self.assertEqual(
+                verify_disposable_encrypted_restore(
+                    LOCAL_URL, encrypted, "incorrect-passphrase"
+                ), ("invalid_encrypted_archive", None),
+            )
 
     def test_ci_flag_off_rejects_localhost_too(self):
         with patch.dict(os.environ, {"CT_LOCAL_POSTGRES_TEST": "0"}):

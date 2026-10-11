@@ -5,6 +5,7 @@ navigation. A separate quick backup shortcut is accessible above the main tabs
 when the mobile System tab fails to display its body.
 """
 from datetime import datetime, timezone
+from hashlib import sha256
 
 import pandas as pd
 import streamlit as st
@@ -46,6 +47,11 @@ def _render_backup(url, key_prefix):
             + ".zip"
         )
         st.success("Yedek hazır. Aşağıdaki düğmeden hemen indirin.")
+        st.caption(
+            "Bu dosyanın SHA-256 değerini ayrı ve güvenli bir yerde sakla. "
+            "Daha sonra aynı dosyayı indirdiğini doğrulamak için kullanılır."
+        )
+        st.code(sha256(archive).hexdigest(), language="text")
         st.download_button(
             "💾 PostgreSQL yedeğini indir (özel şirket verisi)",
             data=archive,
@@ -121,6 +127,11 @@ def render_postgres_quick_encrypted_backup(url):
                     + ".asct"
                 )
                 st.success("AES-256 şifreli yedek hazır. Dosyayı güvenli yere indir.")
+                st.caption(
+                    "Şifreli dosyanın SHA-256 değerini paroladan ve dosyadan "
+                    "ayrı, güvenilir bir yerde sakla."
+                )
+                st.code(sha256(payload).hexdigest(), language="text")
                 st.download_button(
                     "🔐 Şifreli yedeği indir (.asct)",
                     data=payload, file_name=filename,
@@ -143,12 +154,26 @@ def render_postgres_quick_encrypted_backup(url):
             type="password",
             key="ct_pg_encrypted_verify_pw",
         )
+        verify_sha = st.text_input(
+            "Önceden ayrı yerde sakladığın SHA-256 (isteğe bağlı)",
+            key="ct_pg_encrypted_saved_sha256",
+            help="Dosyanın içinden kopyalanan değil, daha önce güvenle kaydettiğin değer.",
+        )
         if uploaded is not None and st.button(
             "🔎 Şifreli dosyayı doğrula",
             key="ct_pg_encrypted_verify_click",
             disabled=not bool(verify_pw),
         ):
             from scripts.postgres_encrypted_backup import inspect_encrypted_export
+            from scripts.postgres_backup_reference_hash import compare_saved_sha256
+
+            reference = compare_saved_sha256(uploaded.getvalue(), verify_sha)
+            if reference in ("mismatch", "invalid_reference", "invalid_file"):
+                st.error(
+                    "Dosya daha önce kaydettiğin SHA-256 ile eşleşmiyor "
+                    "veya SHA-256 geçersiz. Doğrulama durduruldu."
+                )
+                return
 
             with st.spinner("AES doğrulama etiketi ve ZIP tabloları inceleniyor..."):
                 status, report = inspect_encrypted_export(
@@ -167,6 +192,14 @@ def render_postgres_quick_encrypted_backup(url):
                 )
                 st.code(report["encrypted_sha256"], language="text")
                 st.caption("SHA-256 şifreli dosyaya aittir. Parolanı koru.")
+                if reference == "matched":
+                    st.success("Önceden saklanan bağımsız SHA-256 ile eşleşti.")
+                else:
+                    st.warning(
+                        "Önceden saklanmış SHA-256 verilmedi. AES bütünlüğü "
+                        "doğrulandı ancak dosyanın güvenilir kaynağı ayrıca "
+                        "teyit edilmelidir."
+                    )
 
 
 
@@ -190,8 +223,22 @@ def render_postgres_quick_backup_verify():
         if uploaded is None:
             st.info("İndirdiğin ZIP dosyasını seç; kayıtlar değiştirilmez.")
             return
+        saved_sha = st.text_input(
+            "Önceden ayrı yerde sakladığın SHA-256 (isteğe bağlı)",
+            key="ct_pg_verify_saved_sha256",
+            help="ZIP dosyasının içindeki manifest'ten değil, yedek alınırken kaydedilen değer.",
+        )
         if st.button("ZIP bütünlüğünü doğrula", key="ct_pg_verify_export_button"):
             from scripts.postgres_backup_verify import inspect_export_zip
+            from scripts.postgres_backup_reference_hash import compare_saved_sha256
+
+            reference = compare_saved_sha256(uploaded.getvalue(), saved_sha)
+            if reference in ("mismatch", "invalid_reference", "invalid_file"):
+                st.error(
+                    "ZIP daha önce kaydedilen SHA-256 ile eşleşmiyor veya "
+                    "SHA-256 geçersiz. Dosya kabul edilmedi."
+                )
+                return
 
             with st.spinner("26 tablo, SHA-256 ve kayıt yapısı doğrulanıyor..."):
                 status, report = inspect_export_zip(uploaded.getvalue())
@@ -209,6 +256,13 @@ def render_postgres_quick_backup_verify():
             st.caption("Yedek oluşturulma zamanı (UTC): " + report["exported_utc"])
             st.code(report["sha256"], language="text")
             st.caption("SHA-256, dosyayı ileride yeniden karşılaştırabilmen içindir.")
+            if reference == "matched":
+                st.success("Dosya daha önce güvenle saklanan SHA-256 ile eşleşiyor.")
+            else:
+                st.warning(
+                    "Bağımsız SHA-256 referansı sağlanmadı. ZIP iç bütünlüğü "
+                    "kaynak doğrulaması veya geri yüklenebilirlik kanıtı değildir."
+                )
             st.dataframe(
                 pd.DataFrame([
                     {"Tablo": name, "Kayıt sayısı": count}

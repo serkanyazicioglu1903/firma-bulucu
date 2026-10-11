@@ -1237,6 +1237,28 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
         self.assertEqual(decrypt_status, "decrypted")
         self.assertEqual(restored_zip, archive)
 
+        # Full AES -> authenticated decrypt -> ZIP schema/checksums ->
+        # physical PostgreSQL restore/constraints -> exact rows -> ROLLBACK.
+        # No CI file or schema survives, and no provider restore is implied.
+        from scripts.postgres_restore_drill import (
+            verify_disposable_encrypted_restore,
+        )
+        restored_status, restored_report = verify_disposable_encrypted_restore(
+            self.url, cipher, passphrase,
+        )
+        self.assertEqual(restored_status, "verified")
+        self.assertEqual(restored_report["tables"], 26)
+        self.assertTrue(restored_report["rolled_back"])
+        self.assertFalse(restored_report["production_supabase_restore_verified"])
+        self.assertIsInstance(restored_report["rows"], int)
+
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT to_regnamespace(%s)",
+                ("ct_restore_verify",),
+            )
+            self.assertIsNone(cur.fetchone()[0])
+
     def test_security_role_access_audit_on_disposable_postgres(self):
         """Read-only pg_catalog security metadata, including absent API roles."""
         from scripts.postgres_security_audit import audit_postgres_security
