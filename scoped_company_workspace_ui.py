@@ -16,6 +16,9 @@ from scripts.postgres_scoped_company_read import (
 )
 from scripts.company_session_principal import verified_company_principal
 from scripts.postgres_company_executive_snapshot import read_company_executive_snapshot
+from scripts.postgres_scoped_company_crm_read import (
+    CRM_READ_SECTIONS, read_company_crm,
+)
 
 
 MODE_SECRET = "CT_COMPANY_SCOPED_VIEW_MODE"
@@ -71,7 +74,10 @@ def render_scoped_company_workspace(url):
         key="ct_signed_company_code",
     )
     section = st.selectbox(
-        "Operasyon bölümü", ("Yönetici Özeti", *tuple(OWNED_READ_SECTIONS)),
+        "Operasyon bölümü", (
+            "Yönetici Özeti", *tuple(OWNED_READ_SECTIONS),
+            *tuple(CRM_READ_SECTIONS),
+        ),
         key="ct_signed_company_section",
     )
     st.caption(
@@ -140,13 +146,17 @@ def render_scoped_company_workspace(url):
                 "Grup içi işlemler elimine edilmedi; konsolide kâr/zarar değildir."
             )
         return
-    status, rows = read_company_records(url, principal, code, section)
+    if section in CRM_READ_SECTIONS:
+        status, rows = read_company_crm(url, principal, code, section)
+    else:
+        status, rows = read_company_records(url, principal, code, section)
     if status == "forbidden":
         st.error("Bu şirket için kayıt görüntüleme izni tanımlanmamış.")
     elif status == "not_ready":
         st.warning(
-            "Şirket sahipliği alanları ve izin tabloları henüz canlı "
-            "veritabanında tam ve doğrulanmış değil. Veri gösterilmiyor."
+            "Şirket sahipliği alanları, CRM kayıt bağları ve izin tabloları "
+            "henüz canlı veritabanında tam ve doğrulanmış değil. "
+            "Veri gösterilmiyor."
         )
     elif status != "ok":
         st.error("Güvenli veri sorgusu doğrulanamadı; kayıt gösterilmiyor.")
