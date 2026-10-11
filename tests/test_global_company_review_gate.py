@@ -22,7 +22,8 @@ def signed_mode_app(mode, url):
     """Run app as synthetic session user without valid company HMAC."""
     # The test patches the server-only URL getter, not any real DB secrets.
     with patch.dict(os.environ, {"CT_COMPANY_SCOPED_VIEW_MODE": mode}), \
-         patch("scripts.live_backend.postgres_url", return_value=url):
+         patch("scripts.live_backend.postgres_url", return_value=url), \
+         patch("security_admin.logout_button"):
         app = AppTest.from_file(_APP, default_timeout=60)
         app.session_state["ct_user"] = {
             "username": "synthetic-admin", "display_name": "CI",
