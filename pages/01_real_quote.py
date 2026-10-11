@@ -34,5 +34,5 @@ if company_review_mode_state() != "disabled":
 logout_button()
 st.title("🧮 AS Control Tower — Gerçek Teklif / Kârlılık")
 st.caption("Bağımsız, kayıtsız hesaplama: müşteri/ürün kaydı ve demo veri gerekmez.")
-st.page_link("app.py", label="← Ana uygulamaya dön")
+# Standalone page: use Streamlit’s native multipage navigation for return.
 render_real_quote_workspace()
