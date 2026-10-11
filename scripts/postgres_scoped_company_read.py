@@ -73,15 +73,15 @@ def _allowed_arguments(principal_id, company_code, section):
             isinstance(section, str) and section in OWNED_READ_SECTIONS)
 
 
-def read_company_records_on_cursor(cur, principal_id, company_code, section):
-    """Guard + limited row read INSIDE the caller's read-only transaction.
+def authorize_company_on_cursor(cur, principal_id, company_code):
+    """Deny-by-default DB ownership and grant check for all company reads.
 
-    The DB grant and matching legal_entity_id are BOTH checked by PostgreSQL,
-    not via UI roles or cached selections. Return status, records. The method
-    is intentionally not exposed as a Streamlit page or public endpoint.
+    Caller must supply an independently server-verified principal, never a
+    user-editable text field. All business queries MUST also repeat the DB
+    grant check to reject revocation or owner changes during a read.
     """
-    if not _allowed_arguments(principal_id, company_code, section):
-        return "forbidden", []
+    if not _allowed_arguments(principal_id, company_code, "Satın Alma"):
+        return "forbidden", None
     cur.execute(
         "SELECT COUNT(*) FROM information_schema.columns "
         "WHERE table_schema='ct_app' AND column_name='legal_entity_id' "
@@ -89,13 +89,13 @@ def read_company_records_on_cursor(cur, principal_id, company_code, section):
         (list(CRITICAL_TABLES),),
     )
     if int(cur.fetchone()[0]) != len(CRITICAL_TABLES):
-        return "not_ready", []
+        return "not_ready", None
     cur.execute(
         "SELECT to_regclass('ct_app.legal_entities') IS NOT NULL, "
         "to_regclass('ct_app.company_read_grants') IS NOT NULL"
     )
     if tuple(cur.fetchone()) != (True, True):
-        return "not_ready", []
+        return "not_ready", None
     cur.execute(
         'SELECT e.id FROM "ct_app"."legal_entities" e '
         'JOIN "ct_app"."company_read_grants" g ON g.legal_entity_id=e.id '
@@ -105,7 +105,24 @@ def read_company_records_on_cursor(cur, principal_id, company_code, section):
     )
     owned = cur.fetchone()
     if owned is None:
+        return "forbidden", None
+    return "ok", int(owned[0])
+
+
+def read_company_records_on_cursor(cur, principal_id, company_code, section):
+    """Guard + limited row read INSIDE the caller's read-only transaction.
+
+    The DB grant and matching legal_entity_id are BOTH checked by PostgreSQL,
+    not via UI roles or cached selections. Return status, records. The method
+    is intentionally not exposed as a Streamlit page or public endpoint.
+    """
+    if not _allowed_arguments(principal_id, company_code, section):
         return "forbidden", []
+    status, company_id = authorize_company_on_cursor(
+        cur, principal_id, company_code
+    )
+    if status != "ok":
+        return status, []
     table, columns = OWNED_READ_SECTIONS[section]
     # Quoting only compile-time, fixed SQL identifiers from this module.
     names = ", ".join('b."' + column + '"' for column in columns)
@@ -117,9 +134,7 @@ def read_company_records_on_cursor(cur, principal_id, company_code, section):
         'g.principal_id=%s AND g.can_read=TRUE '
         'ORDER BY b.id DESC LIMIT ' + str(LIMIT)
     )
-    cur.execute(statement, (int(owned[0]), company_code, principal_id))
-    from psycopg.rows import dict_row
-
+    cur.execute(statement, (company_id, company_code, principal_id))
     # Cursor factories in psycopg can be either tuples or dictionaries.
     records = cur.fetchall()
     if records and isinstance(records[0], dict):

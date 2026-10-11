@@ -15,6 +15,7 @@ from scripts.postgres_scoped_company_read import (
     OWNED_READ_SECTIONS, read_company_records,
 )
 from scripts.company_session_principal import verified_company_principal
+from scripts.postgres_company_executive_snapshot import read_company_executive_snapshot
 
 
 MODE_SECRET = "CT_COMPANY_SCOPED_VIEW_MODE"
@@ -53,7 +54,7 @@ def render_scoped_company_workspace(url):
         key="ct_signed_company_code",
     )
     section = st.selectbox(
-        "Operasyon bölümü", tuple(OWNED_READ_SECTIONS),
+        "Operasyon bölümü", ("Yönetici Özeti", *tuple(OWNED_READ_SECTIONS)),
         key="ct_signed_company_section",
     )
     st.caption(
@@ -65,6 +66,62 @@ def render_scoped_company_workspace(url):
         "Seçili şirkete ait kayıtları güvenli getir",
         key="ct_signed_company_load",
     ):
+        return
+    if section == "Yönetici Özeti":
+        status, report = read_company_executive_snapshot(url, principal, code)
+        if status == "forbidden":
+            st.error("Bu şirketin yönetici özetini görme izni tanımlı değil.")
+        elif status == "not_ready":
+            st.warning(
+                "Şirket sahipliği ve kullanıcı izinleri doğrulanmadığı "
+                "için şirket özeti gösterilmiyor."
+            )
+        elif status != "ok":
+            st.error("Şirket bazlı özet güvenle hesaplanamadı.")
+        else:
+            st.caption(
+                "Yalnızca yetkili olunan şirketin PostgreSQL kayıtlarından "
+                "hesaplandı. CRM ortak kayıtları ve grup konsolidasyonu dahil değil."
+            )
+            counts = report["counts"]
+            cols = st.columns(4)
+            for col, (title, table) in zip(cols, (
+                ("Sipariş", "purchase_orders"),
+                ("Sevkiyat", "shipments"),
+                ("Stok lotu", "inventory_lots"),
+                ("Kalite dosyası", "quality_cases"),
+            )):
+                col.metric(title, counts[table])
+            st.caption(
+                f"Stok miktarı: {counts['inventory_quantity_kg']} kg | "
+                f"Kalite blokajı: {counts['quality_hold_kg']} kg"
+            )
+            st.markdown("#### Şirket finansı — para birimi bazında")
+            finance_labels = {
+                "cash": "Banka / kasa bakiyesi",
+                "receivables_open": "Açık alacak",
+                "payables_open": "Açık borç",
+            }
+            currency_rows = [
+                {
+                    "Gösterge": finance_labels[name],
+                    "Para birimi": item["currency"],
+                    "Tutar": str(item["amount"]),
+                }
+                for name, values in report["finance_by_currency"].items()
+                for item in values
+            ]
+            if currency_rows:
+                st.dataframe(
+                    pd.DataFrame.from_records(currency_rows),
+                    width="stretch", hide_index=True,
+                )
+            else:
+                st.info("Bu şirket için finansal tutar kaydı bulunamadı.")
+            st.caption(
+                "Farklı para birimleri toplanmadı, kur dönüşümü yapılmadı. "
+                "Grup içi işlemler elimine edilmedi; konsolide kâr/zarar değildir."
+            )
         return
     status, rows = read_company_records(url, principal, code, section)
     if status == "forbidden":
