@@ -378,5 +378,80 @@ class MobileSystemTests(unittest.TestCase):
         st.error.assert_not_called()
 
 
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="VIEWER")
+    def test_encrypted_backup_hidden_from_non_admin(self, _role, st):
+        system.render_postgres_quick_encrypted_backup(URL)
+        st.expander.assert_not_called()
+        st.text_input.assert_not_called()
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    def test_encrypted_export_never_runs_without_confirmation(self, _role, st):
+        st.text_input.side_effect = ["", "", ""]
+        st.checkbox.return_value = False
+        st.file_uploader.return_value = None
+        st.button.return_value = False
+        with patch("scripts.postgres_backup.export_postgres_backup") as export:
+            system.render_postgres_quick_encrypted_backup(URL)
+        export.assert_not_called()
+        st.download_button.assert_not_called()
+        self.assertTrue(st.button.call_args.kwargs["disabled"])
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    def test_encrypted_backup_download_requires_explicit_click(
+        self, _role, st,
+    ):
+        from scripts.postgres_encrypted_backup import MAGIC
+        password = "Sample-safe-passphrase-2026!"
+        st.text_input.side_effect = [password, password, ""]
+        st.checkbox.return_value = True
+        st.file_uploader.return_value = None
+        st.button.return_value = True
+        with patch(
+            "scripts.postgres_backup.export_postgres_backup",
+            return_value=("ok", b"fictional-zip"),
+        ) as export:
+            with patch(
+                "scripts.postgres_encrypted_backup.encrypt_export_zip",
+                return_value=("encrypted", MAGIC + b"CI-only-ciphertext"),
+            ) as encrypt:
+                system.render_postgres_quick_encrypted_backup(URL)
+        export.assert_called_once_with(URL)
+        encrypt.assert_called_once_with(b"fictional-zip", password)
+        st.download_button.assert_called_once()
+        self.assertTrue(
+            st.download_button.call_args.kwargs["file_name"].endswith(".asct")
+        )
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    def test_encrypted_file_verification_without_live_database(self, _role, st):
+        from unittest.mock import MagicMock
+        upload = MagicMock()
+        upload.getvalue.return_value = b"CI only encrypted file"
+        st.text_input.side_effect = ["", "", "Safe-verify-password-2026!"]
+        st.checkbox.return_value = False
+        st.file_uploader.return_value = upload
+        st.button.side_effect = [False, True]
+        summary = {
+            "table_count": 26, "row_count": 2,
+            "encrypted_sha256": "e" * 64,
+        }
+        with patch("scripts.postgres_backup.export_postgres_backup") as export:
+            with patch(
+                "scripts.postgres_encrypted_backup.inspect_encrypted_export",
+                return_value=("verified_encrypted", summary),
+            ) as inspect:
+                system.render_postgres_quick_encrypted_backup(URL)
+        export.assert_not_called()
+        inspect.assert_called_once_with(
+            b"CI only encrypted file", "Safe-verify-password-2026!"
+        )
+        st.success.assert_called_once()
+        st.error.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
