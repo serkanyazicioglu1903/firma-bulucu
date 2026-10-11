@@ -289,6 +289,49 @@ def render_postgres_master_import(url):
                 )
 
 
+def render_postgres_quick_security(url):
+    """Read-only DB security posture; require ADMIN and an explicit click."""
+    if current_role() != "ADMIN":
+        return
+    with st.expander("🔐 PostgreSQL güvenlik kontrolü — hızlı erişim"):
+        st.caption(
+            "TLS, veritabanı rolü, tablo RLS durumu ve temel erişim "
+            "yetkileri yalnızca okunur. Supabase otomatik yedeklerinin "
+            "durumu bu sorguyla doğrulanamaz."
+        )
+        if st.button(
+            "Veritabanı güvenlik durumunu kontrol et",
+            key="ct_pg_security_posture_run",
+        ):
+            from scripts.postgres_security_audit import audit_postgres_security
+
+            with st.spinner("PostgreSQL izinleri salt okunur denetleniyor..."):
+                result = audit_postgres_security(url)
+            if result["status"] not in ("review_required",):
+                st.error(
+                    "Güvenlik durumu okunamadı. Hiçbir ayar veya kayıt değiştirilmedi."
+                )
+                return
+            st.info(
+                "Temel güvenlik ölçümleri kontrol edildi; "
+                "üretim güvenliği ve Supabase yedekleme ayarları için "
+                "yönetici incelemesi gereklidir."
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Kontrol": check["label"],
+                        "Durum": check["status"],
+                        "Açıklama": check["detail"],
+                    }
+                    for check in result["checks"]
+                ]), hide_index=True, width="stretch",
+            )
+            st.markdown("##### Supabase hesabından doğrulanması gerekenler")
+            for requirement in result["external"]:
+                st.caption("• " + requirement)
+
+
 def render_postgres_system(url):
     st.markdown("### ⚙️ Sistem Yönetimi — PostgreSQL")
     if current_role() != "ADMIN":
