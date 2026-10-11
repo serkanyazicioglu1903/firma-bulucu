@@ -145,7 +145,7 @@ class CompanyFkCatalogReviewTests(unittest.TestCase):
     @patch("psycopg.connect")
     def test_invalid_url_does_not_connect(self, connection):
         result = inspect_blueprint_fks(
-            "postgresql://invalid:secret@untrusted.example/postgres",
+            "sqlite:///invalid-source",
             fictional_blueprint(),
         )
         self.assertEqual(result["status"], "blocked")
