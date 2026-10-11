@@ -16,6 +16,7 @@ from postgres_system import render_postgres_quick_encrypted_backup, render_postg
 from scripts.live_backend import postgres_url, ready_for_live
 from scripts.postgres_compat import CompatConnection, pg_query_df
 from scripts.postgres_operational_write import verified_live_request
+from scripts.postgres_company_migration_guard import inspect_company_migration_state
 from role_portal import render_role_portal
 from security_admin import (
     audit_sql_write,
@@ -2099,6 +2100,24 @@ def _render_control_tower_interface(live_postgres=False):
     if live_postgres and scoped_company_view_enabled():
         render_scoped_company_workspace(postgres_url())
         return
+    # Migration may start after deployment; on EVERY live render prevent
+    # the company-ownerless legacy forms, exports and role portals from
+    # opening when any critical owner column or grant table is present.
+    # Safe signed review mode above remains the only allowed scoped view.
+    if live_postgres:
+        migration_state = inspect_company_migration_state(postgres_url())
+        if migration_state != "legacy_schema_only":
+            st.error(
+                "Dört şirket ayrımı kısmen veya tamamen algılandı "
+                "(ya da güvenli olarak doğrulanamadı). Şirket filtresiz "
+                "eski satın alma, stok, kalite ve finans ekranları kapatıldı."
+            )
+            st.info(
+                "Yalnızca onaylı, imzalı ve şirket izinli salt okunur "
+                "inceleme modu kullanılabilir. Gerçek veri değişikliği "
+                "ve şema geçişi için ayrıca onay gereklidir."
+            )
+            return
     if not live_postgres and os.environ.get(
         "AS_CONTROL_TOWER_DEMO_SEED", ""
     ).strip() == "1":
