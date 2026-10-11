@@ -9,6 +9,7 @@ accepted as a legal-entity grant. PostgreSQL independently validates grants.
 import hashlib
 import hmac
 import json
+import re
 
 from security_admin import _secret, current_user, load_users
 
@@ -42,8 +43,39 @@ def _user_registry_explicitly_configured():
     )
 
 
-def _signature(username, role, session_id, key):
-    message = "\x00".join((username, role, session_id)).encode("utf-8")
+# Company review sessions require an actual salted, derived password hash.
+# The legacy plain-text password fallback remains a separate app path and
+# never grants signed company scope. No password or hash is returned to UI.
+_HEX = re.compile(r"^[0-9a-f]+$")
+
+
+def _credential_binding(account):
+    value = account.get("password_hash") if isinstance(account, dict) else None
+    if not isinstance(value, str):
+        return None
+    parts = value.split("$")
+    if len(parts) != 4 or parts[0] != "pbkdf2_sha256":
+        return None
+    try:
+        rounds = int(parts[1])
+    except ValueError:
+        return None
+    if (not 200_000 <= rounds <= 1_000_000
+            or not 16 <= len(parts[2]) <= 128
+            or len(parts[3]) != 64
+            or not _HEX.fullmatch(parts[2])
+            or not _HEX.fullmatch(parts[3])):
+        return None
+    return value
+
+
+def _signature(username, role, session_id, credential_binding, key):
+    # Rotating the user's password hash revokes the previous company scope
+    # immediately at the next DB read without changing the Streamlit login.
+    # A role change or account disable is also independently checked.
+    message = "\x00".join((
+        "company-session-v2", username, role, session_id, credential_binding,
+    )).encode("utf-8")
     return hmac.new(key, message, hashlib.sha256).hexdigest()
 
 
@@ -70,7 +102,10 @@ def sign_verified_company_login(user, session_id):
                and u.get("role") == role]
     if len(matches) != 1:
         return None
-    return _signature(username, role, session_id, key)
+    credential = _credential_binding(matches[0])
+    if credential is None:
+        return None
+    return _signature(username, role, session_id, credential, key)
 
 
 def verified_company_principal(session_state):
@@ -100,7 +135,10 @@ def verified_company_principal(session_state):
                and u.get("role") == role]
     if len(matches) != 1:
         return None
-    expected = _signature(username, role, session_id, key)
+    credential = _credential_binding(matches[0])
+    if credential is None:
+        return None
+    expected = _signature(username, role, session_id, credential, key)
     if not hmac.compare_digest(actual, expected):
         return None
     return username
