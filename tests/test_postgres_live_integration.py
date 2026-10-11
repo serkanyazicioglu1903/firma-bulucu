@@ -138,6 +138,66 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
             cur.execute('SELECT COUNT(*) FROM "ct_app"."audit_log"')
             self.assertEqual(cur.fetchone()[0], before)
 
+    def test_four_company_fk_blueprint_against_actual_disposable_catalog(self):
+        """A real FK is required; a proposed name alone grants no access.
+
+        Read pg_catalog only. The disposable ct_app legacy schema has no
+        company owner columns yet, so even a valid FK is NOT live-ready.
+        """
+        from scripts.company_fk_catalog_review import inspect_blueprint_fks_on_cursor
+        from scripts.group_company_catalog import COMPANY_LABELS
+        from scripts.postgres_company_full_coverage import REVIEW_GROUPS
+
+        companies = [
+            {"code": code,
+             "legal_name": f"CI Fictional Entity {number}",
+             "evidence_ref": f"CI-LEGAL-EVIDENCE-{number}"}
+            for number, code in enumerate(COMPANY_LABELS, 1)
+        ]
+        tables = []
+        for group, names in REVIEW_GROUPS.items():
+            for name in names:
+                mode = ("shared_candidate" if group == "shared_master_decision"
+                        else "internal_only" if group == "internal_access_decision"
+                        else "direct_owner")
+                tables.append({
+                    "table": name, "mode": mode, "parent_table": None,
+                    "fk_column": None, "evidence_ref": "CI-ARCH-REVIEW",
+                })
+        by_name = {row["table"]: row for row in tables}
+        by_name["contacts"].update(
+            mode="parent_scoped", parent_table="customers",
+            fk_column="customer_id",
+        )
+        by_name["activities"].update(
+            mode="parent_scoped", parent_table="customers",
+            fk_column="customer_id",
+        )
+        blueprint = {"companies": companies, "tables": tables}
+        with self.conn.transaction():
+            with self.conn.cursor() as cur:
+                cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                allowed = inspect_blueprint_fks_on_cursor(cur, blueprint)
+                self.assertEqual(allowed["status"], "review_required", allowed)
+                self.assertEqual(allowed["validated_parent_paths"], 2)
+                self.assertFalse(allowed["database_company_isolation_verified"])
+                self.assertFalse(allowed["production_approved"])
+
+                # Opportunity-to-customer FK exists physically but is
+                # NULLABLE in the current schema: no safe inherited owner.
+                by_name["contacts"].update(
+                    mode="direct_owner", parent_table=None, fk_column=None,
+                )
+                by_name["activities"].update(
+                    mode="direct_owner", parent_table=None, fk_column=None,
+                )
+                by_name["opportunities"].update(
+                    mode="parent_scoped", parent_table="customers",
+                    fk_column="customer_id",
+                )
+                denied = inspect_blueprint_fks_on_cursor(cur, blueprint)
+                self.assertEqual(denied["issue_codes"], ("nullable_parent_fk",))
+
     def test_legal_entity_constraints_rehearsed_then_rolled_back(self):
         """Four fictional entities, real FK checks, disposable CI only.
 
