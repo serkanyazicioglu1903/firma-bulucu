@@ -28,7 +28,7 @@ Her başarılı, giriş yapılmış canlı PostgreSQL Control Tower ekranında
 | --- | --- |
 | Sekiz kritik tablo mevcut; hiç legal_entity_id/grant tablosu yok | Mevcut davranış korunur — **bu dört şirket onayı değildir** |
 | Sadece birkaç owner kolonu veya grant tablosu var | Tamamen engellenir |
-| Sekiz owner kolonu ve tüm üç ilişki/izin tablosu var | Tamamen engellenir |
+| Sekiz owner kolonu ve beş şirket/izin/depo/audit tablosu var | Tamamen engellenir |
 | Şema sorgulanamaz, beklenmedik tablo/metadata var | Tamamen engellenir |
 
 Kilit, **normal SELECT/INSERT/UPDATE/sevkiyat/finans formları, import,
