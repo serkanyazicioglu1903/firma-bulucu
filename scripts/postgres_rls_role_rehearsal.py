@@ -35,11 +35,11 @@ DDL = (
     f"CREATE POLICY ci_company_read ON {SCHEMA}.demo_documents "
     "FOR SELECT USING (EXISTS (SELECT 1 FROM "
     f"{SCHEMA}.company_read_grants g WHERE g.principal_id=current_user "
-    "AND g.legal_entity_id=legal_entity_id AND g.can_read=TRUE))",
+    "AND g.legal_entity_id=demo_documents.legal_entity_id AND g.can_read=TRUE))",
     f"CREATE POLICY ci_company_write ON {SCHEMA}.demo_documents "
     "FOR INSERT WITH CHECK (EXISTS (SELECT 1 FROM "
     f"{SCHEMA}.company_write_grants g WHERE g.principal_id=current_user "
-    "AND g.legal_entity_id=legal_entity_id AND g.can_write=TRUE))",
+    "AND g.legal_entity_id=demo_documents.legal_entity_id AND g.can_write=TRUE))",
 )
 
 
