@@ -185,6 +185,110 @@ def render_postgres_quick_acceptance(url):
                 st.caption("• " + gate)
 
 
+def render_postgres_master_import(url):
+    """Preview-only until an ADMIN confirms a specific real-data CSV batch."""
+    if current_role() != "ADMIN":
+        return
+    with st.expander("📥 Şirket verilerini içe aktar — hızlı erişim"):
+        st.caption(
+            "Müşteri, ürün ve depoları sadece CSV dosyasından, "
+            "önizleme ve açık onayla ekler. Hiçbir demo veri yüklenmez. "
+            "Var olan kayıtları güncellemez veya silmez."
+        )
+        from scripts.postgres_master_import import (
+            APPROVAL, DOMAINS, import_new_masters,
+            parse_master_csv, template_csv,
+        )
+        domain = st.selectbox(
+            "Aktarılacak kayıt türü",
+            tuple(DOMAINS),
+            key="ct_pg_bulk_domain",
+        )
+        st.download_button(
+            "📄 Boş CSV şablonunu indir",
+            data=template_csv(domain),
+            file_name={
+                "Müşteriler": "as_control_tower_musteriler.csv",
+                "Ürünler": "as_control_tower_urunler.csv",
+                "Depolar": "as_control_tower_depolar.csv",
+            }[domain],
+            mime="text/csv",
+            key="ct_pg_bulk_template",
+        )
+        uploaded = st.file_uploader(
+            "Onaylı gerçek şirket kayıtlarının CSV dosyası",
+            type=["csv"],
+            key="ct_pg_bulk_file",
+            help="UTF-8 biçimi; dosya başına en fazla 150 kayıt ve 512 KB.",
+        )
+        if uploaded is None:
+            st.info("Önce boş şablonu doldurup dosyayı seçin. Henüz aktarım yapılmaz.")
+            return
+        status, rows = parse_master_csv(uploaded.getvalue(), domain)
+        if status != "ok":
+            st.error(
+                "CSV biçimi, gerekli alanlar veya kayıt değerleri geçersiz. "
+                "Lütfen indirilen şablonu kullanın. Hiçbir kayıt eklenmedi."
+            )
+            st.caption("Kontrol kodu: " + str(status))
+            return
+        st.success(
+            f"{len(rows)} yeni kayıt önizlemede doğrulandı. "
+            "Bu aşamada PostgreSQL'e hiçbir şey yazılmadı."
+        )
+        st.dataframe(
+            pd.DataFrame(rows).head(20),
+            width="stretch", hide_index=True,
+        )
+        if len(rows) > 20:
+            st.caption(f"İlk 20 / {len(rows)} kayıt gösteriliyor.")
+
+        backup_confirmed = st.checkbox(
+            "Bu işlemden önce güncel PostgreSQL ZIP yedeğini "
+            "indirdim ve güvenli şekilde sakladım.",
+            key="ct_pg_bulk_backup_confirm",
+        )
+        confirmation = st.text_input(
+            "Kalıcı, sadece yeni kayıt eklemeyi onaylamak için "
+            f"{APPROVAL} yazın",
+            key="ct_pg_bulk_phrase",
+        )
+        if st.button(
+            f"{len(rows)} yeni kaydı PostgreSQL'e ekle",
+            key="ct_pg_bulk_submit",
+            disabled=not (backup_confirmed and confirmation == APPROVAL),
+        ):
+            # No user-supplied URLs/SQL: only the trusted Streamlit secret and
+            # the authenticated session role are passed into the engine.
+            actor = str((current_user() or {}).get("username", ""))
+            result, inserted = import_new_masters(
+                url,
+                role=current_role(),
+                actor=actor,
+                domain=domain,
+                rows=rows,
+                confirmation=confirmation,
+                backup_confirmed=backup_confirmed,
+            )
+            if result == "ok":
+                st.success(
+                    f"{inserted} kayıt kalıcı PostgreSQL ct_app veritabanına "
+                    "eklendi; her işlem denetim günlüğüne yazıldı."
+                )
+            elif result == "duplicate_existing":
+                st.warning(
+                    "Dosyadaki en az bir ad sistemde zaten var. "
+                    "Mükerrer kaydı çıkartıp yeniden deneyin. "
+                    "Bu dosyadan hiçbir kayıt eklenmedi."
+                )
+            else:
+                st.error(
+                    "Aktarım güvenlik/doğrulama kontrolünde durduruldu; "
+                    "bu dosyadan hiçbir kayıt eklenmedi. Kod: "
+                    + str(result)
+                )
+
+
 def render_postgres_system(url):
     st.markdown("### ⚙️ Sistem Yönetimi — PostgreSQL")
     if current_role() != "ADMIN":
