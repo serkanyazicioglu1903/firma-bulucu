@@ -42,13 +42,15 @@ def _expected():
     return tuple(sorted(names))
 
 
-def capture_legacy_baseline_on_cursor(cur):
+def capture_legacy_baseline_on_cursor(cur, *, schema=SCHEMA):
     """PostgreSQL catalog and 26 COUNT(*) calls ONLY, in caller-owned txn.
 
     Refuses partial company migrations because legacy 26-table ZIP would
     omit any new legal-entity registries, grants, RLS/policy definitions.
     Does not return raw row contents or schema SQL.
     """
+    if schema not in ("ct_app", "ct_restore_verify"):
+        return _denied("invalid_schema")
     try:
         expected = _expected()
         cur.execute(
@@ -59,7 +61,7 @@ def capture_legacy_baseline_on_cursor(cur):
             "EXISTS(SELECT 1 FROM pg_policy p WHERE p.polrelid=c.oid) "
             "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
             "WHERE n.nspname=%s AND c.relkind IN ('r','p') ORDER BY c.relname",
-            (SCHEMA,),
+            (schema,),
         )
         metadata = cur.fetchall()
         if (len(metadata) != 26 or tuple(row[0] for row in metadata) != expected
@@ -82,7 +84,7 @@ def capture_legacy_baseline_on_cursor(cur):
             "WHERE n.nspname=%s AND c.relkind IN ('r','p') "
             "AND a.attnum>0 AND NOT a.attisdropped "
             "ORDER BY c.relname,a.attnum",
-            (SCHEMA,),
+            (schema,),
         )
         columns = cur.fetchall()
         if (not columns or
@@ -106,7 +108,7 @@ def capture_legacy_baseline_on_cursor(cur):
         counts = {}
         for name in expected:
             cur.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(
-                sql.Identifier(SCHEMA, name)
+                sql.Identifier(schema, name)
             ))
             raw = cur.fetchone()
             if (not isinstance(raw, (tuple, list)) or len(raw) != 1
