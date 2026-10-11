@@ -12,6 +12,7 @@ import streamlit as st
 
 from scripts.group_company_catalog import COMPANY_LABELS
 from scripts.real_quote_estimator import QuoteInputError, calculate_real_quote
+from scripts.purchase_draft_preview import PurchaseDraftError, purchase_draft_csv
 from security_admin import current_role, current_user
 
 
@@ -29,17 +30,21 @@ _FIELD_KEYS = (
 )
 _RESULT_KEY = "ct_real_quote_result"
 _OWNER_KEY = "ct_real_quote_session_owner"
+_PO_CSV_KEY = "ct_purchase_draft_csv"
+_PO_FIELD_KEYS = (
+    "ct_po_supplier", "ct_po_product", "ct_po_warehouse", "ct_po_reference",
+)
 
 
 def _reset_quote():
     """Company change discards prior company input and calculated results."""
-    for key in (*_FIELD_KEYS, _RESULT_KEY):
+    for key in (*_FIELD_KEYS, *_PO_FIELD_KEYS, _RESULT_KEY, _PO_CSV_KEY):
         st.session_state.pop(key, None)
 
 
 def _reset_result():
     """Changing currency invalidates quotes AND previous FX manual inputs."""
-    for key in (_RESULT_KEY, "ct_rq_buy_fx", "ct_rq_sell_fx"):
+    for key in (_RESULT_KEY, _PO_CSV_KEY, *_PO_FIELD_KEYS, "ct_rq_buy_fx", "ct_rq_sell_fx"):
         st.session_state.pop(key, None)
 
 
@@ -256,7 +261,9 @@ def render_real_quote_workspace():
         )
 
     if submit:
-        st.session_state.pop(_RESULT_KEY, None)
+        # An older exported purchase request must never survive a new quote.
+        for key in (*_PO_FIELD_KEYS, _PO_CSV_KEY, _RESULT_KEY):
+            st.session_state.pop(key, None)
         try:
             result = calculate_real_quote(
                 company_code=company_code, quantity_kg=quantity,
@@ -344,3 +351,57 @@ def render_real_quote_workspace():
         "muhasebe mutabakatının yerine geçmez. Mevcut sistemde sipariş "
         "veya teklif kaydı oluşturulmadı."
     )
+
+    # PO is a human-review CSV only. Creating a purchase order in PostgreSQL
+    # would require verified legal IDs, per-company server grants and a
+    # separately approved atomic transaction that does not exist in production.
+    with st.expander("📋 Tekliften satın alma talep taslağı — kaydetmeden"):
+        st.warning(
+            "Bu dosya sadece ONAYSIZ satın alma taslağıdır. "
+            "Şirket seçimi yasal yetki veya gerçek şirket ayrımı değildir. "
+            "Sipariş, depo girişi, borç veya Supabase kaydı oluşturmaz."
+        )
+        with st.form("ct_po_draft_form"):
+            supplier = st.text_input("Tedarikçi adı (manuel)", key="ct_po_supplier")
+            product = st.text_input(
+                "Satın alınacak ürün adı",
+                value=str(st.session_state.get("ct_rq_product") or "").strip(),
+                key="ct_po_product",
+            )
+            warehouse = st.text_input(
+                "Teslim deposu / yeri (manuel)", key="ct_po_warehouse"
+            )
+            reference = st.text_input(
+                "İç takip referansı (isteğe bağlı)", key="ct_po_reference"
+            )
+            prepare = st.form_submit_button(
+                "📋 Onaysız satın alma taslağı hazırla", width="stretch"
+            )
+        if prepare:
+            st.session_state.pop(_PO_CSV_KEY, None)
+            try:
+                data = purchase_draft_csv(
+                    result,
+                    company_code=company_code,
+                    supplier=supplier,
+                    product_name=product,
+                    warehouse_name=warehouse,
+                    internal_reference=reference,
+                )
+            except PurchaseDraftError:
+                st.error(
+                    "Taslak hazırlanamadı. Tedarikçi, ürün ve teslim deposu "
+                    "gerekli; formül işaretleri veya geçersiz tutar kullanılmaz."
+                )
+            else:
+                st.session_state[_PO_CSV_KEY] = data
+        if _PO_CSV_KEY in st.session_state:
+            st.success("Onaysız satın alma taslağı hazır. Gerçek sipariş kaydedilmedi.")
+            st.download_button(
+                "⬇️ Satın alma taslağını CSV indir",
+                data=st.session_state[_PO_CSV_KEY],
+                file_name="AS_Control_Tower_Onaysiz_Satin_Alma_Taslagi.csv",
+                mime="text/csv",
+                key="ct_po_draft_download",
+                width="stretch",
+            )

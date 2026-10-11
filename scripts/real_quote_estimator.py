@@ -139,6 +139,13 @@ def calculate_real_quote(*, company_code, quantity_kg, buy_price_per_kg,
 
     result = {
         "company_code": company_code,
+        # Immutable values from the successful manual calculation are kept
+        # together so a purchase draft never guesses the original buy price.
+        "buy_price_per_kg": buy_price,
+        "buy_fx_to_base": buy_fx,
+        "prepayment_pct": prepct,
+        "prepayment_lead_days": advance_days,
+        "supplier_balance_due_days": balance_days,
         "base_currency": base,
         "buy_currency": buy,
         "sell_currency": sell,
