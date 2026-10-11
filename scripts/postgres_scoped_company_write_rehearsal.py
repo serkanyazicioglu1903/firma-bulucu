@@ -308,7 +308,8 @@ def run_scoped_write_on_cursor(cur, principal_id, company_code, role,
     Caller MUST own a disposable CI transaction; NEVER pass a production cursor.
     An error leaves the enclosing transaction to be rolled back.
     """
-    if operation not in _ALLOWED or role not in _ALLOWED[operation]:
+    if (not isinstance(operation, str) or operation not in _ALLOWED
+            or not isinstance(role, str) or role not in _ALLOWED[operation]):
         raise ScopedWriteDenied()
     if (not isinstance(principal_id, str)
             or not PRINCIPAL_PATTERN.fullmatch(principal_id)
@@ -330,12 +331,13 @@ def run_scoped_write_on_cursor(cur, principal_id, company_code, role,
 def run_scoped_write_rehearsal(url, principal_id, company_code, role,
                                operation, **inputs):
     """Standalone CI-only atomic adapter. NOT a production transaction API."""
-    if operation not in _ALLOWED:
+    if not isinstance(operation, str) or operation not in _ALLOWED:
         return "forbidden", None
-    if role not in _ALLOWED[operation]:
+    if not isinstance(role, str) or role not in _ALLOWED[operation]:
         return "forbidden", None
     if (not isinstance(principal_id, str)
             or not PRINCIPAL_PATTERN.fullmatch(principal_id)
+            or not isinstance(company_code, str)
             or company_code not in COMPANY_LABELS):
         return "forbidden", None
     if not _valid_disposable_test_target(url):
