@@ -84,6 +84,39 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                 return cur.fetchone()
             return None
 
+    def test_admin_26_table_metadata_preflight_on_disposable_postgres(self):
+        """Catalog-only audit cannot certify isolation or modify any rows."""
+        from scripts.postgres_company_full_coverage import (
+            inspect_live_company_ownership,
+        )
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM pg_attribute a "
+                "JOIN pg_class c ON c.oid=a.attrelid "
+                "JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname='ct_app' AND a.attname='legal_entity_id' "
+                "AND a.attnum>0 AND NOT a.attisdropped"
+            )
+            before = int(cur.fetchone()[0])
+
+        result = inspect_live_company_ownership(self.url)
+        self.assertEqual(result["status"], "ownership_structure_incomplete")
+        self.assertEqual(result["table_count"], 26)
+        self.assertEqual(result["required_nonnull_owner_count"], 0)
+        self.assertEqual(len(result["missing_required_owner"]), 8)
+        self.assertEqual(len(result["tables_needing_design_review"]), 18)
+        self.assertFalse(result["four_company_isolation_verified"])
+        self.assertFalse(result["live_migration_approved"])
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM pg_attribute a "
+                "JOIN pg_class c ON c.oid=a.attrelid "
+                "JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname='ct_app' AND a.attname='legal_entity_id' "
+                "AND a.attnum>0 AND NOT a.attisdropped"
+            )
+            self.assertEqual(int(cur.fetchone()[0]), before)
+
     def test_two_company_readiness_gate_on_disposable_postgres(self):
         """Schema review never certifies entity isolation or writes records."""
         from scripts.postgres_company_scope import assess_company_scope
