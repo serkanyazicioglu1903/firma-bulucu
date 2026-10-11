@@ -23,9 +23,7 @@ jobs:
     timeout-minutes: 15
     env:
       CT_BACKUP_ENABLED: ${{ vars.CT_BACKUP_ENABLED }}
-      CT_BACKUP_DATABASE_URL: ${{ secrets.CT_BACKUP_DATABASE_URL }}
-      CT_BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.CT_BACKUP_ENCRYPTION_PASSPHRASE }}
-      CT_BACKUP_OUTPUT_DIR: ${{ runner.temp }}/asct-encrypted
+      CT_BACKUP_OUTPUT_DIR: /tmp/asct-encrypted
 
     steps:
       - name: Checkout trusted main repository code
@@ -40,6 +38,9 @@ jobs:
 
       - name: Ensure backup secrets are present
         shell: bash
+        env:
+          CT_BACKUP_DATABASE_URL: ${{ secrets.CT_BACKUP_DATABASE_URL }}
+          CT_BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.CT_BACKUP_ENCRYPTION_PASSPHRASE }}
         run: |
           if [ -z "$CT_BACKUP_DATABASE_URL" ] || [ -z "$CT_BACKUP_ENCRYPTION_PASSPHRASE" ]; then
             echo 'ERROR: required private backup secrets have not been configured.'
@@ -50,13 +51,16 @@ jobs:
         run: python -m pip install 'psycopg[binary]>=3.2' 'cryptography>=44.0'
 
       - name: Export, AES-encrypt and self-verify backup
+        env:
+          CT_BACKUP_DATABASE_URL: ${{ secrets.CT_BACKUP_DATABASE_URL }}
+          CT_BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.CT_BACKUP_ENCRYPTION_PASSPHRASE }}
         run: python -m scripts.scheduled_encrypted_backup
 
       - name: Store encrypted-only offsite snapshot for 7 days
         uses: actions/upload-artifact@v4
         with:
           name: ct_app_encrypted_${{ github.run_id }}_${{ github.run_attempt }}
-          path: ${{ runner.temp }}/asct-encrypted/*.asct
+          path: /tmp/asct-encrypted/*.asct
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
