@@ -115,6 +115,9 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
             additive_ddl, enforcement_ddl,
         )
         from scripts.postgres_company_scope import CRITICAL_TABLES
+        from scripts.postgres_company_migration_guard import (
+            company_schema_status_on_cursor,
+        )
         import psycopg
 
         class IntentionallyRollback(Exception):
@@ -123,8 +126,16 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
         try:
             with self.conn.transaction():
                 with self.conn.cursor() as cur:
+                    self.assertEqual(
+                        company_schema_status_on_cursor(cur),
+                        "legacy_schema_only",
+                    )
                     for stmt in additive_ddl():
                         cur.execute(stmt)
+                    self.assertEqual(
+                        company_schema_status_on_cursor(cur),
+                        "partial_company_schema",
+                    )
                     cur.execute(
                         'INSERT INTO "ct_app"."legal_entities" (code,legal_name) '
                         "VALUES ('CI_A','Fictional CI Company A'), "
@@ -364,6 +375,10 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                     )
                     for statement in rehearsal_extra_ddl():
                         cur.execute(statement)
+                    self.assertEqual(
+                        company_schema_status_on_cursor(cur),
+                        "company_schema_present",
+                    )
                     cur.execute(
                         'INSERT INTO "ct_app"."product_catalog" '
                         '(name,supplier) VALUES (%s,%s) RETURNING id',
@@ -749,6 +764,10 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
             pass
 
         with self.conn.cursor() as cur:
+            self.assertEqual(
+                company_schema_status_on_cursor(cur),
+                "legacy_schema_only",
+            )
             cur.execute(
                 "SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n "
                 "ON n.oid=c.relnamespace WHERE n.nspname='ct_app' "
