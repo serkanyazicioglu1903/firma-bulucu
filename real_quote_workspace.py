@@ -12,7 +12,7 @@ import streamlit as st
 
 from scripts.group_company_catalog import COMPANY_LABELS
 from scripts.real_quote_estimator import QuoteInputError, calculate_real_quote
-from security_admin import current_role
+from security_admin import current_role, current_user
 
 
 _ALLOWED = frozenset({"ADMIN", "SALES", "PURCHASING", "FINANCE"})
@@ -25,8 +25,10 @@ _FIELD_KEYS = (
     "ct_rq_pre_days", "ct_rq_balance_days", "ct_rq_stock_days",
     "ct_rq_customer_days", "ct_rq_commission", "ct_rq_margin",
     "ct_rq_fx_basis",
+    "ct_rq_buy_ccy", "ct_rq_sell_ccy", "ct_rq_base_ccy",
 )
 _RESULT_KEY = "ct_real_quote_result"
+_OWNER_KEY = "ct_real_quote_session_owner"
 
 
 def _reset_quote():
@@ -36,8 +38,28 @@ def _reset_quote():
 
 
 def _reset_result():
-    """FX context changes invalidate any previously displayed quote."""
-    st.session_state.pop(_RESULT_KEY, None)
+    """Changing currency invalidates quotes AND previous FX manual inputs."""
+    for key in (_RESULT_KEY, "ct_rq_buy_fx", "ct_rq_sell_fx"):
+        st.session_state.pop(key, None)
+
+
+def _bound_session():
+    """Prevent one signed-in staff session inheriting the previous user's quote.
+
+    This is a UI memory hygiene boundary only, never tenant authentication.
+    """
+    user = current_user() or {}
+    username = user.get("username") if isinstance(user, dict) else None
+    session_id = st.session_state.get("ct_session_id")
+    if not isinstance(username, str) or not username or not session_id:
+        _reset_quote()
+        return False
+    marker = (username, session_id)
+    if st.session_state.get(_OWNER_KEY) != marker:
+        _reset_quote()
+        st.session_state.pop("ct_rq_company", None)
+        st.session_state[_OWNER_KEY] = marker
+    return True
 
 
 def _fmt(value, places=4):
@@ -86,6 +108,9 @@ def render_real_quote_workspace():
     """Manual quote workflow, independent of demo customer/product masters."""
     if current_role() not in _ALLOWED:
         st.warning("Teklif hesaplama erişimi bu rol için açık değil.")
+        return
+    if not _bound_session():
+        st.error("Teklif ön hesabı için doğrulanmış oturum gerekli; yeniden giriş yap.")
         return
 
     st.subheader("🧮 Gerçek Teklif ve Kârlılık — Kaydetmeden Hesapla")
