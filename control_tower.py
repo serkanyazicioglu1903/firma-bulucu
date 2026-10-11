@@ -2140,7 +2140,10 @@ def _render_control_tower_interface(live_postgres=False):
             "🟢 Canlı veri modu: Bütün Control Tower iş ekranları "
             "Supabase PostgreSQL ct_app üzerinden çalışıyor. SQLite kullanılmıyor."
         )
-        # Never imply that the connected legacy business screens are already\n        # company-scoped. This phone-visible preview is strictly read-only.\n        render_group_readiness_quick(postgres_url())\n        # Keep an ADMIN-only backup entry outside the 15 main tabs; this
+        # Never imply that the connected legacy business screens are already
+        # company-scoped. This phone-visible preview is strictly read-only.
+        render_group_readiness_quick(postgres_url())
+        # Keep an ADMIN-only backup entry outside the 15 main tabs; this
         # remains reachable even when iOS Safari fails to paint nested tabs.
         render_postgres_quick_backup(postgres_url())
         render_postgres_quick_encrypted_backup(postgres_url())
