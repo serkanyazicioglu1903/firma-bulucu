@@ -226,3 +226,30 @@ def verify_disposable_backup_restore(url, payload):
     except Exception:
         return "failed", None
     return "failed", None
+
+
+def verify_disposable_encrypted_restore(url, ciphertext, passphrase):
+    """CI-local, in-memory AES -> ZIP -> PostgreSQL -> rollback rehearsal.
+
+    Reject *every* non-CI-local destination BEFORE decrypting the encrypted
+    file. This does NOT check a real Supabase backup or perform a provider
+    restore. Only synthetic disposable CI data are authorized for this test.
+    """
+    if not _ci_database_url_only(url):
+        return "forbidden", None
+    # Avoid a circular import: encrypted_backup -> backup_verify ->
+    # postgres_restore_drill. Import only after the destination guard.
+    from scripts.postgres_encrypted_backup import decrypt_export_zip
+
+    decrypt_status, archive = decrypt_export_zip(ciphertext, passphrase)
+    if decrypt_status != "decrypted":
+        return "invalid_encrypted_archive", None
+    status, report = verify_disposable_backup_restore(url, archive)
+    if status != "verified" or not report or not report.get("rolled_back"):
+        return "failed", None
+    return "verified", {
+        "tables": report["tables"],
+        "rows": report["rows"],
+        "rolled_back": True,
+        "production_supabase_restore_verified": False,
+    }
