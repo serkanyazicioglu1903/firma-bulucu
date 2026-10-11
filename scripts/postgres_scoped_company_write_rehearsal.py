@@ -301,6 +301,32 @@ _ACTIONS = {
 }
 
 
+def run_scoped_write_on_cursor(cur, principal_id, company_code, role,
+                               operation, **inputs):
+    """Testable atomic unit: authorization, write and audit in ONE transaction.
+
+    Caller MUST own a disposable CI transaction; NEVER pass a production cursor.
+    An error leaves the enclosing transaction to be rolled back.
+    """
+    if operation not in _ALLOWED or role not in _ALLOWED[operation]:
+        raise ScopedWriteDenied()
+    if (not isinstance(principal_id, str)
+            or not PRINCIPAL_PATTERN.fullmatch(principal_id)
+            or not isinstance(company_code, str)
+            or company_code not in COMPANY_LABELS):
+        raise ScopedWriteDenied()
+    company_id = _owner_and_writer(cur, principal_id, company_code)
+    record_id = _ACTIONS[operation](cur, company_id, **inputs)
+    cur.execute(
+        'INSERT INTO "ct_app"."company_operation_audit" '
+        '(principal_id,legal_entity_id,operation,target_table,'
+        'record_id) VALUES (%s,%s,%s,%s,%s)',
+        (principal_id,company_id,operation,_ACTION_TABLE[operation],
+         record_id),
+    )
+    return record_id
+
+
 def run_scoped_write_rehearsal(url, principal_id, company_code, role,
                                operation, **inputs):
     """Standalone CI-only atomic adapter. NOT a production transaction API."""
@@ -327,16 +353,8 @@ def run_scoped_write_rehearsal(url, principal_id, company_code, role,
                     cur.execute("SET LOCAL statement_timeout = '20s'")
                     cur.execute("SET LOCAL lock_timeout = '3s'")
                     cur.execute('SET LOCAL search_path TO "ct_app", pg_catalog')
-                    company_id = _owner_and_writer(cur, principal_id, company_code)
-                    record_id = _ACTIONS[operation](
-                        cur, company_id, **inputs
-                    )
-                    cur.execute(
-                        'INSERT INTO "ct_app"."company_operation_audit" '
-                        '(principal_id,legal_entity_id,operation,target_table,'
-                        'record_id) VALUES (%s,%s,%s,%s,%s)',
-                        (principal_id,company_id,operation,_ACTION_TABLE[operation],
-                         record_id),
+                    record_id = run_scoped_write_on_cursor(
+                        cur, principal_id, company_code, role, operation, **inputs
                     )
         return "ok", record_id
     except ScopedWriteDenied as err:
