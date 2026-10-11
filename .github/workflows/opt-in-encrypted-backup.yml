@@ -4,6 +4,13 @@ name: Optional daily encrypted PostgreSQL offsite backup
 # variable CT_BACKUP_ENABLED=true and both private repository secrets.
 # A skipped job is NOT a successful backup. GitHub Actions artifacts expire.
 on:
+  # PRs get a strictly offline self-test; production backup steps never run on PRs.
+  pull_request:
+    paths:
+      - '.github/workflows/opt-in-encrypted-backup.yml'
+      - 'scripts/scheduled_encrypted_backup.py'
+      - 'scripts/postgres_encrypted_backup.py'
+      - 'tests/test_scheduled_encrypted_backup.py'
   workflow_dispatch:
   schedule:
     # 04:17 Türkiye time (UTC+3, no DST); GitHub schedules can be delayed.
@@ -18,7 +25,9 @@ concurrency:
 
 jobs:
   encrypted-ct-app:
-    if: ${{ vars.CT_BACKUP_ENABLED == 'true' }}
+    # A PR can validate this file without reading secrets or touching a database.
+    # Actual backups still require the existing explicit repository variable.
+    if: ${{ github.event_name != 'pull_request' && vars.CT_BACKUP_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -72,3 +81,22 @@ jobs:
           if [ -d "$CT_BACKUP_OUTPUT_DIR" ]; then
             rm -f "$CT_BACKUP_OUTPUT_DIR"/*.asct
           fi
+
+  offline-backup-safety-smoke:
+    # Synthetic test data only; no real DB endpoint and no repository secrets.
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout proposed workflow and offline tests
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Setup Python for synthetic backup tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install offline backup test dependencies
+        run: python -m pip install 'psycopg[binary]>=3.2' 'cryptography>=44.0'
+      - name: Assert opt-in, encryption and offline safety using fake ZIP
+        run: python -m unittest tests.test_scheduled_encrypted_backup -v
