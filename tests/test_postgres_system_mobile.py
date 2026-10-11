@@ -323,5 +323,60 @@ class MobileSystemTests(unittest.TestCase):
         st.success.assert_not_called()
 
 
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="VIEWER")
+    def test_backup_zip_verification_is_admin_only(self, _role, st):
+        system.render_postgres_quick_backup_verify()
+        st.expander.assert_not_called()
+        st.file_uploader.assert_not_called()
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    def test_zip_verification_waits_for_uploaded_file(self, _role, st):
+        st.file_uploader.return_value = None
+        with patch("scripts.postgres_backup_verify.inspect_export_zip") as verify:
+            system.render_postgres_quick_backup_verify()
+        st.file_uploader.assert_called_once()
+        verify.assert_not_called()
+        st.button.assert_not_called()
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    def test_zip_verification_only_after_click(self, _role, st):
+        from unittest.mock import MagicMock
+        uploaded = MagicMock()
+        uploaded.getvalue.return_value = b"FAKE-PRIVATE-ARCHIVE-IS-NEVER-EXPORTED"
+        st.file_uploader.return_value = uploaded
+        st.button.return_value = False
+        with patch("scripts.postgres_backup_verify.inspect_export_zip") as verify:
+            system.render_postgres_quick_backup_verify()
+        verify.assert_not_called()
+        uploaded.getvalue.assert_not_called()
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    def test_zip_verification_reports_only_safe_aggregates(self, _role, st):
+        from unittest.mock import MagicMock
+        uploaded = MagicMock()
+        uploaded.getvalue.return_value = b"FICTIONAL-ZIP"
+        st.file_uploader.return_value = uploaded
+        st.button.return_value = True
+        summary = {
+            "table_count": 26, "row_count": 1, "table_counts": {"customers": 1},
+            "sha256": "b" * 64, "exported_utc": "2026-10-11T07:00:00Z",
+            "restoration_tested": False,
+        }
+        with patch(
+            "scripts.postgres_backup_verify.inspect_export_zip",
+            return_value=("verified_format", summary),
+        ) as verify:
+            system.render_postgres_quick_backup_verify()
+        verify.assert_called_once_with(b"FICTIONAL-ZIP")
+        st.success.assert_called_once()
+        self.assertIn("geri yükleme değildir", st.success.call_args.args[0])
+        st.dataframe.assert_called_once()
+        st.error.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
