@@ -280,5 +280,48 @@ class MobileSystemTests(unittest.TestCase):
         st.success.assert_called()
 
 
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="VIEWER")
+    def test_security_shortcut_not_visible_to_non_admin(self, role, st):
+        system.render_postgres_quick_security(URL)
+        st.expander.assert_not_called()
+        st.button.assert_not_called()
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    def test_security_shortcut_never_queries_until_click(self, role, st):
+        st.button.return_value = False
+        with patch(
+            "scripts.postgres_security_audit.audit_postgres_security"
+        ) as checker:
+            system.render_postgres_quick_security(URL)
+        st.expander.assert_called_once()
+        st.button.assert_called_once()
+        checker.assert_not_called()
+
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    def test_security_shortcut_displays_review_not_false_production_approval(
+        self, role, st,
+    ):
+        st.button.return_value = True
+        with patch(
+            "scripts.postgres_security_audit.audit_postgres_security",
+            return_value={
+                "status": "review_required",
+                "checks": [
+                    {"label": "TLS", "status": "uygun",
+                     "detail": "Bağlantı şifreli"},
+                ],
+                "external": ["Supabase otomatik yedekleme: bilinmiyor"],
+            },
+        ) as checker:
+            system.render_postgres_quick_security(URL)
+        checker.assert_called_once_with(URL)
+        st.info.assert_called_once()
+        st.dataframe.assert_called_once()
+        st.success.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
