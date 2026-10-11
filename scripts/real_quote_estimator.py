@@ -59,7 +59,7 @@ def _fx(rate, from_currency, to_currency):
     if from_currency == to_currency:
         # A caller can never accidentally convert identical currencies
         # at a non-unit exchange rate.
-        if Decimal(str(rate)) != 1:
+        if _amount(rate, "same_currency_fx", positive=True) != 1:
             raise QuoteInputError("same_currency_fx")
         return Decimal(1)
     return _amount(rate, "fx_required", positive=True)
