@@ -24,7 +24,7 @@ def classify_schema_metadata(table_rows, owner_rows, markers):
     """
     if not isinstance(table_rows, (tuple, list)) or not isinstance(owner_rows, (tuple, list)):
         return "metadata_unavailable"
-    if not isinstance(markers, (tuple, list)) or len(markers) != 3:
+    if not isinstance(markers, (tuple, list)) or len(markers) != 5:
         return "metadata_unavailable"
     if any(type(value) is not bool for value in markers):
         return "metadata_unavailable"
@@ -68,7 +68,9 @@ def company_schema_status_on_cursor(cur):
     cur.execute(
         "SELECT to_regclass('ct_app.legal_entities') IS NOT NULL, "
         "to_regclass('ct_app.company_read_grants') IS NOT NULL, "
-        "to_regclass('ct_app.company_write_grants') IS NOT NULL"
+        "to_regclass('ct_app.company_write_grants') IS NOT NULL, "
+        "to_regclass('ct_app.company_warehouse_scope') IS NOT NULL, "
+        "to_regclass('ct_app.company_operation_audit') IS NOT NULL"
     )
     markers = cur.fetchone()
     return classify_schema_metadata(table_rows, owner_rows, markers)
