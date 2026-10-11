@@ -99,6 +99,10 @@ class RecoveryBaselineTests(unittest.TestCase):
                 source, restored
             )["status"], "invalid_evidence"
         )
+        # An independently restored database would report both the new
+        # table count and the changed aggregate total, so keep evidence
+        # internally consistent before asserting a genuine mismatch.
+        restored["rows"] += 1
         restored["counts_sha256"] = hashlib.sha256(
             json.dumps(restored["counts"], sort_keys=True,
                        separators=(",", ":")).encode()
