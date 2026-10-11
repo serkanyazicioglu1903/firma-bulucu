@@ -258,6 +258,98 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
 
 
 
+    def test_master_csv_import_is_atomic_and_audited_on_disposable_postgres(self):
+        """Real CI-only test of customer/product/warehouse import and rollback."""
+        from scripts.postgres_master_import import (
+            APPROVAL, import_new_masters, parse_master_csv, template_csv,
+        )
+        import csv
+        from io import StringIO
+
+        def csv_bytes(domain, names, **kwargs):
+            fields = template_csv(domain).decode("utf-8-sig").strip().split(",")
+            buf = StringIO(newline="")
+            writer = csv.DictWriter(buf, fieldnames=fields)
+            writer.writeheader()
+            for name in names:
+                writer.writerow({"name": name, **kwargs})
+            return buf.getvalue().encode("utf-8")
+
+        before_finance = self.execute(
+            'SELECT COUNT(*) FROM "ct_app"."finance_transactions"'
+        )[0]
+        for domain, names, fields in (
+            ("Müşteriler", ["CI BULK CUSTOMER 01", "CI BULK CUSTOMER 02"],
+             {"country": "Türkiye", "sector": "Gıda"}),
+            ("Ürünler", ["CI BULK PRODUCT 01", "CI BULK PRODUCT 02"],
+             {"supplier": "CI FAKE MANUFACTURER", "category": "Ingredient"}),
+            ("Depolar", ["CI BULK WAREHOUSE 01", "CI BULK WAREHOUSE 02"],
+             {"warehouse_type": "Normal Depo", "city": "London"}),
+        ):
+            with self.subTest(domain=domain):
+                status, rows = parse_master_csv(csv_bytes(domain, names, **fields), domain)
+                self.assertEqual(status, "ok")
+                result, n = import_new_masters(
+                    self.url, role="ADMIN", actor="ci-admin-import",
+                    domain=domain, rows=rows,
+                    confirmation=APPROVAL, backup_confirmed=True,
+                )
+                self.assertEqual((result, n), ("ok", 2))
+                for name in names:
+                    table = {
+                        "Müşteriler": "customers",
+                        "Ürünler": "product_catalog",
+                        "Depolar": "warehouses",
+                    }[domain]
+                    self.assertEqual(
+                        self.execute(
+                            f'SELECT COUNT(*) FROM "ct_app"."{table}" '
+                            'WHERE name=%s', (name,),
+                        )[0],
+                        1,
+                    )
+                # Reimporting the exact same file must never insert records.
+                self.assertEqual(
+                    import_new_masters(
+                        self.url, role="ADMIN", actor="ci-admin-import",
+                        domain=domain, rows=rows,
+                        confirmation=APPROVAL, backup_confirmed=True,
+                    ),
+                    ("duplicate_existing", 0),
+                )
+
+        # The second name already exists; first inserted row must roll back.
+        bad_status, bad_rows = parse_master_csv(
+            csv_bytes("Müşteriler", [
+                "CI BULK ATOMIC ROLLBACK", "CI BULK CUSTOMER 01",
+            ]), "Müşteriler",
+        )
+        self.assertEqual(bad_status, "ok")
+        self.assertEqual(
+            import_new_masters(
+                self.url, role="ADMIN", actor="ci-admin-import",
+                domain="Müşteriler", rows=bad_rows,
+                confirmation=APPROVAL, backup_confirmed=True,
+            ),
+            ("duplicate_existing", 0),
+        )
+        self.assertEqual(
+            self.execute(
+                'SELECT COUNT(*) FROM "ct_app"."customers" WHERE name=%s',
+                ("CI BULK ATOMIC ROLLBACK",),
+            )[0], 0,
+        )
+        self.assertEqual(
+            self.execute(
+                'SELECT COUNT(*) FROM "ct_app"."audit_log" '
+                "WHERE username='ci-admin-import' AND action='bulk_import_new'"
+            )[0], 6,
+        )
+        self.assertEqual(
+            self.execute('SELECT COUNT(*) FROM "ct_app"."finance_transactions"')[0],
+            before_finance,
+        )
+
     def test_legacy_sql_forms_read_and_write_ct_app_only(self):
         """Actual legacy business facade writes persist in disposable PostgreSQL."""
         from unittest.mock import patch
