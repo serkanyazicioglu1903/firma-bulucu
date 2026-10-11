@@ -224,7 +224,14 @@ class MobileSystemTests(unittest.TestCase):
     ):
         from unittest.mock import MagicMock
         uploaded = MagicMock()
-        uploaded.getvalue.return_value = b"name,country\nOnayli CI Musteri,Turkiye\n"
+        from scripts.postgres_master_import import template_csv, parse_master_csv
+        uploaded.getvalue.return_value = (
+            template_csv("Müşteriler") + b"Onayli CI Musteri,Turkiye,,,,,,\r\n"
+        )
+        self.assertEqual(
+            parse_master_csv(uploaded.getvalue(), "Müşteriler")[0],
+            "ok", "The actual CSV template must be valid before UI submission.",
+        )
         st.selectbox.return_value = "Müşteriler"
         st.file_uploader.return_value = uploaded
         st.checkbox.return_value = False
@@ -232,7 +239,7 @@ class MobileSystemTests(unittest.TestCase):
         st.button.return_value = False
         with patch("scripts.postgres_master_import.import_new_masters") as create:
             system.render_postgres_master_import(URL)
-        st.dataframe.assert_called_once()
+        self.assertTrue(st.dataframe.called, repr(st.error.call_args_list))
         self.assertEqual(st.button.call_args.kwargs["disabled"], True)
         create.assert_not_called()
 
@@ -245,7 +252,14 @@ class MobileSystemTests(unittest.TestCase):
         from unittest.mock import MagicMock
         from scripts.postgres_master_import import APPROVAL
         uploaded = MagicMock()
-        uploaded.getvalue.return_value = b"name,country\nOnayli CI Musteri,Turkiye\n"
+        from scripts.postgres_master_import import template_csv, parse_master_csv
+        uploaded.getvalue.return_value = (
+            template_csv("Müşteriler") + b"Onayli CI Musteri,Turkiye,,,,,,\r\n"
+        )
+        self.assertEqual(
+            parse_master_csv(uploaded.getvalue(), "Müşteriler")[0],
+            "ok", "The actual CSV template must be valid before UI submission.",
+        )
         st.selectbox.return_value = "Müşteriler"
         st.file_uploader.return_value = uploaded
         st.checkbox.return_value = True
@@ -256,7 +270,7 @@ class MobileSystemTests(unittest.TestCase):
             return_value=("ok", 1),
         ) as create:
             system.render_postgres_master_import(URL)
-        create.assert_called_once()
+        self.assertTrue(create.called, repr(st.error.call_args_list))
         kwargs = create.call_args.kwargs
         self.assertEqual(kwargs["role"], "ADMIN")
         self.assertEqual(kwargs["actor"], "ci-admin")
