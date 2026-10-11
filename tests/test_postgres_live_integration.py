@@ -1231,6 +1231,122 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
         self.assertFalse(security["actual_backup_restore_verified"])
         self.assertFalse(security["ready_for_production_cutover"])
 
+    def test_four_company_database_role_rls_rehearsal_rolled_back(self):
+        """Different DB roles cannot read or insert rows for another entity.
+
+        This is a *synthetic* isolated test, never an application auth design.
+        Admin/superuser connections can bypass these policies; production
+        MUST use independently authenticated least-privileged connections.
+        """
+        from scripts.postgres_rls_role_rehearsal import SCHEMA, ROLES, review_sql
+
+        class ExpectedRlsRollback(Exception):
+            pass
+
+        try:
+            with self.conn.transaction():
+                with self.conn.cursor() as cur:
+                    cur.execute("SELECT to_regnamespace(%s)", (SCHEMA,))
+                    self.assertIsNone(cur.fetchone()[0])
+                    for role in ROLES:
+                        cur.execute("SELECT to_regrole(%s)", (role,))
+                        self.assertIsNone(cur.fetchone()[0])
+                    for statement in review_sql():
+                        cur.execute(statement)
+
+                    # The only data are invented IDs and notes.
+                    cur.execute(
+                        f"INSERT INTO {SCHEMA}.demo_documents "
+                        "(id,legal_entity_id,note) VALUES "
+                        "(100,1,'CI A only'),(200,2,'CI B only'),"
+                        "(300,3,'CI C only'),(400,4,'CI D only')"
+                    )
+                    cur.execute(
+                        f"INSERT INTO {SCHEMA}.company_read_grants "
+                        "(principal_id,legal_entity_id,can_read) VALUES "
+                        "('ct_ci_rls_a',1,TRUE),('ct_ci_rls_d',4,TRUE),"
+                        "('ct_ci_rls_c',3,FALSE)"
+                    )
+                    cur.execute(
+                        f"INSERT INTO {SCHEMA}.company_write_grants "
+                        "(principal_id,legal_entity_id,can_write) VALUES "
+                        "('ct_ci_rls_a',1,TRUE),('ct_ci_rls_d',4,FALSE)"
+                    )
+                    for role, expected in (
+                        (ROLES[0], [100]), (ROLES[1], []),
+                        (ROLES[2], []), (ROLES[3], [400]),
+                    ):
+                        try:
+                            # PostgreSQL uses the current DATABASE role,
+                            # not a spoofable app company selector.
+                            cur.execute("SET LOCAL ROLE " + role)
+                            cur.execute(
+                                f"SELECT id FROM {SCHEMA}.demo_documents "
+                                "ORDER BY id"
+                            )
+                            self.assertEqual(
+                                [record[0] for record in cur.fetchall()],
+                                expected,
+                            )
+                        finally:
+                            cur.execute("RESET ROLE")
+
+                    try:
+                        cur.execute("SET LOCAL ROLE " + ROLES[0])
+                        cur.execute(
+                            f"INSERT INTO {SCHEMA}.demo_documents "
+                            "(id,legal_entity_id,note) VALUES "
+                            "(101,1,'CI A permitted')"
+                        )
+                        # Denied write must be tested inside a savepoint so
+                        # PostgreSQL abort does not poison the outer rollback.
+                        with self.assertRaises(Exception):
+                            with self.conn.transaction():
+                                cur.execute(
+                                    f"INSERT INTO {SCHEMA}.demo_documents "
+                                    "(id,legal_entity_id,note) VALUES "
+                                    "(102,4,'CI A not allowed in D')"
+                                )
+                        cur.execute(
+                            f"SELECT id FROM {SCHEMA}.demo_documents "
+                            "ORDER BY id"
+                        )
+                        self.assertEqual(
+                            [row[0] for row in cur.fetchall()],
+                            [100,101],
+                        )
+                    finally:
+                        cur.execute("RESET ROLE")
+                    try:
+                        cur.execute("SET LOCAL ROLE " + ROLES[3])
+                        with self.assertRaises(Exception):
+                            with self.conn.transaction():
+                                cur.execute(
+                                    f"INSERT INTO {SCHEMA}.demo_documents "
+                                    "(id,legal_entity_id,note) VALUES "
+                                    "(401,4,'CI D denied by write grant')"
+                                )
+                    finally:
+                        cur.execute("RESET ROLE")
+                    # Confirm owner documents were neither overwritten
+                    # nor expanded with the denied synthetic rows.
+                    cur.execute(
+                        f"SELECT COUNT(*) FROM {SCHEMA}.demo_documents"
+                    )
+                    self.assertEqual(cur.fetchone()[0],5)
+                    raise ExpectedRlsRollback()
+        except ExpectedRlsRollback:
+            pass
+
+        # Local transaction rolls back ALL roles, schema and grant rows.
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT to_regnamespace(%s)", (SCHEMA,))
+            self.assertIsNone(cur.fetchone()[0])
+            for role in ROLES:
+                cur.execute("SELECT to_regrole(%s)", (role,))
+                self.assertIsNone(cur.fetchone()[0])
+
+
     def test_postgres_live_backup_has_26_tables_and_hash_manifest(self):
         """Export a consistent, real, read-only backup of fictional Docker data."""
         import io
