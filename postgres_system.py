@@ -51,6 +51,60 @@ def _render_backup(url, key_prefix):
         )
 
 
+
+def render_postgres_quick_backup_verify():
+    """Verify a user's existing ZIP in memory; never touch PostgreSQL."""
+    if current_role() != "ADMIN":
+        return
+    with st.expander("🧪 İndirilen yedeği doğrula — hızlı erişim"):
+        st.caption(
+            "Telefonuna veya Mac'ine indirdiğin AS Control Tower ZIP dosyasını "
+            "buradan seç. Dosya yalnızca uygulama sunucusunun belleğinde "
+            "kontrol edilir; ChatGPT'ye gönderilmez veya veritabanına "
+            "geri yüklenmez. İçerdiği müşteri/finans kayıtları gösterilmez."
+        )
+        uploaded = st.file_uploader(
+            "Doğrulanacak ZIP dosyası",
+            type=["zip"],
+            key="ct_pg_verify_export_zip",
+            help="Yalnızca AS Control Tower 26 tabloluk uygulama yedeği (en fazla 30 MB).",
+        )
+        if uploaded is None:
+            st.info("İndirdiğin ZIP dosyasını seç; kayıtlar değiştirilmez.")
+            return
+        if st.button("ZIP bütünlüğünü doğrula", key="ct_pg_verify_export_button"):
+            from scripts.postgres_backup_verify import inspect_export_zip
+
+            with st.spinner("26 tablo, SHA-256 ve kayıt yapısı doğrulanıyor..."):
+                status, report = inspect_export_zip(uploaded.getvalue())
+            if status != "verified_format":
+                st.error(
+                    "Yedek formatı veya bütünlüğü doğrulanamadı. "
+                    "Bu dosyaya güvenerek işlem yapma; yeniden yedek al. "
+                    "Kontrol kodu: " + status
+                )
+                return
+            st.success(
+                f"ZIP iç bütünlüğü doğrulandı: {report['table_count']} tablo, "
+                f"{report['row_count']} kayıt. Bu test geri yükleme değildir."
+            )
+            st.caption("Yedek oluşturulma zamanı (UTC): " + report["exported_utc"])
+            st.code(report["sha256"], language="text")
+            st.caption("SHA-256, dosyayı ileride yeniden karşılaştırabilmen içindir.")
+            st.dataframe(
+                pd.DataFrame([
+                    {"Tablo": name, "Kayıt sayısı": count}
+                    for name, count in report["table_counts"].items()
+                ]),
+                hide_index=True, width="stretch",
+            )
+            st.warning(
+                "ZIP dosyası şifreli değildir. Güvenli bir klasörde sakla. "
+                "Dosyanın gerçekten geri yüklenebilirliği ve Supabase "
+                "otomatik yedekleme politikası bu doğrulama ile onaylanmaz."
+            )
+
+
 def render_postgres_quick_backup(url):
     """Secondary ADMIN-only maintenance entry independent of nested tabs."""
     if current_role() != "ADMIN":

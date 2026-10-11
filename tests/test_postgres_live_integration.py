@@ -485,6 +485,13 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
         status, archive = export_postgres_backup(self.url)
         self.assertEqual(status, "ok")
         self.assertIsInstance(archive, bytes)
+        # Exercise the same verification that an ADMIN runs from their phone.
+        from scripts.postgres_backup_verify import inspect_export_zip
+        verified_status, verification = inspect_export_zip(archive)
+        self.assertEqual(verified_status, "verified_format")
+        self.assertEqual(verification["table_count"], 26)
+        self.assertGreaterEqual(verification["row_count"], 1)
+        self.assertFalse(verification["restoration_tested"])
         with zipfile.ZipFile(io.BytesIO(archive)) as z:
             manifest = json.loads(z.read("manifest.json"))
             self.assertEqual(manifest["schema"], "ct_app")
