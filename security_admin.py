@@ -189,6 +189,18 @@ def login_gate():
                 st.session_state["ct_session_id"] = hashlib.sha256(
                     (user["username"] + "|" + datetime.utcnow().isoformat()).encode()
                 ).hexdigest()[:20]
+                # A server-only signed principal is required for the OPTIONAL
+                # four-company read-only review mode; legacy login is unchanged.
+                from scripts.company_session_principal import (
+                    SESSION_SIGNATURE_KEY, sign_verified_company_login,
+                )
+                signature = sign_verified_company_login(
+                    user, st.session_state["ct_session_id"]
+                )
+                if signature:
+                    st.session_state[SESSION_SIGNATURE_KEY] = signature
+                else:
+                    st.session_state.pop(SESSION_SIGNATURE_KEY, None)
                 st.rerun()
             st.error("Kullanıcı adı veya şifre yanlış.")
     return False
@@ -201,7 +213,7 @@ def logout_button():
     c1,c2 = st.columns([4,1])
     c1.caption("👤 " + str(user.get("display_name","")) + " · " + str(user.get("role","")))
     if c2.button("Çıkış", key="ct_logout"):
-        for key in ["ct_user","ct_session_id"]:
+        for key in ["ct_user","ct_session_id","ct_company_session_signature"]:
             st.session_state.pop(key, None)
         st.rerun()
 
