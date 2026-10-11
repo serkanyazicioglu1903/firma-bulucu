@@ -258,20 +258,41 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                             cur, "ci-scoped-reader", code, "Satın Alma"
                         )
                         self.assertEqual(result, "ok")
-                        self.assertEqual(len(rows), 1)
-                        self.assertEqual(rows[0]["id"], ids[key + "_po"])
+                        # Earlier synthetic CI tests may have already created
+                        # additional A-owned records; cardinality != 1 is OK.
+                        self.assertIn(
+                            ids[key + "_po"], {row["id"] for row in rows}
+                        )
+                        for row in rows:
+                            cur.execute(
+                                'SELECT legal_entity_id FROM "ct_app"."purchase_orders" '
+                                'WHERE id=%s', (row["id"],),
+                            )
+                            self.assertEqual(cur.fetchone()[0], ids[key])
                         result, rows = read_company_records_on_cursor(
                             cur, "ci-scoped-reader", code, "Banka / Kasa"
                         )
                         self.assertEqual(result, "ok")
-                        self.assertEqual(len(rows), 1)
-                        self.assertEqual(rows[0]["id"], ids[key + "_bank"])
+                        self.assertIn(
+                            ids[key + "_bank"], {row["id"] for row in rows}
+                        )
+                        for row in rows:
+                            cur.execute(
+                                'SELECT legal_entity_id FROM "ct_app"."cash_accounts" '
+                                'WHERE id=%s', (row["id"],),
+                            )
+                            self.assertEqual(cur.fetchone()[0], ids[key])
                         result, rows = read_company_records_on_cursor(
                             cur, "ci-scoped-reader", code, "Finans Hareketleri"
                         )
                         self.assertEqual(result, "ok")
-                        self.assertEqual(len(rows), 1)
-                        self.assertEqual(rows[0]["amount"], 1)
+                        self.assertTrue(any(row["amount"] == 1 for row in rows))
+                        for row in rows:
+                            cur.execute(
+                                'SELECT legal_entity_id FROM "ct_app"."finance_transactions" '
+                                'WHERE id=%s', (row["id"],),
+                            )
+                            self.assertEqual(cur.fetchone()[0], ids[key])
                     # Even a string called "admin" is not privileged.
                     self.assertEqual(
                         read_company_records_on_cursor(
