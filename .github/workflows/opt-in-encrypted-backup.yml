@@ -1,0 +1,70 @@
+name: Optional daily encrypted PostgreSQL offsite backup
+
+# IMPORTANT: This workflow does NOTHING until the owner sets the repository
+# variable CT_BACKUP_ENABLED=true and both private repository secrets.
+# A skipped job is NOT a successful backup. GitHub Actions artifacts expire.
+on:
+  workflow_dispatch:
+  schedule:
+    # 04:17 Türkiye time (UTC+3, no DST); GitHub schedules can be delayed.
+    - cron: '17 1 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ct_app_encrypted_backup
+  cancel-in-progress: false
+
+jobs:
+  encrypted-ct-app:
+    if: ${{ vars.CT_BACKUP_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CT_BACKUP_ENABLED: ${{ vars.CT_BACKUP_ENABLED }}
+      CT_BACKUP_DATABASE_URL: ${{ secrets.CT_BACKUP_DATABASE_URL }}
+      CT_BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.CT_BACKUP_ENCRYPTION_PASSPHRASE }}
+      CT_BACKUP_OUTPUT_DIR: ${{ runner.temp }}/asct-encrypted
+
+    steps:
+      - name: Checkout trusted main repository code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Ensure backup secrets are present
+        shell: bash
+        run: |
+          if [ -z "$CT_BACKUP_DATABASE_URL" ] || [ -z "$CT_BACKUP_ENCRYPTION_PASSPHRASE" ]; then
+            echo 'ERROR: required private backup secrets have not been configured.'
+            exit 1
+          fi
+
+      - name: Install required PostgreSQL and AES libraries
+        run: python -m pip install 'psycopg[binary]>=3.2' 'cryptography>=44.0'
+
+      - name: Export, AES-encrypt and self-verify backup
+        run: python -m scripts.scheduled_encrypted_backup
+
+      - name: Store encrypted-only offsite snapshot for 7 days
+        uses: actions/upload-artifact@v4
+        with:
+          name: ct_app_encrypted_${{ github.run_id }}_${{ github.run_attempt }}
+          path: ${{ runner.temp }}/asct-encrypted/*.asct
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Cleanup encrypted artifact on runner
+        if: always()
+        shell: bash
+        run: |
+          if [ -d "$CT_BACKUP_OUTPUT_DIR" ]; then
+            rm -f "$CT_BACKUP_OUTPUT_DIR"/*.asct
+          fi
