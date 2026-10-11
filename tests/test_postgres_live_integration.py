@@ -383,6 +383,32 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
             self.assertGreaterEqual(manifest["tables"]["customers"]["row_count"], 1)
 
 
+    def test_postgres_zip_restore_drill_is_complete_and_rolled_back(self):
+        """Roundtrip a real ct_app export into a transaction-only CI clone."""
+        from scripts.postgres_backup import export_postgres_backup
+        from scripts.postgres_restore_drill import verify_disposable_backup_restore
+
+        before = self.execute('SELECT COUNT(*) FROM "ct_app"."customers"')[0]
+        status, payload = export_postgres_backup(self.url)
+        self.assertEqual(status, "ok", status)
+
+        result, report = verify_disposable_backup_restore(self.url, payload)
+        self.assertEqual(result, "verified", result)
+        self.assertEqual(report["tables"], 26)
+        self.assertTrue(report["rolled_back"])
+        self.assertGreaterEqual(report["rows"], 1)
+
+        # A schema created solely inside the trial transaction must vanish.
+        self.assertFalse(self.execute(
+            "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname=%s)",
+            ("ct_restore_verify",),
+        )[0])
+        # The original ci ct_app schema is untouched.
+        self.assertEqual(
+            self.execute('SELECT COUNT(*) FROM "ct_app"."customers"')[0],
+            before,
+        )
+
     def test_all_role_portals_use_live_postgres_without_sqlite(self):
         """Verify non-admin role pages in the disposable PG live backend."""
         import tempfile
