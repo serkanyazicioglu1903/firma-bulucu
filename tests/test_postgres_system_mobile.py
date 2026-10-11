@@ -361,6 +361,7 @@ class MobileSystemTests(unittest.TestCase):
         uploaded.getvalue.return_value = b"FICTIONAL-ZIP"
         st.file_uploader.return_value = uploaded
         st.button.return_value = True
+        st.text_input.return_value = ""
         summary = {
             "table_count": 26, "row_count": 1, "table_counts": {"customers": 1},
             "sha256": "b" * 64, "exported_utc": "2026-10-11T07:00:00Z",
@@ -379,6 +380,24 @@ class MobileSystemTests(unittest.TestCase):
 
 
     @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    def test_zip_rejects_mismatch_before_internal_checksum_is_checked(
+        self, _role, st,
+    ):
+        from unittest.mock import MagicMock
+
+        upload = MagicMock()
+        upload.getvalue.return_value = b"synthetic-but-not-expected"
+        st.file_uploader.return_value = upload
+        st.text_input.return_value = "0" * 64
+        st.button.return_value = True
+        with patch("scripts.postgres_backup_verify.inspect_export_zip") as verify:
+            system.render_postgres_quick_backup_verify()
+        verify.assert_not_called()
+        st.error.assert_called_once()
+        st.success.assert_not_called()
+
+    @patch.object(system, "st")
     @patch.object(system, "current_role", return_value="VIEWER")
     def test_encrypted_backup_hidden_from_non_admin(self, _role, st):
         system.render_postgres_quick_encrypted_backup(URL)
@@ -388,7 +407,7 @@ class MobileSystemTests(unittest.TestCase):
     @patch.object(system, "st")
     @patch.object(system, "current_role", return_value="ADMIN")
     def test_encrypted_export_never_runs_without_confirmation(self, _role, st):
-        st.text_input.side_effect = ["", "", ""]
+        st.text_input.side_effect = ["", "", "", ""]
         st.checkbox.return_value = False
         st.file_uploader.return_value = None
         st.button.return_value = False
@@ -405,7 +424,7 @@ class MobileSystemTests(unittest.TestCase):
     ):
         from scripts.postgres_encrypted_backup import MAGIC
         password = "Sample-safe-passphrase-2026!"
-        st.text_input.side_effect = [password, password, ""]
+        st.text_input.side_effect = [password, password, "", ""]
         st.checkbox.return_value = True
         st.file_uploader.return_value = None
         st.button.return_value = True
@@ -427,11 +446,30 @@ class MobileSystemTests(unittest.TestCase):
 
     @patch.object(system, "st")
     @patch.object(system, "current_role", return_value="ADMIN")
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
+    def test_encrypted_wrong_saved_hash_refuses_decryption(self, _role, st):
+        from unittest.mock import MagicMock
+
+        upload = MagicMock()
+        upload.getvalue.return_value = b"synthetic encrypted file bytes"
+        st.text_input.side_effect = ["", "", "fictional-password", "0" * 64]
+        st.checkbox.return_value = False
+        st.file_uploader.return_value = upload
+        st.button.side_effect = [False, True]
+        with patch(
+            "scripts.postgres_encrypted_backup.inspect_encrypted_export"
+        ) as inspect:
+            system.render_postgres_quick_encrypted_backup(URL)
+        inspect.assert_not_called()
+        st.error.assert_called_once()
+        st.success.assert_not_called()
+
     def test_encrypted_file_verification_without_live_database(self, _role, st):
         from unittest.mock import MagicMock
         upload = MagicMock()
         upload.getvalue.return_value = b"CI only encrypted file"
-        st.text_input.side_effect = ["", "", "Safe-verify-password-2026!"]
+        st.text_input.side_effect = ["", "", "Safe-verify-password-2026!", ""]
         st.checkbox.return_value = False
         st.file_uploader.return_value = upload
         st.button.side_effect = [False, True]
