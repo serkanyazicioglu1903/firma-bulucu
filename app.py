@@ -1160,16 +1160,13 @@ main_tab1, main_tab2, main_tab3, main_tab4 = st.tabs([
     "🧮 Gerçek Teklif / Kârlılık",
 ])
 
-# Render the manual quote BEFORE the 15-section Control Tower. Streamlit
-# evaluates every st.tabs container on each run, including invisible tabs.
-# Legacy PostgreSQL operations can be slow or error before a trailing quote
-# container is reached, leaving the selected fourth tab blank on iPad.
-# Keep a separate lightweight page for a fully independent quote route.
+# Streamlit evaluates ALL st.tabs panels on each rerun, even when hidden.
+# Render the database-free quote FIRST so expensive legacy screens cannot
+# prevent its widgets from appearing. Do NOT use st.page_link() here: the
+# deployed Streamlit page registry can reject "pages/01_real_quote.py"
+# and abort the whole app with StreamlitPageNotFoundError.
+# The standalone route remains available through native multipage navigation.
 with main_tab4:
-    st.page_link(
-        "pages/01_real_quote.py",
-        label="🧮 Teklif hesaplama ekranını ayrı aç",
-    )
     render_real_quote_workspace()
 
 # -------------------------
