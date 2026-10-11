@@ -16,6 +16,7 @@ except Exception:
     DDGS = None
 
 from control_tower import render_control_tower
+from real_quote_workspace import render_real_quote_workspace
 from security_admin import login_gate, logout_button
 from scoped_company_workspace_ui import (
     company_review_mode_state, render_scoped_company_workspace,
@@ -1152,10 +1153,11 @@ def supplier_scan(product, country_label, objective, max_companies, deep_scan, t
 st.title("🏭 AS İleri – Firma & Ürün Bulucu")
 st.caption("Şirket satın alma + yeni ürün / hammadde / üretici / distribütörlük araştırması tek uygulamada")
 
-main_tab1, main_tab2, main_tab3 = st.tabs([
+main_tab1, main_tab2, main_tab3, main_tab4 = st.tabs([
     "🏢 Firma Satın Alma / Halefiyet",
     "🧪 Satın Alma / Üretici Bulucu",
     "🧭 AS Control Tower",
+    "🧮 Gerçek Teklif / Kârlılık",
 ])
 
 # -------------------------
@@ -1434,6 +1436,11 @@ with main_tab2:
 # -------------------------
 with main_tab3:
     render_control_tower()
+
+# Manual calculation only: no demo seed, no business DB reads or writes.
+# Root-level signed company REVIEW mode stops earlier, before these tabs.
+with main_tab4:
+    render_real_quote_workspace()
 
 st.markdown("---")
 st.caption(
