@@ -1160,6 +1160,18 @@ main_tab1, main_tab2, main_tab3, main_tab4 = st.tabs([
     "🧮 Gerçek Teklif / Kârlılık",
 ])
 
+# Render the manual quote BEFORE the 15-section Control Tower. Streamlit
+# evaluates every st.tabs container on each run, including invisible tabs.
+# Legacy PostgreSQL operations can be slow or error before a trailing quote
+# container is reached, leaving the selected fourth tab blank on iPad.
+# Keep a separate lightweight page for a fully independent quote route.
+with main_tab4:
+    st.page_link(
+        "pages/01_real_quote.py",
+        label="🧮 Teklif hesaplama ekranını ayrı aç",
+    )
+    render_real_quote_workspace()
+
 # -------------------------
 # TAB 1: ACQUISITION
 # -------------------------
@@ -1436,11 +1448,6 @@ with main_tab2:
 # -------------------------
 with main_tab3:
     render_control_tower()
-
-# Manual calculation only: no demo seed, no business DB reads or writes.
-# Root-level signed company REVIEW mode stops earlier, before these tabs.
-with main_tab4:
-    render_real_quote_workspace()
 
 st.markdown("---")
 st.caption(
