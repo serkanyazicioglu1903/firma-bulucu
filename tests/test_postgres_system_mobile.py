@@ -446,8 +446,6 @@ class MobileSystemTests(unittest.TestCase):
 
     @patch.object(system, "st")
     @patch.object(system, "current_role", return_value="ADMIN")
-    @patch.object(system, "st")
-    @patch.object(system, "current_role", return_value="ADMIN")
     def test_encrypted_wrong_saved_hash_refuses_decryption(self, _role, st):
         from unittest.mock import MagicMock
 
@@ -465,6 +463,8 @@ class MobileSystemTests(unittest.TestCase):
         st.error.assert_called_once()
         st.success.assert_not_called()
 
+    @patch.object(system, "st")
+    @patch.object(system, "current_role", return_value="ADMIN")
     def test_encrypted_file_verification_without_live_database(self, _role, st):
         from unittest.mock import MagicMock
         upload = MagicMock()
