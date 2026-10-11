@@ -293,6 +293,100 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                              owners[code]),
                         )
 
+                    # Test-only CRM writes: company write grant, audit and
+                    # customer/contacts writes exist only in this rollback.
+                    from scripts.postgres_scoped_company_write_rehearsal import (
+                        rehearsal_extra_ddl, ScopedWriteDenied,
+                    )
+                    from scripts.postgres_scoped_company_crm_write_rehearsal import (
+                        run_company_crm_write_on_cursor,
+                    )
+                    for statement in rehearsal_extra_ddl():
+                        cur.execute(statement)
+                    cur.execute(
+                        'INSERT INTO "ct_app"."company_write_grants" '
+                        '(principal_id,legal_entity_id,can_write) '
+                        'VALUES (%s,%s,TRUE)',
+                        ("ci-crm-reader", owners[owner_a]),
+                    )
+                    created_customer = run_company_crm_write_on_cursor(
+                        cur, "ci-crm-reader", owner_a, "ADMIN",
+                        "create_customer", name="CI New Owned Customer",
+                        country="TR", sector="Food Ingredients", currency="EUR",
+                    )
+                    created_contact = run_company_crm_write_on_cursor(
+                        cur, "ci-crm-reader", owner_a, "ADMIN",
+                        "create_contact", customer_id=created_customer,
+                        name="CI New Contact", email="ci-person@example.invalid",
+                    )
+                    cur.execute(
+                        'SELECT legal_entity_id FROM "ct_app"."customers" '
+                        'WHERE id=%s', (created_customer,),
+                    )
+                    self.assertEqual(cur.fetchone()[0], owners[owner_a])
+                    cur.execute(
+                        'SELECT customer_id, legal_entity_id FROM '
+                        '"ct_app"."contacts" WHERE id=%s', (created_contact,),
+                    )
+                    self.assertEqual(
+                        cur.fetchone(), (created_customer, owners[owner_a]),
+                    )
+
+                    def crm_audit_count():
+                        cur.execute(
+                            'SELECT COUNT(*) FROM "ct_app"."company_operation_audit" '
+                            'WHERE principal_id=%s',
+                            ("ci-crm-reader",),
+                        )
+                        return int(cur.fetchone()[0])
+
+                    self.assertEqual(crm_audit_count(), 2)
+                    # Other-company customer IDs must be unusable despite
+                    # knowing the ID and having an explicit A write grant.
+                    with self.assertRaises(ScopedWriteDenied) as denied:
+                        run_company_crm_write_on_cursor(
+                            cur, "ci-crm-reader", owner_a, "ADMIN",
+                            "create_contact", customer_id=customer_ids[owner_b],
+                            name="CI Wrong Company Contact",
+                        )
+                    self.assertEqual(
+                        denied.exception.code, "wrong_company_customer",
+                    )
+                    # Caller-provided role labels alone NEVER permit SALES
+                    # or VIEWER writes in this initial ADMIN-only rehearsal.
+                    for restricted_role in ("SALES", "VIEWER", "FINANCE"):
+                        with self.assertRaises(ScopedWriteDenied):
+                            run_company_crm_write_on_cursor(
+                                cur, "ci-crm-reader", owner_a, restricted_role,
+                                "create_customer", name="CI Denied",
+                            )
+                    for unauthorized_principal, unauthorized_company in (
+                        ("ci-ungranted", owner_a),
+                        ("ci-crm-reader", owner_b),
+                    ):
+                        with self.assertRaises(ScopedWriteDenied):
+                            run_company_crm_write_on_cursor(
+                                cur, unauthorized_principal,
+                                unauthorized_company, "ADMIN",
+                                "create_customer", name="CI Not Authorized",
+                            )
+                    self.assertEqual(crm_audit_count(), 2)
+
+                    # Grant revocation immediately denies later creation;
+                    # earlier audit remains and read permission is unchanged.
+                    cur.execute(
+                        'UPDATE "ct_app"."company_write_grants" '
+                        'SET can_write=FALSE WHERE principal_id=%s '
+                        'AND legal_entity_id=%s',
+                        ("ci-crm-reader", owners[owner_a]),
+                    )
+                    with self.assertRaises(ScopedWriteDenied):
+                        run_company_crm_write_on_cursor(
+                            cur, "ci-crm-reader", owner_a, "ADMIN",
+                            "create_customer", name="CI Revoked",
+                        )
+                    self.assertEqual(crm_audit_count(), 2)
+
                     status, rows = read_company_crm_on_cursor(
                         cur, "ci-crm-reader", owner_a, "Müşteriler"
                     )
