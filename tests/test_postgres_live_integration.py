@@ -1738,9 +1738,15 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
 
 
     def test_postgres_zip_restore_drill_is_complete_and_rolled_back(self):
-        """Roundtrip a real ct_app export into a transaction-only CI clone."""
+        """Roundtrip and fingerprint a real CI export, without durable writes."""
         from scripts.postgres_backup import export_postgres_backup
         from scripts.postgres_restore_drill import verify_disposable_backup_restore
+        from scripts.postgres_recovery_baseline import read_legacy_baseline
+
+        source_before = read_legacy_baseline(self.url)
+        self.assertEqual(source_before["status"], "baseline_captured")
+        self.assertEqual(source_before["tables"], 26)
+        self.assertFalse(source_before["production_cutover_approved"])
 
         before = self.execute('SELECT COUNT(*) FROM "ct_app"."customers"')[0]
         status, payload = export_postgres_backup(self.url)
@@ -1751,6 +1757,17 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
         self.assertEqual(report["tables"], 26)
         self.assertTrue(report["rolled_back"])
         self.assertGreaterEqual(report["rows"], 1)
+        self.assertTrue(report["schema_counts_match"])
+        self.assertFalse(report["provider_restore_verified"])
+        source_after = read_legacy_baseline(self.url)
+        self.assertEqual(source_after["status"], "baseline_captured")
+        self.assertEqual(
+            source_before["schema_sha256"], source_after["schema_sha256"]
+        )
+        self.assertEqual(
+            source_before["counts_sha256"], source_after["counts_sha256"]
+        )
+        self.assertEqual(source_before["rows"], source_after["rows"])
 
         # A schema created solely inside the trial transaction must vanish.
         self.assertFalse(self.execute(
