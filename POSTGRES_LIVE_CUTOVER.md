@@ -78,6 +78,31 @@ A finding requires manual investigation by the responsible business team.
 The checks are also tested on a disposable local PostgreSQL CI service, with
 fictional bad-stock input to establish that anomalies are detected.
 
+## Şifreli elle yedekleme — Free plan için güvenli dış dosya
+
+Yeni **🔐 Şifreli PostgreSQL yedeği — hızlı erişim** ekranı yalnızca
+**ADMIN** oturumunda görünür. Birbirini tutan iki parola girişi (en az 14
+karakter) ve parolanın ayrı saklanacağına ilişkin onay olmadan yedek alınmaz.
+Kullanıcı düğmeye bilerek bastığında uygulama 26 tablonun salt okunur ZIP'ini
+hazırlar, ZIP'in bütünlük kontrolünü yapar, ardından **AES-256-GCM** ile
+şifreleyip `.asct` dosyası olarak indirmeye sunar.
+
+- Her yedekte yeni 16 bayt salt ve 12 bayt nonce kullanılır.
+- Anahtar, `scrypt(N=2^14,r=8,p=1)` ile parola üzerinden türetilir.
+- Başlık/salt GCM ek doğrulanmış veri (AAD) kapsamındadır.
+- Yanlış parola veya tek bayt dosya değişikliği doğrulamayı başarısız kılar.
+- Parola dosyaya yazılmaz, veritabanına konmaz, loglanmaz veya GitHub'a
+  gönderilmez. Açık ZIP sadece işlem belleğinde kullanılır; dosya sunucu
+  diski veya GitHub Actions artifact olarak kaydedilmez.
+- Aynı ekranda `.asct` dosyasını yükleyip parolayla tekrar doğrulayabilirsin;
+  bu, dosyayı kalıcı Supabase veritabanına geri yüklemek değildir.
+
+**Parolanı kaybedersen AES şifreli dosyayı açmak mümkün olmaz.** Parolayı
+dosyadan ayrı, güvenli parola yöneticisinde sakla ve birden fazla korumalı
+kopya bulundur. Şifreli elle yedek, Free plandaki otomatik yönetilen yedek
+eksikliğini tek başına gidermez; düzenli dışa aktarım prosedürü ve felaket
+kurtarma planı hâlâ kurulmalıdır.
+
 ## İndirilmiş ZIP dosyasının yerel bütünlük kontrolü
 
 **🧪 İndirilen yedeği doğrula — hızlı erişim**, yalnızca giriş yapmış

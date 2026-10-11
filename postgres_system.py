@@ -52,6 +52,109 @@ def _render_backup(url, key_prefix):
 
 
 
+
+def render_postgres_quick_encrypted_backup(url):
+    """ADMIN-only authenticated AES encrypted export and offline verification."""
+    if current_role() != "ADMIN":
+        return
+    with st.expander("🔐 Şifreli PostgreSQL yedeği — hızlı erişim"):
+        st.caption(
+            "Free planında güvenli dış yedek için: En az 14 karakterli "
+            "ayrı bir parola belirle. Dosya AES-256-GCM ile şifrelenir. "
+            "Parola yedeğin içine yazılmaz; unutursan yedeği açamazsın."
+        )
+        pw = st.text_input(
+            "Yedek parolası",
+            type="password",
+            key="ct_pg_encrypted_pw",
+        )
+        confirmation = st.text_input(
+            "Yedek parolasını tekrar yaz",
+            type="password",
+            key="ct_pg_encrypted_pw_again",
+        )
+        saved = st.checkbox(
+            "Parolamı yedekten ayrı, güvenli bir yerde saklayacağım.",
+            key="ct_pg_encrypted_password_saved",
+        )
+        can_export = bool(
+            saved and pw == confirmation and len(pw) >= 14
+        )
+        if st.button(
+            "🔐 AES şifreli PostgreSQL yedeği hazırla",
+            key="ct_pg_encrypted_prepare",
+            disabled=not can_export,
+        ):
+            from scripts.postgres_backup import export_postgres_backup
+            from scripts.postgres_encrypted_backup import encrypt_export_zip
+
+            with st.spinner("Kalıcı veritabanının şifreli yedeği oluşturuluyor..."):
+                status, archive = export_postgres_backup(url)
+                if status == "ok":
+                    enc_status, payload = encrypt_export_zip(archive, pw)
+                else:
+                    enc_status, payload = "export_failed", None
+            if enc_status != "encrypted":
+                st.error(
+                    "Şifreli yedek hazırlanamadı. Veri değiştirilmedi. "
+                    "Yedekleme sınırlarını ve parolanı kontrol et."
+                )
+            else:
+                filename = (
+                    "AS_Control_Tower_ct_app_encrypted_"
+                    + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                    + ".asct"
+                )
+                st.success("AES-256 şifreli yedek hazır. Dosyayı güvenli yere indir.")
+                st.download_button(
+                    "🔐 Şifreli yedeği indir (.asct)",
+                    data=payload, file_name=filename,
+                    mime="application/octet-stream",
+                    key="ct_pg_encrypted_download",
+                )
+
+        st.markdown("#### Şifreli yedeğin bütünlüğünü doğrula")
+        st.caption(
+            "İndirdiğin .asct dosyasını kendi Streamlit ekranında kontrol et. "
+            "Parolan sohbet veya veritabanına gönderilmez."
+        )
+        uploaded = st.file_uploader(
+            "Doğrulanacak şifreli yedek (.asct)",
+            type=["asct"],
+            key="ct_pg_encrypted_verify_file",
+        )
+        verify_pw = st.text_input(
+            "Doğrulama parolası",
+            type="password",
+            key="ct_pg_encrypted_verify_pw",
+        )
+        if uploaded is not None and st.button(
+            "🔎 Şifreli dosyayı doğrula",
+            key="ct_pg_encrypted_verify_click",
+            disabled=not bool(verify_pw),
+        ):
+            from scripts.postgres_encrypted_backup import inspect_encrypted_export
+
+            with st.spinner("AES doğrulama etiketi ve ZIP tabloları inceleniyor..."):
+                status, report = inspect_encrypted_export(
+                    uploaded.getvalue(), verify_pw,
+                )
+            if status != "verified_encrypted":
+                st.error(
+                    "Şifreli dosya veya parola doğrulanamadı. "
+                    "Bu yedeğe güvenerek geri yükleme yapma."
+                )
+            else:
+                st.success(
+                    f"AES ve ZIP iç bütünlüğü doğrulandı: "
+                    f"{report['table_count']} tablo, "
+                    f"{report['row_count']} kayıt. Bu bir geri yükleme testi değildir."
+                )
+                st.code(report["encrypted_sha256"], language="text")
+                st.caption("SHA-256 şifreli dosyaya aittir. Parolanı koru.")
+
+
+
 def render_postgres_quick_backup_verify():
     """Verify a user's existing ZIP in memory; never touch PostgreSQL."""
     if current_role() != "ADMIN":

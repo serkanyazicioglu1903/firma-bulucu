@@ -474,6 +474,27 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                         )
 
 
+    def test_encrypted_backup_roundtrip_on_disposable_postgres(self):
+        """Encrypt an actual PostgreSQL export, validate and decrypt in memory."""
+        from scripts.postgres_backup import export_postgres_backup
+        from scripts.postgres_encrypted_backup import (
+            decrypt_export_zip, encrypt_export_zip, inspect_encrypted_export,
+        )
+        passphrase = "Only-a-fictional-CI-password-2026!"
+        status, archive = export_postgres_backup(self.url)
+        self.assertEqual(status, "ok")
+        result, cipher = encrypt_export_zip(archive, passphrase)
+        self.assertEqual(result, "encrypted")
+        self.assertNotEqual(cipher, archive)
+        self.assertNotIn(archive, cipher)
+        verified, summary = inspect_encrypted_export(cipher, passphrase)
+        self.assertEqual(verified, "verified_encrypted")
+        self.assertEqual(summary["table_count"], 26)
+        self.assertFalse(summary["restoration_tested"])
+        decrypt_status, restored_zip = decrypt_export_zip(cipher, passphrase)
+        self.assertEqual(decrypt_status, "decrypted")
+        self.assertEqual(restored_zip, archive)
+
     def test_postgres_live_backup_has_26_tables_and_hash_manifest(self):
         """Export a consistent, real, read-only backup of fictional Docker data."""
         import io
