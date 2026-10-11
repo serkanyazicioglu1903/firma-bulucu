@@ -78,6 +78,29 @@ A finding requires manual investigation by the responsible business team.
 The checks are also tested on a disposable local PostgreSQL CI service, with
 fictional bad-stock input to establish that anomalies are detected.
 
+## İndirilmiş ZIP dosyasının yerel bütünlük kontrolü
+
+**🧪 İndirilen yedeği doğrula — hızlı erişim**, yalnızca giriş yapmış
+**ADMIN** kullanıcısına açılır. Kullanıcı kendi telefonundan/Mac'inden
+aldığı ZIP dosyasını Streamlit uygulamasına seçer ve kontrol düğmesine
+bilerek basar. Araç ZIP'i uygulama belleğinde sınırlar ve şu kontrolleri
+yapar:
+
+- Tam 26 tablo ve izinli ZIP üyeleri; geçerli yedek formatı/manifest;
+- Her tablo için SHA-256 ve bildirilen satır sayısı;
+- Gerçek satırlar mevcutsa beklenen kolon adlarının bire bir eşleşmesi;
+- En fazla 30 MB ZIP, ZIP açılma boyutu ve satır sayısı sınırları.
+
+İşlem sırasında **veritabanına erişilmez, satır güncellenmez**, sunucu diskine
+yedek kaydedilmez ve satır içerikleri ekranda gösterilmez. Yalnızca
+arşivin bütün dosya SHA-256 değeri, tablo/kayıt sayıları ve tarih gösterilir.
+Bu doğrulama, dosyanın korunmuş olabileceğini kanıtlar; onu canlı Supabase'e
+geri yüklemez, felaket kurtarma testinin yerini tutmaz.
+
+**Gizlilik:** ZIP dosyası Streamlit sunucusuna bellekte doğrulama amacıyla
+aktarılır; ChatGPT sohbetine yüklemeye gerek yoktur. Dosya düz metin ZIP
+biçimindedir ve şirket verisi içerir: güvenli, şifreli özel depoda tutulmalıdır.
+
 ## Yedekten geri yükleme tatbikatı — gerçek fakat izole PostgreSQL
 
 GitHub Actions, 26 tabloluk uygulama yedeğinin manifestini ve SHA-256
