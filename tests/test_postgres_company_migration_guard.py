@@ -20,6 +20,8 @@ class CompanyMigrationGuardTests(unittest.TestCase):
             ((), (True, False, False, False, False)),
             ((), (False, True, False, False, False)),
             ((), (False, False, True, False, False)),
+            ((), (False, False, False, True, False)),
+            ((), (False, False, False, False, True)),
             (("purchase_orders",), (True, False, False, False, False)),
             (TABLES[:-1], (True, True, True, True, True)),
             (TABLES, (False, False, False, False, False)),
