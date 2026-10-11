@@ -57,7 +57,7 @@ class ExecutiveSnapshotTests(unittest.TestCase):
     ))
     def test_aggregate_queries_are_fixed_tenant_and_grant_bound(self, authorize):
         cur = MagicMock()
-        cur.fetchone.return_value = (1,)
+        cur.fetchone.side_effect = [(1,)] * 8 + [(250, 12)]
         cur.fetchall.return_value = [("EUR", 50), ("GBP", 120)]
         status, report = summary.company_executive_snapshot_on_cursor(
             cur, "ci-user", "AS_FOOD_GLOBAL"
@@ -83,8 +83,7 @@ class ExecutiveSnapshotTests(unittest.TestCase):
             self.assertNotIn("ci-user", sql)
         self.assertIn(
             'GROUP BY b.currency',
-            cur.execute.call_args_list[-2].args[0]
-            if False else cur.execute.call_args_list[8].args[0],
+            cur.execute.call_args_list[8].args[0],
         )
 
     @patch.object(summary, "authorize_company_on_cursor", return_value=(
@@ -92,7 +91,7 @@ class ExecutiveSnapshotTests(unittest.TestCase):
     ))
     def test_currencies_not_converted_or_combined(self, authorize):
         cur = MagicMock()
-        cur.fetchone.return_value = (0, 0)
+        cur.fetchone.side_effect = [(0,)] * 8 + [(0, 0)]
         cur.fetchall.return_value = [("EUR", 100), ("TRY", 200)]
         status, report = summary.company_executive_snapshot_on_cursor(
             cur, "ci-user", "AS_ILERI_GIDA"
