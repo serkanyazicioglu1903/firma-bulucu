@@ -106,7 +106,7 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
             self.assertEqual(cur.fetchone()[0], before)
 
     def test_legal_entity_constraints_rehearsed_then_rolled_back(self):
-        """Two fictional entities, real FK checks, disposable CI only.
+        """Four fictional entities, real FK checks, disposable CI only.
 
         Even in CI, rollback BOTH schema and dummy data before other tests.
         Never guess existing row ownership in a production database.
@@ -128,14 +128,16 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                     cur.execute(
                         'INSERT INTO "ct_app"."legal_entities" (code,legal_name) '
                         "VALUES ('CI_A','Fictional CI Company A'), "
-                        "('CI_B','Fictional CI Company B') RETURNING id"
+                        "('CI_B','Fictional CI Company B'), "
+                        "('CI_C','Fictional CI Company C'), "
+                        "('CI_D','Fictional CI Company D') RETURNING id"
                     )
                     # ID assignments exist *only inside this transaction*.
                     cur.execute(
                         'SELECT id,code FROM "ct_app"."legal_entities" ORDER BY code'
                     )
                     ids = {code: int(entity_id) for entity_id, code in cur.fetchall()}
-                    self.assertEqual(set(ids), {"CI_A", "CI_B"})
+                    self.assertEqual(set(ids), {"CI_A", "CI_B", "CI_C", "CI_D"})
                     for table in CRITICAL_TABLES:
                         cur.execute(
                             f'UPDATE "ct_app"."{table}" '
@@ -145,7 +147,7 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                     for stmt in enforcement_ddl():
                         cur.execute(stmt)
 
-                    for key in ("CI_A", "CI_B"):
+                    for key in ("CI_A", "CI_B", "CI_C", "CI_D"):
                         cur.execute(
                             'INSERT INTO "ct_app"."purchase_orders" '
                             '(po_number,supplier,product_name,legal_entity_id) '
@@ -155,23 +157,58 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                         )
                         ids[key + "_po"] = int(cur.fetchone()[0])
 
-                    cur.execute(
-                        'INSERT INTO "ct_app"."shipments" '
-                        '(purchase_order_id,shipment_ref,legal_entity_id) '
-                        'VALUES (%s,%s,%s)',
-                        (ids["CI_B_po"], "CI VALID B", ids["CI_B"]),
-                    )
-                    # Business B cannot attach its shipment to company A PO.
-                    cur.execute("SAVEPOINT reject_cross_company")
-                    with self.assertRaises(psycopg.errors.ForeignKeyViolation):
+                    # Every company may ship its own PO but never another's.
+                    for key in ("CI_A", "CI_B", "CI_C", "CI_D"):
                         cur.execute(
                             'INSERT INTO "ct_app"."shipments" '
                             '(purchase_order_id,shipment_ref,legal_entity_id) '
                             'VALUES (%s,%s,%s)',
-                            (ids["CI_A_po"], "CI WRONG ENTITY", ids["CI_B"]),
+                            (ids[key + "_po"], f"CI VALID {key}", ids[key]),
                         )
-                    cur.execute("ROLLBACK TO SAVEPOINT reject_cross_company")
-                    cur.execute("RELEASE SAVEPOINT reject_cross_company")
+                    for owner, foreign in (
+                        ("CI_B", "CI_A"), ("CI_C", "CI_B"),
+                        ("CI_D", "CI_C"), ("CI_A", "CI_D"),
+                    ):
+                        cur.execute("SAVEPOINT reject_cross_company")
+                        with self.assertRaises(psycopg.errors.ForeignKeyViolation):
+                            cur.execute(
+                                'INSERT INTO "ct_app"."shipments" '
+                                '(purchase_order_id,shipment_ref,legal_entity_id) '
+                                'VALUES (%s,%s,%s)',
+                                (ids[foreign + "_po"], f"CI WRONG {owner}",
+                                 ids[owner]),
+                            )
+                        cur.execute("ROLLBACK TO SAVEPOINT reject_cross_company")
+                        cur.execute("RELEASE SAVEPOINT reject_cross_company")
+
+                    # A UK/holding/Planet cash account must not be linked
+                    # to an unrelated entity's finance transaction.
+                    for key in ("CI_A", "CI_B", "CI_C", "CI_D"):
+                        cur.execute(
+                            'INSERT INTO "ct_app"."cash_accounts" '
+                            '(name,currency,legal_entity_id) VALUES (%s,%s,%s) '
+                            'RETURNING id',
+                            (f"CI BANK {key}", "EUR", ids[key]),
+                        )
+                        ids[key + "_bank"] = int(cur.fetchone()[0])
+                        cur.execute(
+                            'INSERT INTO "ct_app"."finance_transactions" '
+                            '(transaction_type,transaction_date,amount,currency,'
+                            'account_id,legal_entity_id) VALUES (%s,%s,%s,%s,%s,%s)',
+                            ("CI_SYNTHETIC", "2026-10-11", 1, "EUR",
+                             ids[key + "_bank"], ids[key]),
+                        )
+                    cur.execute("SAVEPOINT reject_finance_cross_company")
+                    with self.assertRaises(psycopg.errors.ForeignKeyViolation):
+                        cur.execute(
+                            'INSERT INTO "ct_app"."finance_transactions" '
+                            '(transaction_type,transaction_date,amount,currency,'
+                            'account_id,legal_entity_id) VALUES (%s,%s,%s,%s,%s,%s)',
+                            ("CI_SYNTHETIC", "2026-10-11", 1, "EUR",
+                             ids["CI_A_bank"], ids["CI_D"]),
+                        )
+                    cur.execute("ROLLBACK TO SAVEPOINT reject_finance_cross_company")
+                    cur.execute("RELEASE SAVEPOINT reject_finance_cross_company")
 
                     # Ownerless financial rows must fail after enforcement.
                     cur.execute("SAVEPOINT reject_ownerless")
