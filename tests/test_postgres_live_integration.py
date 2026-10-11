@@ -105,6 +105,102 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
             cur.execute('SELECT COUNT(*) FROM "ct_app"."audit_log"')
             self.assertEqual(cur.fetchone()[0], before)
 
+    def test_legal_entity_constraints_rehearsed_then_rolled_back(self):
+        """Two fictional entities, real FK checks, disposable CI only.
+
+        Even in CI, rollback BOTH schema and dummy data before other tests.
+        Never guess existing row ownership in a production database.
+        """
+        from scripts.postgres_legal_entity_rehearsal import (
+            additive_ddl, enforcement_ddl,
+        )
+        from scripts.postgres_company_scope import CRITICAL_TABLES
+        import psycopg
+
+        class IntentionallyRollback(Exception):
+            pass
+
+        try:
+            with self.conn.transaction():
+                with self.conn.cursor() as cur:
+                    for stmt in additive_ddl():
+                        cur.execute(stmt)
+                    cur.execute(
+                        'INSERT INTO "ct_app"."legal_entities" (code,legal_name) '
+                        "VALUES ('CI_A','Fictional CI Company A'), "
+                        "('CI_B','Fictional CI Company B') RETURNING id"
+                    )
+                    # ID assignments exist *only inside this transaction*.
+                    cur.execute(
+                        'SELECT id,code FROM "ct_app"."legal_entities" ORDER BY code'
+                    )
+                    ids = {code: int(entity_id) for entity_id, code in cur.fetchall()}
+                    self.assertEqual(set(ids), {"CI_A", "CI_B"})
+                    for table in CRITICAL_TABLES:
+                        cur.execute(
+                            f'UPDATE "ct_app"."{table}" '
+                            'SET legal_entity_id=%s WHERE legal_entity_id IS NULL',
+                            (ids["CI_A"],),
+                        )
+                    for stmt in enforcement_ddl():
+                        cur.execute(stmt)
+
+                    for key in ("CI_A", "CI_B"):
+                        cur.execute(
+                            'INSERT INTO "ct_app"."purchase_orders" '
+                            '(po_number,supplier,product_name,legal_entity_id) '
+                            'VALUES (%s,%s,%s,%s) RETURNING id',
+                            (f"CI-OWNED-{key}", "CI SYNTHETIC SUPPLIER",
+                             "CI SYNTHETIC PRODUCT", ids[key]),
+                        )
+                        ids[key + "_po"] = int(cur.fetchone()[0])
+
+                    cur.execute(
+                        'INSERT INTO "ct_app"."shipments" '
+                        '(purchase_order_id,shipment_ref,legal_entity_id) '
+                        'VALUES (%s,%s,%s)',
+                        (ids["CI_B_po"], "CI VALID B", ids["CI_B"]),
+                    )
+                    # Business B cannot attach its shipment to company A PO.
+                    cur.execute("SAVEPOINT reject_cross_company")
+                    with self.assertRaises(psycopg.errors.ForeignKeyViolation):
+                        cur.execute(
+                            'INSERT INTO "ct_app"."shipments" '
+                            '(purchase_order_id,shipment_ref,legal_entity_id) '
+                            'VALUES (%s,%s,%s)',
+                            (ids["CI_A_po"], "CI WRONG ENTITY", ids["CI_B"]),
+                        )
+                    cur.execute("ROLLBACK TO SAVEPOINT reject_cross_company")
+                    cur.execute("RELEASE SAVEPOINT reject_cross_company")
+
+                    # Ownerless financial rows must fail after enforcement.
+                    cur.execute("SAVEPOINT reject_ownerless")
+                    with self.assertRaises(psycopg.errors.NotNullViolation):
+                        cur.execute(
+                            'INSERT INTO "ct_app"."cash_accounts" '
+                            '(name,currency) VALUES (%s,%s)',
+                            ("CI OWNERLESS BANK", "EUR"),
+                        )
+                    cur.execute("ROLLBACK TO SAVEPOINT reject_ownerless")
+                    cur.execute("RELEASE SAVEPOINT reject_ownerless")
+
+                raise IntentionallyRollback()
+        except IntentionallyRollback:
+            pass
+
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n "
+                "ON n.oid=c.relnamespace WHERE n.nspname='ct_app' "
+                "AND c.relname='legal_entities'"
+            )
+            self.assertEqual(cur.fetchone()[0], 0)
+            cur.execute(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                "WHERE table_schema='ct_app' AND column_name='legal_entity_id'"
+            )
+            self.assertEqual(cur.fetchone()[0], 0)
+
     def test_actual_crm_purchase_stock_quality_and_finance(self):
         customer = create_customer(self.url, "SALES", "CI FICTIONAL CUSTOMER")
         self.assertEqual(customer[0], "ok", customer[0])
