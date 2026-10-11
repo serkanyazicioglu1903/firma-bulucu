@@ -52,8 +52,8 @@ class PurchaseDraftPreviewTests(unittest.TestCase):
                                  "ONAYSIZ TASLAK - SİPARİŞ OLUŞTURULMADI")
                 self.assertEqual(rows["Tedarikçi mal bedeli"],
                                  ("57600.0", "EUR"))
-                self.assertIn("Gerçek PO numarası", "Gerçek PO numarası")
-                self.assertIn("Sipariş", rows["Uyarı"][0])
+                self.assertIn("İmza", rows["Uyarı"][0])
+                self.assertIn("Gerçek PO numarası", rows["Kayıt"][0])
                 self.assertNotIn("company_write_grants", data.decode("utf-8-sig"))
                 self.assertNotIn("legal_entity_id", data.decode("utf-8-sig"))
 
