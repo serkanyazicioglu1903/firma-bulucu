@@ -134,7 +134,7 @@ def read_company_records_on_cursor(cur, principal_id, company_code, section):
         'g.principal_id=%s AND g.can_read=TRUE '
         'ORDER BY b.id DESC LIMIT ' + str(LIMIT)
     )
-    cur.execute(statement, (int(owned[0]), company_code, principal_id))
+    cur.execute(statement, (company_id, company_code, principal_id))
     # Cursor factories in psycopg can be either tuples or dictionaries.
     records = cur.fetchall()
     if records and isinstance(records[0], dict):
