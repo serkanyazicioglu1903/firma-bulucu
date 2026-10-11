@@ -84,6 +84,27 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                 return cur.fetchone()
             return None
 
+    def test_two_company_readiness_gate_on_disposable_postgres(self):
+        """Schema review never certifies entity isolation or writes records."""
+        from scripts.postgres_company_scope import assess_company_scope
+        from scripts.postgres_acceptance import evaluate_acceptance
+
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT COUNT(*) FROM "ct_app"."audit_log"')
+            before = cur.fetchone()[0]
+        review = assess_company_scope(self.url)
+        self.assertEqual(review["status"], "review_required")
+        self.assertEqual(review["checked_count"], 8)
+        self.assertEqual(len(review["without_direct_entity"]), 8)
+        self.assertFalse(review["isolation_verified"])
+
+        acceptance = evaluate_acceptance(self.url)
+        self.assertIn(acceptance["status"], ("review_required", "critical_issues"))
+        self.assertIn("Tüzel kişi ayrımı", acceptance["external_gates"][0])
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT COUNT(*) FROM "ct_app"."audit_log"')
+            self.assertEqual(cur.fetchone()[0], before)
+
     def test_actual_crm_purchase_stock_quality_and_finance(self):
         customer = create_customer(self.url, "SALES", "CI FICTIONAL CUSTOMER")
         self.assertEqual(customer[0], "ok", customer[0])
