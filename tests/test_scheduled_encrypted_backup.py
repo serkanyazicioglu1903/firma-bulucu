@@ -72,6 +72,23 @@ class ScheduledEncryptedBackupTests(unittest.TestCase):
                 backup.write_encrypted_artifact(b"NEW-BYTES", destination)
             self.assertEqual(destination.read_bytes(), b"SYNTHETIC-CIPHERTEXT")
 
+    def test_actions_secrets_are_step_scoped_and_job_is_opt_in(self):
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github/workflows/opt-in-encrypted-backup.yml"
+        ).read_text(encoding="utf-8")
+        job_header = workflow.split("    steps:", 1)[0]
+        self.assertIn("vars.CT_BACKUP_ENABLED == 'true'", job_header)
+        self.assertNotIn("secrets.CT_BACKUP_DATABASE_URL", job_header)
+        self.assertNotIn("secrets.CT_BACKUP_ENCRYPTION_PASSPHRASE", job_header)
+        self.assertNotIn("runner.temp", job_header)
+        self.assertIn("retention-days: 7", workflow)
+        self.assertIn("if-no-files-found: error", workflow)
+        self.assertEqual(workflow.count("${{ secrets.CT_BACKUP_DATABASE_URL }}"), 2)
+        self.assertEqual(
+            workflow.count("${{ secrets.CT_BACKUP_ENCRYPTION_PASSPHRASE }}"), 2
+        )
+
     def test_disabled_workflow_cannot_request_postgres_export(self):
         out = StringIO()
         with patch.dict(os.environ, {"CT_BACKUP_ENABLED": "false"}):
