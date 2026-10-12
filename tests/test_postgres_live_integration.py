@@ -198,6 +198,53 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                 denied = inspect_blueprint_fks_on_cursor(cur, blueprint)
                 self.assertEqual(denied["issue_codes"], ("nullable_parent_fk",))
 
+    def test_live_user_role_guard_rejects_ci_admin_and_role_switch(self):
+        """Even real RLS and switched test roles do not prove LOGIN binding."""
+        from scripts.company_db_role_preflight import (
+            review_postgres_app_role_on_cursor,
+        )
+        from scripts.four_company_rls_ci_proof import CI_ROLES, ci_23_table_rls_sql
+        from scripts.four_company_foundation_ddl import foundation_ddl
+
+        # This session uses privileged CI DDL credentials, not a per-user
+        # login; it must categorically fail production role readiness.
+        with self.conn.transaction():
+            with self.conn.cursor() as cur:
+                cur.execute("SET TRANSACTION READ ONLY")
+                blocked = review_postgres_app_role_on_cursor(cur, "ct_ci")
+                self.assertEqual(blocked["status"], "blocked")
+                self.assertFalse(blocked["production_authorized"])
+
+        class RlsLoginRollback(Exception):
+            pass
+        try:
+            with self.conn.transaction():
+                with self.conn.cursor() as cur:
+                    for statement in foundation_ddl():
+                        cur.execute(statement)
+                    for statement in ci_23_table_rls_sql():
+                        cur.execute(statement)
+                    # SET ROLE in a privileged session is NOT equivalent
+                    # to a direct authenticated low-privilege DB connection.
+                    try:
+                        cur.execute("SET LOCAL ROLE " + CI_ROLES[0])
+                        blocked = review_postgres_app_role_on_cursor(
+                            cur, CI_ROLES[0]
+                        )
+                        self.assertEqual(
+                            blocked["issue_codes"],
+                            ("not_direct_authenticated_db_role",),
+                        )
+                    finally:
+                        cur.execute("RESET ROLE")
+                    raise RlsLoginRollback()
+        except RlsLoginRollback:
+            pass
+        with self.conn.cursor() as cur:
+            for role in CI_ROLES:
+                cur.execute("SELECT to_regrole(%s)", (role,))
+                self.assertIsNone(cur.fetchone()[0])
+
     def test_23_business_owner_columns_and_default_deny_registries_rollback(self):
         """Real PG setup rehearsal, NO live Supabase or owner assignment."""
         from scripts.four_company_foundation_ddl import (
