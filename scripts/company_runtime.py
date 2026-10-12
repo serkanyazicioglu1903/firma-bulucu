@@ -82,6 +82,13 @@ def _bind(cur, principal, role, app_role):
     report = review_postgres_app_role_on_cursor(cur, role)
     if not report['least_privilege_review']:
         raise ScopedWriteDenied('unsafe_database_role')
+    registry = ['company_login_bindings','company_read_grants','company_write_grants',
+                'legal_entities','company_warehouse_scope','company_operation_audit',
+                'company_requests','product_catalog','audit_log','system_settings',
+                'company_suppliers','company_stock_movements']
+    cur.execute("SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='ct_app' AND c.relname=ANY(%s) AND c.relrowsecurity AND c.relforcerowsecurity AND c.relowner<>(SELECT oid FROM pg_roles WHERE rolname=current_user)",(registry,))
+    if cur.fetchone() != (len(registry),):
+        raise ScopedWriteDenied('unsafe_database_role')
     cur.execute('SELECT principal_id,app_role FROM ct_app.company_login_bindings WHERE db_role=current_user AND enabled')
     if cur.fetchall() != [(principal, app_role)]:
         raise ScopedWriteDenied('identity_mismatch')
@@ -166,15 +173,56 @@ def purchase_from_quote(cur, company, *, quote_id, po_number, supplier, product_
     return ident
 
 
+def create_supplier(cur, company, *, name, website='', email='', country='', evidence=''):
+    from scripts.postgres_scoped_company_crm_write_rehearsal import _text
+    name=_text(name,required=True)
+    website=_text(website,limit=500)
+    if website and urlsplit(website).scheme not in ('https','http'):
+        raise ScopedWriteDenied('invalid_input')
+    cur.execute('INSERT INTO ct_app.company_suppliers (legal_entity_id,name,website,email,country,evidence) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id',(company,name,website,_text(email),_text(country),_text(evidence,limit=2000)))
+    return cur.fetchone()[0]
+
+
+def dispatch_sale(cur, company, *, quote_id, lot_id, quantity_kg, reference, dispatch_date):
+    quote_id,lot_id=_checked_id(quote_id),_checked_id(lot_id)
+    qty=_positive(quantity_kg)
+    cur.execute('SELECT product_name,quantity_kg,status FROM ct_app.quotes WHERE id=%s AND legal_entity_id=%s FOR UPDATE',(quote_id,company))
+    quote=cur.fetchone()
+    if not quote or quote[2]!='Faturalandı':
+        raise ScopedWriteDenied('invoice_required')
+    cur.execute('SELECT product_name,quantity_available_kg,quantity_reserved_kg,quality_status,quality_hold_kg,expiry_date FROM ct_app.inventory_lots WHERE id=%s AND legal_entity_id=%s FOR UPDATE',(lot_id,company))
+    lot=cur.fetchone()
+    if not lot or lot[0]!=quote[0]:
+        raise ScopedWriteDenied('wrong_company_lot')
+    if lot[3] not in ('Released','',None) or Decimal(str(lot[4] or 0))>0:
+        raise ScopedWriteDenied('quality_hold_blocks_dispatch')
+    when=_calendar_date(dispatch_date)
+    if lot[5] and _calendar_date(lot[5]) < when:
+        raise ScopedWriteDenied('expired_lot')
+    if qty > Decimal(str(lot[1] or 0))-Decimal(str(lot[2] or 0)):
+        raise ScopedWriteDenied('insufficient_stock')
+    cur.execute('SELECT COALESCE(SUM(quantity_kg),0) FROM ct_app.company_stock_movements WHERE quote_id=%s AND legal_entity_id=%s',(quote_id,company))
+    if qty+cur.fetchone()[0] > quote[1]:
+        raise ScopedWriteDenied('over_dispatch')
+    cur.execute('INSERT INTO ct_app.company_stock_movements (legal_entity_id,lot_id,quote_id,quantity_kg,reference,dispatch_date) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id',(company,lot_id,quote_id,qty,_checked_text(reference),when))
+    ident=cur.fetchone()[0]
+    cur.execute('UPDATE ct_app.inventory_lots SET quantity_available_kg=quantity_available_kg-%s WHERE id=%s AND legal_entity_id=%s',(qty,lot_id,company))
+    return ident
+
+
 HANDLERS = {**_ACTIONS, **_CRM_HANDLERS,
             'create_warehouse': create_warehouse, 'create_product': create_product,
             'create_account': create_account, 'create_receivable': create_receivable, 'create_quote': create_quote,
-            'invoice_quote': invoice_quote, 'purchase_from_quote': purchase_from_quote}
+            'invoice_quote': invoice_quote, 'purchase_from_quote': purchase_from_quote,
+            'create_supplier':create_supplier,'dispatch_sale':dispatch_sale}
 TABLES = {**_ACTION_TABLE, **_CRM_ACTIONS, 'create_warehouse': 'warehouses',
           'create_product': 'product_catalog', 'create_account': 'cash_accounts',
           'create_receivable': 'receivables', 'create_quote':'quotes',
-          'invoice_quote':'receivables', 'purchase_from_quote':'purchase_orders'}
+          'invoice_quote':'receivables', 'purchase_from_quote':'purchase_orders',
+          'create_supplier':'company_suppliers','dispatch_sale':'company_stock_movements'}
 EXTRA_READS = {
+    'Tedarikçiler': ('company_suppliers',('id','name','website','email','country','evidence')),
+    'Müşteri Sevkiyatları': ('company_stock_movements',('id','lot_id','quote_id','quantity_kg','reference','dispatch_date')),
     'Depolar': ('warehouses', ('id','name','city','active')),
     'Ürünler': ('product_catalog', ('id','name','category','active')),
     'Teklifler': ('quotes', ('id','customer_id','product_name','quantity_kg','total_cost_per_kg','sell_price_per_kg','sell_currency','margin_pct','status')),

@@ -152,7 +152,7 @@ class CompanyRuntimeIntegration(unittest.TestCase):
                 with self.conn.cursor() as source,restored.cursor() as dest:
                     source.execute("SELECT tablename FROM pg_tables WHERE schemaname='ct_app' ORDER BY tablename")
                     tables=[r[0] for r in source.fetchall()]
-                    self.assertEqual(len(tables),33)
+                    self.assertEqual(len(tables),35)
                     for table in tables:
                         statement='SELECT row_to_json(t)::text FROM ct_app.'+table+' t ORDER BY row_to_json(t)::text'
                         source.execute(statement)
@@ -186,6 +186,28 @@ class CompanyRuntimeIntegration(unittest.TestCase):
             snap = cur.fetchone()[0]
             self.assertEqual(snap['inputs']['prepayment_pct'],20)
             self.assertGreater(float(snap['result']['cost_per_kg_base']),2.1)
+
+    def test_dispatch_and_persistent_supplier(self):
+        self.ok('create_supplier',company=2,name='Persisted supplier',website='https://example.com',evidence='Synthetic official source')
+        customer=self.ok('create_customer',company=2,name='Dispatch customer')
+        product=self.ok('create_product',company=2,name='Dispatch ingredient')
+        warehouse=self.ok('create_warehouse',company=2,name='Dispatch warehouse')
+        quote=self.ok('create_quote',company=2,customer_id=customer,product_name='Dispatch ingredient',quantity_kg=100,buy_price_per_kg=2,buy_currency='EUR',buy_fx_to_base=1,base_currency='EUR',sell_price_per_kg=3,sell_currency='EUR',sell_fx_to_base=1)
+        po=self.ok('purchase_from_quote',company=2,quote_id=quote,po_number='DISPATCH-PO',supplier='Persisted supplier',product_id=product,warehouse_id=warehouse)
+        shipment=self.ok('create_shipment',company=2,purchase_order_id=po,shipment_ref='D-SHIP',quantity_kg=100)
+        lot=self.ok('receive_shipment',company=2,shipment_id=shipment)
+        args=dict(company=2,quote_id=quote,lot_id=lot,quantity_kg=60,reference='DISPATCH-1',dispatch_date='2026-10-12')
+        self.assertEqual(self.call('dispatch_sale',**args)[0],'invoice_required')
+        self.ok('invoice_quote',company=2,quote_id=quote,invoice_no='DISPATCH-INVOICE',due_date='2026-12-01')
+        self.ok('hold_inventory_lot',company=2,lot_id=lot,case_no='DISPATCH-Q',hold_kg=10,reason='Blocked')
+        self.assertEqual(self.call('dispatch_sale',**args)[0],'quality_hold_blocks_dispatch')
+        self.ok('release_inventory_lot',company=2,lot_id=lot,resolution='Released')
+        self.ok('dispatch_sale',**args)
+        self.assertEqual(self.call('dispatch_sale',**dict(args,reference='DISPATCH-2'))[0],'insufficient_stock')
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT quantity_available_kg FROM ct_app.inventory_lots WHERE id=%s',(lot,))
+            self.assertEqual(cur.fetchone()[0],40)
+        self.assertEqual(self.call(who='beta',company=1,section='Tedarikçiler'),('ok',[]))
 
     def test_idempotency_and_revocation(self):
         request = str(uuid4())

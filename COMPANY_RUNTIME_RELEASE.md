@@ -23,7 +23,7 @@ production configuration by being imported. No live SQL was executed during deve
 - Company financial tables use NUMERIC, and document/name uniqueness is per company.
 - Company dashboard preserves currency separation. Supplier discovery reuses the
   existing engine without opening legacy database screens; it sends no emails.
-- Encrypted native pg_dump backup includes 33 runtime tables, RLS, constraints and
+- Encrypted native pg_dump backup includes 35 runtime tables, RLS, constraints and
   sequences. Restore helper categorically refuses nonlocal/non-CI destinations.
 - Single-column entry forms, company-scoped lookup lists, company-switch draft
   clearing and logout clearing. No automatic schema creation or demo seeding.
@@ -34,7 +34,7 @@ The PR's PostgreSQL workflow tests actual, independent non-superuser connections
 not SET ROLE or mocked database queries. Tests cover the operational and quote
 chains, RLS visibility and write denials, composite FK rejection, immutable owners,
 revocation, duplicate requests, rollback on audit failure, and encrypted restore
-into a second empty database with all 33 table contents and RLS policy counts
+into a second empty database with all 35 table contents and RLS policy counts
 compared. The app workflow runs the full pytest suite as well as existing checks.
 
 Synthetic credentials in tests belong only to the disposable GitHub Actions service.
@@ -73,8 +73,8 @@ counted as locally passed. Hardware Safari acceptance remains a separate live ch
   roles need an agreed narrower operation matrix before adding staff accounts.
 - Lists currently return the most recent 100 records; paging/search is still needed
   for large historical lists. Supplier leads remain session results/JSON exports,
-  not a durable supplier CRM. Live search provider availability is not certified.
-- There is no outbound sales stock allocation/dispatch flow, statutory accounting,
+  with a company-owned supplier register for manually reviewed records. Live search provider availability is not certified.
+- Sales dispatch reduces stock against an invoiced quote and rejects held/expired lots. There is no statutory accounting,
   e-invoice, bank sync, customs submission, or automatic FX service in this release.
 - Native backup exports ct_app only. Global login passwords, Supabase Auth/Storage,
   external files and secrets require separate protected recovery procedures.

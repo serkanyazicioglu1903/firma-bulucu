@@ -25,6 +25,8 @@ FORMS = {
     'Müşteri tahsilatı': ('collect_customer_payment', [('receivable_id','Alacak','Alacaklar'),('account_id','Banka / kasa','Banka / Kasa'),('amount','Tahsilat tutarı','amount'),('reference','Tahsilat referansı','text'),('payment_date','Tahsilat tarihi','date')]),
 }
 FORMS.update({
+    'Tedarikçi kaydet': ('create_supplier', [('name','Tedarikçi adı','text'),('website','Resmî web sitesi','text'),('email','Satış e-postası','text'),('country','Ülke','text'),('evidence','Üretim / temsilcilik kanıtı ve kaynak','text')]),
+    'Müşteriye stoktan sevk': ('dispatch_sale', [('quote_id','Faturalandırılan teklif','Teklifler'),('lot_id','Stok lotu','Stok'),('quantity_kg','Sevk miktarı (kg)','amount'),('reference','Sevkiyat referansı','text'),('dispatch_date','Sevk tarihi','date')]),
     'Maliyetli satış teklifi kaydet': ('create_quote', [
         ('customer_id','Müşteri','Müşteriler'),('product_name','Ürün adı','text'),
         ('quantity_kg','Miktar (kg)','amount'),('base_currency','Hesaplama para birimi','currency'),
@@ -42,6 +44,11 @@ FORMS.update({
     'Tekliften alacak oluştur': ('invoice_quote', [('quote_id','Teklif','Teklifler'),('invoice_no','Fatura numarası','text'),('due_date','Vade','date')]),
 })
 MESSAGES = {
+    'quality_hold_blocks_dispatch': 'Kalite blokajlı lot sevk edilemez.',
+    'insufficient_stock': 'Lotun kullanılabilir stoku yetersiz.',
+    'over_dispatch': 'Sevk miktarı satış teklifini aşıyor.',
+    'invoice_required': 'Önce tekliften alacak kaydını oluşturun.',
+    'expired_lot': 'Lotun son kullanım tarihi geçmiş.',
     'forbidden': 'Bu şirket veya işlem için yetkiniz bulunmuyor.',
     'connection_not_configured': 'Kullanıcıya özel güvenli veritabanı bağlantısı henüz yapılandırılmadı.',
     'unsafe_database_role': 'Veritabanı rolü veya şirket güvenlik kuralları hazır değil.',

@@ -19,6 +19,7 @@ def runtime_ddl():
         'CREATE TABLE ct_app.company_login_bindings (principal_id TEXT PRIMARY KEY, db_role NAME UNIQUE NOT NULL, app_role TEXT NOT NULL CHECK (app_role IN (\'ADMIN\',\'VIEWER\')), enabled BOOLEAN NOT NULL DEFAULT FALSE)',
         'CREATE TABLE ct_app.company_requests (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, principal_id TEXT NOT NULL, legal_entity_id BIGINT NOT NULL REFERENCES ct_app.legal_entities(id), request_id UUID NOT NULL, operation TEXT NOT NULL, payload_hash TEXT NOT NULL, record_id BIGINT NOT NULL, UNIQUE(principal_id,request_id))',
     ]
+    statements += ["CREATE TABLE ct_app.company_suppliers (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legal_entity_id BIGINT NOT NULL REFERENCES ct_app.legal_entities(id), name TEXT NOT NULL, website TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '', evidence TEXT NOT NULL DEFAULT '', UNIQUE(id,legal_entity_id), UNIQUE(legal_entity_id,name))", 'CREATE TABLE ct_app.company_stock_movements (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, legal_entity_id BIGINT NOT NULL REFERENCES ct_app.legal_entities(id), lot_id BIGINT NOT NULL, quote_id BIGINT NOT NULL, quantity_kg NUMERIC(30,10) NOT NULL CHECK(quantity_kg>0), reference TEXT NOT NULL, dispatch_date DATE NOT NULL, UNIQUE(legal_entity_id,reference))']
     # Every parent reference between private tables carries company ownership.
     with sqlite_schema() as schema:
         for table in tables:
@@ -44,6 +45,8 @@ def runtime_ddl():
                         f'FOREIGN KEY ({quote(fk[3])},legal_entity_id) '
                         f'REFERENCES ct_app.{quote(fk[2])} ({quote(fk[4])},legal_entity_id)')
     statements += [
+        'ALTER TABLE ct_app.company_stock_movements ADD FOREIGN KEY (lot_id,legal_entity_id) REFERENCES ct_app.inventory_lots(id,legal_entity_id)',
+        'ALTER TABLE ct_app.company_stock_movements ADD FOREIGN KEY (quote_id,legal_entity_id) REFERENCES ct_app.quotes(id,legal_entity_id)',
         'ALTER TABLE ct_app.quotes ADD COLUMN calculation_snapshot JSONB',
         'ALTER TABLE ct_app.receivables ADD COLUMN quote_id BIGINT',
         'ALTER TABLE ct_app.receivables ADD UNIQUE (legal_entity_id,quote_id)',
@@ -57,7 +60,7 @@ def runtime_ddl():
     binding = "EXISTS (SELECT 1 FROM ct_app.company_login_bindings b WHERE b.db_role=current_user AND b.enabled AND b.principal_id={principal})"
     for table in ('company_login_bindings', 'company_read_grants', 'company_write_grants',
                   'legal_entities', 'company_warehouse_scope', 'company_operation_audit',
-                  'company_requests', 'product_catalog', 'audit_log', 'system_settings', *tables):
+                  'company_requests', 'company_suppliers', 'company_stock_movements', 'product_catalog', 'audit_log', 'system_settings', *tables):
         target = 'ct_app.' + quote(table)
         statements += [f'ALTER TABLE {target} ENABLE ROW LEVEL SECURITY',
                        f'ALTER TABLE {target} FORCE ROW LEVEL SECURITY',
@@ -69,7 +72,7 @@ def runtime_ddl():
     # legal_entities policy cannot recurse through itself.
     statements.append('CREATE POLICY runtime_entity_read ON ct_app.legal_entities FOR SELECT USING (active AND EXISTS (SELECT 1 FROM ct_app.company_read_grants r JOIN ct_app.company_login_bindings b USING (principal_id) WHERE b.db_role=current_user AND b.enabled AND r.can_read AND r.legal_entity_id=legal_entities.id))')
     write = "(" + read + ") AND EXISTS (SELECT 1 FROM ct_app.company_write_grants w JOIN ct_app.company_login_bindings b USING (principal_id) WHERE b.db_role=current_user AND b.enabled AND b.app_role='ADMIN' AND w.can_write AND w.legal_entity_id={owner})"
-    for table in (*tables, 'company_warehouse_scope', 'company_operation_audit', 'company_requests'):
+    for table in (*tables, 'company_warehouse_scope', 'company_operation_audit', 'company_requests', 'company_suppliers', 'company_stock_movements'):
         target = 'ct_app.' + quote(table)
         owner = quote(table)+'.legal_entity_id'
         rp, wp = read.format(owner=owner), write.format(owner=owner)
@@ -101,6 +104,6 @@ def runtime_role_grants(role):
     result = [f'GRANT USAGE ON SCHEMA ct_app TO {target}']
     result += [f'GRANT SELECT ON ct_app.{quote(t)} TO {target}' for t in registry]
     result += [f'GRANT SELECT,INSERT,UPDATE ON ct_app.{quote(t)} TO {target}' for t in private_company_tables()]
-    result += [f'GRANT SELECT,INSERT ON ct_app.{quote(t)} TO {target}' for t in ('company_requests','company_operation_audit','company_warehouse_scope','product_catalog')]
+    result += [f'GRANT SELECT,INSERT ON ct_app.{quote(t)} TO {target}' for t in ('company_requests','company_operation_audit','company_warehouse_scope','product_catalog','company_suppliers','company_stock_movements')]
     result += [f'GRANT USAGE ON ALL SEQUENCES IN SCHEMA ct_app TO {target}']
     return tuple(result)
