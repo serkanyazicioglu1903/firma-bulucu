@@ -198,6 +198,96 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                 denied = inspect_blueprint_fks_on_cursor(cur, blueprint)
                 self.assertEqual(denied["issue_codes"], ("nullable_parent_fk",))
 
+    def test_sole_owner_four_company_read_only_access_does_not_persist(self):
+        """Only one fictional test role gets 4 companies; other 3 see none.
+
+        NOLOGIN CI roles are not real user sessions. This tests row policies
+        only, and every role, grant, entity, row and schema change rolls back.
+        """
+        from scripts.four_company_foundation_ddl import foundation_ddl
+        from scripts.four_company_rls_ci_proof import (
+            ci_23_table_rls_sql, CI_ROLES,
+        )
+        import psycopg
+
+        class PilotRollback(Exception):
+            pass
+
+        before = self.execute(
+            'SELECT COUNT(*) FROM "ct_app"."tasks"'
+        )[0]
+        try:
+            with self.conn.transaction():
+                with self.conn.cursor() as cur:
+                    for statement in foundation_ddl():
+                        cur.execute(statement)
+                    for statement in ci_23_table_rls_sql():
+                        cur.execute(statement)
+
+                    # Real production company IDs and login names are NOT
+                    # involved in these fictional rollback-only inserts.
+                    for index in range(4):
+                        cur.execute(
+                            'INSERT INTO "ct_app"."legal_entities" '
+                            '(code,legal_name) VALUES (%s,%s) RETURNING id',
+                            (f"CI_OWNER_ONLY_ENTITY_{index}",
+                             f"CI Imaginary Company {index}"),
+                        )
+                        company_id = cur.fetchone()[0]
+                        cur.execute(
+                            'INSERT INTO "ct_app"."tasks" '
+                            '(title,legal_entity_id) VALUES (%s,%s)',
+                            (f"CI imaginary task {index}", company_id),
+                        )
+                        cur.execute(
+                            'INSERT INTO "ct_app"."company_read_grants" '
+                            '(principal_id,legal_entity_id,can_read) '
+                            'VALUES (%s,%s,TRUE)',
+                            (CI_ROLES[0],company_id),
+                        )
+                    for index, role in enumerate(CI_ROLES):
+                        try:
+                            cur.execute("SET LOCAL ROLE " + role)
+                            cur.execute('SELECT COUNT(*) FROM "ct_app"."tasks"')
+                            self.assertEqual(
+                                cur.fetchone()[0], 4 if index == 0 else 0
+                            )
+                            cur.execute(
+                                'SELECT COUNT(*) FROM "ct_app"."customers"'
+                            )
+                            self.assertEqual(cur.fetchone()[0], 0)
+                            # Even the only readable role cannot WRITE
+                            # without separate explicit write authorization.
+                            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                                with self.conn.transaction():
+                                    cur.execute(
+                                        'INSERT INTO "ct_app"."tasks" '
+                                        '(title,legal_entity_id) '
+                                        'VALUES (%s,(SELECT id FROM '
+                                        '"ct_app"."legal_entities" LIMIT 1))',
+                                        ("CI forbidden write",),
+                                    )
+                        finally:
+                            cur.execute("RESET ROLE")
+                    cur.execute(
+                        'SELECT COUNT(*) FROM "ct_app"."company_write_grants"'
+                    )
+                    self.assertEqual(cur.fetchone()[0], 0)
+                    raise PilotRollback()
+        except PilotRollback:
+            pass
+
+        with self.conn.cursor() as cur:
+            for role in CI_ROLES:
+                cur.execute("SELECT to_regrole(%s)", (role,))
+                self.assertIsNone(cur.fetchone()[0])
+            cur.execute(
+                "SELECT to_regclass('ct_app.legal_entities')"
+            )
+            self.assertIsNone(cur.fetchone()[0])
+            cur.execute('SELECT COUNT(*) FROM "ct_app"."tasks"')
+            self.assertEqual(cur.fetchone()[0], before)
+
     def test_live_user_role_guard_rejects_ci_admin_and_role_switch(self):
         """Even real RLS and switched test roles do not prove LOGIN binding."""
         from scripts.company_db_role_preflight import (
