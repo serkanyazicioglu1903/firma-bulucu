@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import app
+import supplier_discovery as app
 
 
 def test_acquisition_rejects_restaurant_even_on_preferred_marketplace():

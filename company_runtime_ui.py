@@ -83,7 +83,26 @@ def render_company_runtime():
         return
     company = st.selectbox('Şirket', tuple(COMPANY_LABELS), format_func=COMPANY_LABELS.get, key='runtime_company')
     st.caption('Kayıtlar seçilen şirkete aittir. Ürün kataloğu dört şirket arasında ortaktır.')
-    view = st.selectbox('Bölüm', ('Yönetici Özeti', *CRM_READ_SECTIONS, *OWNED_READ_SECTIONS, *EXTRA_READS), key='runtime_section')
+    view = st.selectbox('Bölüm', ('Yönetici Özeti', 'Üretici / Tedarikçi Bulma', *CRM_READ_SECTIONS, *OWNED_READ_SECTIONS, *EXTRA_READS), key='runtime_section')
+    if view == 'Üretici / Tedarikçi Bulma':
+        # Explicit DB grant required even for the external research workspace.
+        status, _ = execute_request(st.session_state, company, section='Depolar')
+        if status != 'ok':
+            _message(status)
+            return
+        from supplier_discovery import supplier_scan, SOURCE_COUNTRIES
+        st.caption('Ücretsiz dış kaynak araştırması. Sonuçlar ayrıca teyit gerektirir; e-posta gönderilmez.')
+        product = st.text_input('Ürün / hammadde', key='runtime_search_product')
+        country = st.selectbox('Hedef pazar', SOURCE_COUNTRIES, key='runtime_search_country')
+        objective = st.multiselect('Araştırma amacı', ['Hammadde satın alma','Distribütörlük / temsilcilik','Private label / fason üretim'], default=['Hammadde satın alma'])
+        if st.button('Üretici araştır', key='runtime_search') and product.strip():
+            results = supplier_scan(product.strip(),country,objective,10,True,True)
+            if results.empty:
+                st.warning('Uygun aday bulunamadı veya arama servisine ulaşılamadı.')
+            else:
+                st.dataframe(results.drop(columns=['Taslak E-mail'],errors='ignore'),width='stretch',hide_index=True)
+                st.download_button('Sonuçları JSON indir',results.to_json(orient='records',force_ascii=False),file_name='uretici_adaylari.json',mime='application/json')
+        return
     if st.button('Kayıtları getir', key='runtime_load'):
         status, data = execute_request(st.session_state, company, section=view)
         if status == 'ok':

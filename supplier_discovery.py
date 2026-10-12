@@ -1,0 +1,961 @@
+"""Reusable supplier/acquisition research; importing never renders app or opens DB."""
+import re
+import time
+import json
+import xml.etree.ElementTree as ET
+from urllib.parse import urlparse, parse_qs, unquote, urljoin
+import pandas as pd
+import requests
+import streamlit as st
+from bs4 import BeautifulSoup
+try:
+    from ddgs import DDGS
+except ImportError:
+    DDGS = None
+
+EMAIL_RE = re.compile(r'[\w.\-+%]+@[\w.\-]+\.[A-Za-z]{2,}', re.I)
+PHONE_RE = re.compile(r'(?:(?:\+\d{1,3}[\s().-]*)?(?:\d[\s().-]*){8,15})')
+
+MARKETPLACE_BLACKLIST = {
+    "alibaba.com", "made-in-china.com", "indiamart.com", "tradekey.com",
+    "globalsources.com", "ec21.com", "go4worldbusiness.com", "exporthub.com",
+    "amazon.com", "ebay.com", "wikipedia.org", "en.wikipedia.org",
+    "fda.gov", "merriam-webster.com", "britannica.com", "researchgate.net",
+    "sciencedirect.com", "linkedin.com", "facebook.com", "instagram.com",
+    "youtube.com", "foodingredientsfirst.com"
+    , "healthline.com", "webmd.com", "health.com", "medicalnewstoday.com",
+    "thenutritioninsider.com", "scienceinsights.org", "drugs.com", "verywellhealth.com"
+}
+
+def product_aliases(product):
+    key = clean(product).lower()
+    aliases = {
+        "dekstroz": "dextrose", "dekstrose": "dextrose", "dextrose": "dextrose",
+        "dekstroz monohidrat": "dextrose monohydrate",
+        "dextrose monohydrate": "dextrose monohydrate",
+    }
+    value = aliases.get(key, key)
+    return [value, "monohydrate dextrose"] if value == "dextrose monohydrate" else [value]
+
+# Manually researched official sources, not fabricated live search results.
+# Kept separate from automated candidates and dated visibly in the UI.
+VERIFIED_DEXTROSE = [
+    ("Gulshan Polyols Limited", "Hindistan", "https://www.gulshanindia.com/dextrose_monohydrate.html",
+     "https://www.gulshanindia.com/manufacturing_unit.html",
+     "Muzaffarnagar tesisinde pirinçten dekstroz monohidrat üretimi açıklanıyor."),
+    ("The Sukhjit Starch & Chemicals Limited", "Hindistan", "https://www.sukhjitgroup.com/monohydrate-dextrose",
+     "https://www.sukhjitgroup.com/company-profile",
+     "Resmî şirket profili dört üretim konumunu ve monohidrat dekstroz üretimini belirtiyor."),
+    ("Sanstar Limited", "Hindistan", "https://sanstar.in/product/dextrose-monohydrate/",
+     "https://sanstar.in/about-us/",
+     "Resmî şirket sayfası iki üretim tesisini ve dekstroz monohidrat ürününü açıklıyor."),
+]
+
+def editorial_result(title, url):
+    value = (title + " " + urlparse(url).path).lower()
+    return bool(re.search(r"side.effects|dosage|health.benefits|what.is|why.is|/blog/|/news/|/journal/|/article", value))
+
+def official_supplier_pages(url):
+    """Read at most three company/contact links from the same public website."""
+    response = safe_get(url, timeout=8)
+    if response is None or response.status_code != 200:
+        return []
+    soup = BeautifulSoup(response.text, "html.parser")
+    links = []
+    for a in soup.select("a[href]"):
+        target = urljoin(url, a["href"])
+        label = (a.get_text(" ", strip=True) + " " + target).lower()
+        if urlparse(target).scheme not in {"http", "https"} or get_domain(target) != get_domain(url):
+            continue
+        if re.search(r"contact|enquiry|about|company.profile|manufacturing", label) and target not in links and target != url:
+            links.append(target)
+    links.sort(key=lambda x: 0 if re.search(r"contact|enquiry", x, re.I) else 1)
+    return [(link, *fetch_page(link)) for link in links[:3]]
+
+MANUFACTURING_TERMS = [
+    "manufacturer", "manufacturing", "manufacture", "producer", "production",
+    "factory", "plant", "we produce", "we manufacture", "our production",
+    "hersteller", "produktion", "produzent", "werk", "wir produzieren",
+    "fabricant", "production", "nous fabriquons", "producent", "productie",
+    "blending", "formulation", "toll manufacturing", "contract manufacturing",
+    "private label", "oem"
+]
+
+SALES_CONTACT_HINTS = [
+    "export", "sales", "commercial", "business development", "international",
+    "global", "distributor", "distribution", "marketing"
+]
+
+TRADER_HINTS = [
+    "trading company", "trader", "wholesaler only", "marketplace",
+    "broker", "agent only", "reseller"
+]
+
+def clean(value):
+    return re.sub(r"\s+", " ", value or "").strip()
+
+def get_domain(url):
+    try:
+        return urlparse(url).netloc.lower().replace("www.", "")
+    except Exception:
+        return ""
+
+def is_blacklisted(url):
+    d = get_domain(url)
+    return any(d == x or d.endswith("." + x) for x in MARKETPLACE_BLACKLIST)
+
+def safe_get(url, params=None, timeout=10):
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
+        )
+    }
+    try:
+        return requests.get(url, params=params, headers=headers, timeout=timeout, allow_redirects=True)
+    except Exception:
+        return None
+
+def search_bing_rss(query, max_results=8):
+    out = []
+    r = safe_get(
+        "https://www.bing.com/search",
+        params={"q": query, "format": "rss", "count": max_results},
+    )
+    if r is None or r.status_code >= 400:
+        return out
+    try:
+        root = ET.fromstring(r.content)
+        for item in root.findall(".//item")[:max_results]:
+            link = clean(item.findtext("link"))
+            if link:
+                out.append({
+                    "title": clean(item.findtext("title")),
+                    "href": link,
+                    "body": clean(item.findtext("description")),
+                    "_provider": "Bing RSS",
+                })
+    except Exception:
+        pass
+    return out
+
+def ddg_final_url(href):
+    if href.startswith("//"):
+        href = "https:" + href
+    try:
+        if "duckduckgo.com/l/?" in href:
+            q = parse_qs(urlparse(href).query)
+            if "uddg" in q:
+                return unquote(q["uddg"][0])
+    except Exception:
+        pass
+    return href
+
+def search_ddg_html(query, max_results=8):
+    out = []
+    r = safe_get("https://html.duckduckgo.com/html/", params={"q": query})
+    if r is None or r.status_code >= 400:
+        return out
+    try:
+        soup = BeautifulSoup(r.text, "html.parser")
+        for block in soup.select(".result"):
+            a = block.select_one(".result__a")
+            if not a:
+                continue
+            href = ddg_final_url(a.get("href", ""))
+            snippet = block.select_one(".result__snippet")
+            if href:
+                out.append({
+                    "title": clean(a.get_text(" ", strip=True)),
+                    "href": href,
+                    "body": clean(snippet.get_text(" ", strip=True) if snippet else ""),
+                    "_provider": "DuckDuckGo HTML",
+                })
+            if len(out) >= max_results:
+                break
+    except Exception:
+        pass
+    return out
+
+def search_ddgs_library(query, max_results=8):
+    """Use the installed ddgs package as the primary free-search provider."""
+    if DDGS is None:
+        return []
+    out = []
+    try:
+        for item in DDGS().text(query, max_results=max_results):
+            href = clean(item.get("href") or item.get("url") or "")
+            if not href:
+                continue
+            out.append({
+                "title": clean(item.get("title", "")),
+                "href": href,
+                "body": clean(item.get("body") or item.get("snippet") or ""),
+                "_provider": "DDGS",
+            })
+    except Exception:
+        return []
+    return out
+
+
+def live_search(query, max_results=8):
+    merged, seen = [], set()
+    # The project already installs ddgs; use it first, then keep the HTML/RSS
+    # providers as fallbacks when a search provider rate-limits or blocks.
+    for fn in (search_ddgs_library, search_bing_rss, search_ddg_html):
+        try:
+            results = fn(query, max_results)
+        except Exception:
+            results = []
+        for item in results:
+            url = item.get("href", "")
+            if not url or url in seen or is_blacklisted(url):
+                continue
+            seen.add(url)
+            merged.append(item)
+        if len(merged) >= max_results:
+            break
+    return merged[:max_results]
+
+def fetch_page(url, timeout=8):
+    r = safe_get(url, timeout=timeout)
+    if r is None or r.status_code >= 400 or "text/html" not in r.headers.get("content-type", ""):
+        return "", "", ""
+    try:
+        soup = BeautifulSoup(r.text, "html.parser")
+        for tag in soup(["script", "style", "noscript", "svg"]):
+            tag.decompose()
+        text = clean(soup.get_text(" ", strip=True))
+        emails = sorted(set(EMAIL_RE.findall(text)))
+        phones = []
+        for value in PHONE_RE.findall(text):
+            digits = re.sub(r"\D", "", value)
+            if 9 <= len(digits) <= 15:
+                phones.append(clean(value))
+        return text[:60000], "; ".join(emails[:8]), "; ".join(list(dict.fromkeys(phones))[:4])
+    except Exception:
+        return "", "", ""
+
+def choose_sales_email(email_blob):
+    emails = [x.strip() for x in email_blob.split(";") if x.strip()]
+    if not emails:
+        return ""
+    scored = []
+    for e in emails:
+        low = e.lower()
+        local_part = low.split("@", 1)[0]
+        if any(k in local_part for k in ["purchase", "procurement", "buying", "career", "privacy", "noreply", "no-reply"]) or local_part in {"hr", "jobs", "legal"}:
+            continue
+        score = 0
+        if any(k in low for k in ["export", "sales", "commercial", "business", "international", "global"]):
+            score += 10
+        if any(k in low for k in ["info", "contact", "office"]):
+            score += 2
+        if any(k in low for k in ["purchase", "procurement", "buying", "hr", "career", "privacy"]):
+            score -= 8
+        scored.append((score, e))
+    if not scored:
+        return ""
+    scored.sort(reverse=True)
+    return scored[0][1]
+
+def evidence_context(text, keywords, width=220):
+    low = text.lower()
+    for k in keywords:
+        idx = low.find(k.lower())
+        if idx >= 0:
+            start = max(0, idx - width // 2)
+            end = min(len(text), idx + len(k) + width // 2)
+            return clean(text[start:end])
+    return ""
+
+def company_guess(title, url):
+    title = clean(title)
+    for sep in [" | ", " - ", " – ", " — ", ":"]:
+        if sep in title:
+            part = title.split(sep)[0].strip()
+            if 2 <= len(part) <= 80:
+                return part
+    d = get_domain(url).split(".")[0]
+    return d.replace("-", " ").title()
+
+# =========================================================
+# 1) FİRMA SATIN ALMA / HALEFİYET BULUCU
+# =========================================================
+
+ACQ_COUNTRIES = {
+    "Almanya": {
+        "name": "Germany",
+        "terms": [
+            "Unternehmensnachfolge", "Altersnachfolge", "Ruhestand",
+            "Verkaufsangebot", "Betriebsübergabe", "Unternehmen zu verkaufen",
+        ],
+        "domains": [
+            "nexxt-change.org", "dub.de", "viaductus.de", "concess.de",
+            "businessmakler.de", "ihk.de",
+        ],
+    },
+    "İngiltere": {
+        "name": "United Kingdom",
+        "terms": ["business for sale", "retirement", "owner retiring", "succession", "offers invited"],
+        "domains": ["uk.businessesforsale.com", "rightbiz.co.uk", "daltonsbusiness.com", "business-sale.com"],
+    },
+    "Hollanda": {
+        "name": "Netherlands",
+        "terms": ["bedrijf te koop", "pensioen", "opvolging", "bedrijfsovername"],
+        "domains": ["brookz.nl", "bedrijventekoop.nl"],
+    },
+    "Fransa": {
+        "name": "France",
+        "terms": ["entreprise à vendre", "retraite", "succession", "cession entreprise"],
+        "domains": ["fusacq.com", "cessionpme.com"],
+    },
+}
+
+ACQ_SECTORS = {
+    "Gıda hammaddesi / Food ingredients": [
+        "food ingredients", "Lebensmittelzutaten", "Lebensmittelrohstoffe",
+    ],
+    "Gıda katkı maddeleri": [
+        "food additives", "Lebensmittelzusatzstoffe", "Zusatzstoffe Lebensmittel",
+    ],
+    "Aroma / renk": ["flavour colour", "flavor color", "Aromen", "Farbstoffe"],
+    "Emülgatör / stabilizer / hydrocolloid": [
+        "emulsifier stabilizer hydrocolloid", "Emulgatoren Stabilisatoren Hydrokolloide",
+    ],
+    "Premix / powder blending": ["premix powder blending", "dry blending", "Pulvermischungen"],
+    "Specialty chemicals": ["specialty chemicals", "Spezialchemikalien", "chemical blending"],
+    "Pigment / coating / dye": ["pigments dyes coatings"],
+    "Detergent / cleaning chemicals": ["detergent cleaning chemicals"],
+    "Lubricant / industrial oils": ["lubricants industrial oils"],
+    "Toll / contract manufacturing": ["toll manufacturing contract manufacturing"],
+}
+
+ACQ_SECTOR_KEYWORDS = {
+    "Gıda hammaddesi / Food ingredients": [
+        "lebensmittel", "lebensmittelzutaten", "lebensmittelrohstoffe", "nahrungsmittel",
+        "food ingredient", "rohstoff", "stärke", "protein", "gewürz", "backmittel",
+        "sirup", "sirupe", "mischungen",
+    ],
+    "Gıda katkı maddeleri": [
+        "lebensmittelzusatz", "zusatzstoff", "food additive", "additiv", "konservierung",
+    ],
+    "Aroma / renk": ["aroma", "aromen", "flavour", "flavor", "farbstoff", "colour", "color"],
+    "Emülgatör / stabilizer / hydrocolloid": [
+        "emulgator", "stabilisator", "hydrokolloid", "hydrocolloid", "textur",
+    ],
+    "Premix / powder blending": [
+        "premix", "pulvermisch", "powder blend", "dry blend", "mischanlage", "mischungen",
+    ],
+    "Specialty chemicals": [
+        "spezialchem", "specialty chemical", "chemikalien", "chemische rohstoffe",
+        "compound", "formulierung",
+    ],
+    "Pigment / coating / dye": ["pigment", "farbstoff", "beschichtung", "coating", "dye"],
+    "Detergent / cleaning chemicals": ["reinigungschem", "reinigungsmittel", "detergent", "cleaning chemical"],
+    "Lubricant / industrial oils": ["schmierstoff", "induströl", "lubricant", "industrial oil"],
+    "Toll / contract manufacturing": ["lohnherstellung", "lohnmisch", "contract manufacturing", "toll manufacturing"],
+}
+
+ACQ_SALE_TERMS = [
+    "business for sale", "company for sale", "offers invited", "asking price",
+    "retirement", "retiring", "succession", "owner retiring",
+    "nachfolge", "ruhestand", "altersnachfolge", "firmenverkauf",
+    "unternehmen zu verkaufen", "kaufpreis", "verkaufsgrund",
+    "bedrijf te koop", "opvolging", "pensioen",
+    "entreprise à vendre", "cession entreprise", "retraite"
+]
+
+ACQ_EXCLUSION_TERMS = [
+    "restaurant", "takeaway", "cafe for sale", "café", "hotel", "guest house",
+    "franchise", "kiosk", "imbiss", "gastronomie", "einzelhandel", "onlineshop",
+    "e-commerce store", "beauty salon", "hair salon",
+]
+
+ACQ_SOURCE_GUIDE = [
+    {"Kaynak": "nexxt-change", "Bölge": "Almanya", "Tip": "Resmî halefiyet borsası", "URL": "https://www.nexxt-change.org/"},
+    {"Kaynak": "DUB", "Bölge": "DACH", "Tip": "Ticari M&A ilanları", "URL": "https://www.dub.de/de/unternehmen-kaufen/"},
+    {"Kaynak": "Viaductus", "Bölge": "DACH", "Tip": "Seçilmiş ilanlar / danışmanlık", "URL": "https://www.viaductus.de/"},
+    {"Kaynak": "con|cess", "Bölge": "DACH", "Tip": "M&A danışman ağı", "URL": "https://www.concess.de/"},
+    {"Kaynak": "BusinessMakler", "Bölge": "Almanya", "Tip": "KOBİ satış ilanları", "URL": "https://www.businessmakler.de/"},
+    {"Kaynak": "IHK", "Bölge": "Almanya / bölgesel", "Tip": "Devir ve halefiyet danışmanlığı", "URL": "https://www.ihk.de/"},
+]
+
+ACQ_REVIEW_QUESTIONS = [
+    ("Kârlılık istikrarlı mı?", "Son 3–5 yıl Jahresabschluss, GuV ve güncel BWA", "Tek iyi yıl; ciro artarken kârın düşmesi"),
+    ("Borç ve gizli yükler açık mı?", "Kredi/leasing listesi ve Pensionszusagen", "Açıklanmayan kefalet veya yüksek emeklilik karşılığı"),
+    ("Makine ve yatırımlar güncel mi?", "Anlagenverzeichnis, makine yaşları ve bakım kayıtları", "Yıllardır yatırım yapılmaması"),
+    ("Şirket patrondan bağımsız çalışabiliyor mu?", "Organizasyon ve satış süreçleri", "Tüm müşteri ve teklif ilişkilerinin patronda olması"),
+    ("Müşteri yoğunlaşması kabul edilebilir mi?", "Anonim müşteri bazında ciro dağılımı", "Tek müşterinin cironun %25'inden fazla olması"),
+    ("İkinci kademe yönetim var mı?", "Kilit personel ve iş sözleşmeleri", "Kilit kadronun da ayrılacak veya emekli olacak olması"),
+    ("Çalışan yapısı sürdürülebilir mi?", "Personel, ücret, kıdem ve Tarifvertrag bilgisi", "Yüksek yaş ortalaması ve yedek kadro olmaması"),
+    ("AS İleri ile ürün ve pazar sinerjisi var mı?", "Ürün gamı, tedarikçi listesi ve teknoloji", "Yalnızca 'Alman şirketi' olduğu için alım"),
+    ("Sertifika ve onaylar devredilebilir mi?", "ISO/FSSC/BRCGS, ruhsatlar ve marka tescilleri", "Onayların kişiye bağlı veya devredilemez olması"),
+    ("Lokasyon ve lojistik uygun mu?", "Kira/tapu, imar, çevre izinleri ve depo bilgisi", "Kısa kira veya devir için ev sahibi onayı gereği"),
+    ("Share Deal / Asset Deal riski anlaşıldı mı?", "Handelsregisterauszug, dava ve vergi incelemeleri", "Açık dava, vergi veya sosyal güvenlik borcu"),
+    ("Fiyat finansallarla destekleniyor mu?", "Değerleme gerekçesi ve normalleştirilmiş EBITDA", "Gerekçesiz fiyat ve 'başka alıcı var' baskısı"),
+]
+
+ACQ_STARTER = [
+    {
+        "Skor": 94, "Ülke": "İngiltere", "Sektör": "Specialty chemicals",
+        "Başlık": "Long-Running Supplier And Distributor Of Industrial Chemicals",
+        "Kaynak": "uk.businessesforsale.com", "Ciro": "£1m–£5m",
+        "EBITDA/Kâr": "", "Fiyat": "Undisclosed",
+        "Satış nedeni": "", "E-posta": "", "Telefon": "",
+        "Özet": "Project Hinode; established supplier and distributor of industrial chemicals. Financial and legal details require NDA.",
+        "İlan / kaynak URL": "https://uk.businessesforsale.com/uk/long-running-supplier-and-distributor-of-industrial-chemicals.aspx",
+        "Satış ilanı": "Evet", "Üretici sinyali": "Evet",
+    },
+    {
+        "Skor": 96, "Ülke": "İngiltere", "Sektör": "Pigment / coating / dye",
+        "Başlık": "Manufacturer and supplier of dyes and pigments",
+        "Kaynak": "rightbiz.co.uk", "Ciro": "£3.5m",
+        "EBITDA/Kâr": "£615k adjusted EBITDA", "Fiyat": "Offers invited",
+        "Satış nedeni": "retirement", "E-posta": "", "Telefon": "",
+        "Özet": "Water-based dyes, pigment dispersions, coatings and toll manufacturing.",
+        "İlan / kaynak URL": "https://www.rightbiz.co.uk/buy_business/for_sale/643296_undisclosed.html",
+        "Satış ilanı": "Evet", "Üretici sinyali": "Evet",
+    },
+]
+
+def acq_preferred(url, country):
+    d = get_domain(url)
+    return any(d == x or d.endswith("." + x) for x in ACQ_COUNTRIES[country]["domains"])
+
+def acq_sector_match(text, sectors):
+    low = clean(text).lower()
+    best_sector, best_hits = "", 0
+    for sector in sectors:
+        hits = sum(1 for keyword in ACQ_SECTOR_KEYWORDS.get(sector, []) if keyword in low)
+        if hits > best_hits:
+            best_sector, best_hits = sector, hits
+    return best_sector, best_hits
+
+def scan_dub_direct(sectors, max_pages=5):
+    """Read DUB's public listing cards directly; no search-engine API is used."""
+    rows = []
+    base = "https://www.dub.de/de/unternehmen-kaufen/"
+    for page in range(1, max_pages + 1):
+        response = safe_get(base, params={"page": page, "sort": "newest", "view": "grid"}, timeout=15)
+        if response is None or response.status_code >= 400:
+            break
+        try:
+            soup = BeautifulSoup(response.text, "html.parser")
+            cards = soup.select("[data-listing-card]")
+        except Exception:
+            cards = []
+        if not cards:
+            break
+        for card in cards:
+            link = card.select_one("a[data-listing-detail-link]") or card.select_one("a[href*='/expose/']")
+            title_node = card.select_one(".bs-card__title")
+            desc_node = card.select_one(".bs-card__desc")
+            if not link or not title_node:
+                continue
+            title = clean(title_node.get_text(" ", strip=True))
+            description = clean(desc_node.get_text(" ", strip=True) if desc_node else "")
+            combined = f"{title} {description}"
+            if any(term in combined.lower() for term in ACQ_EXCLUSION_TERMS):
+                continue
+            sector, hits = acq_sector_match(combined, sectors)
+            if not sector or hits == 0:
+                continue
+            stats = {}
+            for stat in card.select(".bs-card__stat"):
+                key = stat.select_one("dt")
+                value = stat.select_one("dd")
+                if key and value:
+                    stats[clean(key.get_text(" ", strip=True)).lower()] = clean(value.get_text(" ", strip=True))
+            location_node = card.select_one(".bs-card__loc")
+            location = clean(location_node.get_text(" ", strip=True) if location_node else "")
+            url = urljoin(base, link.get("href", ""))
+            operation = any(term in combined.lower() for term in MANUFACTURING_TERMS + [
+                "produzent", "hersteller", "verarbeitung", "großhandel", "distribution", "distributor",
+            ])
+            score = min(96, 66 + hits * 6 + (10 if operation else 0))
+            rows.append({
+                "Skor": score,
+                "Ülke": "Almanya",
+                "Sektör": sector,
+                "Başlık": title,
+                "Kaynak": "dub.de · doğrudan tarama",
+                "Ciro": stats.get("umsatz", ""),
+                "EBITDA/Kâr": stats.get("ergebnis", ""),
+                "Fiyat": stats.get("kaufpreis", ""),
+                "Satış nedeni": extract_sale_reason(combined),
+                "Satış ilanı": "Evet",
+                "Üretici sinyali": "Evet" if operation else "Belirsiz",
+                "E-posta": "",
+                "Telefon": "",
+                "Özet": f"{location}. {description}"[:700],
+                "İlan / kaynak URL": url,
+            })
+    return rows
+
+def acq_build_queries(country, sector):
+    c = ACQ_COUNTRIES[country]
+    sector_terms = ACQ_SECTORS[sector]
+    s = sector_terms[1] if country == "Almanya" and len(sector_terms) > 1 else sector_terms[0]
+    q = []
+    for domain in c["domains"]:
+        q.append(f'site:{domain} "{c["terms"][0]}" "{s}"')
+    q.append(f'"{s}" "{c["terms"][0]}" manufacturer {c["name"]}')
+    q.append(f'"{s}" "{c["terms"][1]}" manufacturer {c["name"]}')
+    if country != "Almanya":
+        q.append(f'"{s}" "business for sale" manufacturer {c["name"]}')
+    return list(dict.fromkeys(q))
+
+def acq_candidate_ok(title, snippet, body, url, country, sector=None):
+    text = f"{title} {snippet} {body[:10000]}".lower()
+    sale = any(x in text for x in ACQ_SALE_TERMS)
+    maker = any(x in text for x in MANUFACTURING_TERMS)
+    preferred = acq_preferred(url, country)
+    excluded = any(x in text for x in ACQ_EXCLUSION_TERMS)
+
+    sector_hits = 1
+    if sector:
+        sector_hits = sum(
+            1 for keyword in ACQ_SECTOR_KEYWORDS.get(sector, [])
+            if keyword in text
+        )
+
+    if excluded:
+        return False, sale, maker
+
+    if preferred:
+        # Preferred M&A sources are trusted as listing sources, but the listing
+        # must still look like the requested industrial sector.
+        return bool(sale and sector_hits > 0), sale, maker
+
+    # Generic web results require both a sale/succession signal and a real
+    # manufacturing signal, plus a sector match.
+    return bool(sale and maker and sector_hits > 0), sale, maker
+
+def acq_score(title, snippet, body, url, country, sector):
+    text = f"{title} {snippet} {body[:10000]}".lower()
+    score = 0
+    if acq_preferred(url, country):
+        score += 30
+    if any(x in text for x in ACQ_SALE_TERMS):
+        score += 30
+    if any(x in text for x in MANUFACTURING_TERMS):
+        score += 25
+    for phrase in ACQ_SECTORS[sector]:
+        for word in phrase.lower().split():
+            if len(word) > 4 and word in text:
+                score += 3
+    if any(x in text for x in ACQ_EXCLUSION_TERMS):
+        score -= 40
+    return max(0, min(100, score))
+
+def money(text, labels):
+    for label in labels:
+        pattern = (
+            rf"{label}\s*[:\-]?\s*"
+            r"((?:€|£|EUR|GBP)\s?[\d.,]+\s?(?:m|mn|million|k|thousand|Mio\.?)?|"
+            r"[\d.,]+\s?(?:m|mn|million|k|thousand|Mio\.?)?\s?(?:€|£|EUR|GBP))"
+        )
+        m = re.search(pattern, text, re.I)
+        if m:
+            return clean(m.group(1))
+    return ""
+
+def extract_sale_reason(text):
+    low = text.lower()
+    for word in ["retirement", "retiring", "ruhestand", "altersbedingt", "altersnachfolge",
+                 "pensioen", "retraite", "succession", "nachfolge"]:
+        if word in low:
+            return word
+    return ""
+
+def acq_scan(countries, sectors, per_query, deep_scan):
+    started_at = time.monotonic()
+    rows = [r.copy() for r in ACQ_STARTER if r["Ülke"] in countries and r["Sektör"] in sectors]
+    if "Almanya" in countries:
+        rows.extend(scan_dub_direct(sectors, max_pages=5))
+    seen = {r["İlan / kaynak URL"] for r in rows}
+    jobs = [(c, s, q) for c in countries for s in sectors for q in acq_build_queries(c, s)]
+    progress = st.progress(0)
+    status = st.empty()
+
+    for i, (country, sector, query) in enumerate(jobs, start=1):
+        if time.monotonic() - started_at > 120:
+            st.warning("Tarama süre sınırına ulaştı. O ana kadar bulunan adaylar gösteriliyor.")
+            break
+        status.write(f"Canlı arama: **{country} · {sector}**")
+        for item in live_search(query, per_query):
+            url = item.get("href", "")
+            if not url or url in seen or is_blacklisted(url):
+                continue
+
+            title = clean(item.get("title", ""))
+            snippet = clean(item.get("body", ""))
+            body = email = phone = ""
+
+            cheap_ok, _, _ = acq_candidate_ok(title, snippet, "", url, country, sector)
+            if deep_scan and (cheap_ok or acq_preferred(url, country)):
+                body, email, phone = fetch_page(url)
+                time.sleep(0.03)
+
+            ok, sale, maker = acq_candidate_ok(title, snippet, body, url, country, sector)
+            if not ok:
+                continue
+
+            seen.add(url)
+            text = f"{title} {snippet} {body}"
+            rows.append({
+                "Skor": acq_score(title, snippet, body, url, country, sector),
+                "Ülke": country,
+                "Sektör": sector,
+                "Başlık": title,
+                "Kaynak": get_domain(url),
+                "Ciro": money(text, [r"turnover", r"revenue", r"umsatz", r"omzet", r"chiffre d['’]affaires"]),
+                "EBITDA/Kâr": money(text, [r"adjusted EBITDA", r"EBITDA", r"operating profit", r"profit", r"gewinn"]),
+                "Fiyat": money(text, [r"asking price", r"price", r"kaufpreis", r"vraagprijs", r"prix"]),
+                "Satış nedeni": extract_sale_reason(text),
+                "Satış ilanı": "Evet" if sale else "Belirsiz",
+                "Üretici sinyali": "Evet" if maker else "Belirsiz",
+                "E-posta": choose_sales_email(email),
+                "Telefon": phone,
+                "Özet": snippet[:500],
+                "İlan / kaynak URL": url,
+            })
+        progress.progress(i / max(len(jobs), 1))
+
+    progress.empty()
+    status.empty()
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = (
+            df.drop_duplicates(subset=["İlan / kaynak URL"])
+              .sort_values(["Skor", "Ülke"], ascending=[False, True])
+              .reset_index(drop=True)
+        )
+    return df
+
+def german_acquisition_email(listing_title, listing_url):
+    return f"""Betreff: Interesse an einer Unternehmensnachfolge – {listing_title}
+
+Sehr geehrte Damen und Herren,
+
+mit großem Interesse haben wir Ihr Verkaufsangebot „{listing_title}“ gelesen.
+
+Wir sind mit AS İleri Gıda und AS Food Global Limited seit mehr als 25 Jahren im Import und Vertrieb von Lebensmittelzutaten und industriellen Rohstoffen tätig. Wir beliefern führende Lebensmittelhersteller in der Türkei und verfügen über eine Gesellschaft im Vereinigten Königreich.
+
+Im Rahmen unserer europäischen Expansion suchen wir ein etabliertes Unternehmen, das wir langfristig fortführen und weiterentwickeln können. Der Erhalt des Standorts, der Belegschaft und der bestehenden Kundenbeziehungen ist für uns von besonderer Bedeutung.
+
+Gerne unterzeichnen wir eine Vertraulichkeitsvereinbarung. Bitte senden Sie uns anschließend das Exposé sowie Informationen zu Kaufpreisvorstellung, Transaktionsstruktur, Umsatz, bereinigtem EBITDA, Mitarbeitern, Kunden- und Lieferantenstruktur und Verkaufsgrund.
+
+Inserat: {listing_url}
+
+Mit freundlichen Grüßen
+
+Serkan Yazıcıoğlu
+Managing Director
+AS Food Global Limited / AS İleri Gıda
+E-Mail: serkan@asileri.com"""
+
+# =========================================================
+# 2) ÜRÜN / HAMMADDE / ÜRETİCİ / TEMSİLCİLİK BULUCU
+# =========================================================
+
+SOURCE_COUNTRIES = [
+    "Dünya geneli", "Almanya", "İngiltere", "Hollanda", "Fransa", "İtalya",
+    "İspanya", "Polonya", "Belçika", "Avusturya", "İsviçre", "ABD", "Kanada",
+    "Çin", "Hindistan", "Tayland", "Malezya", "Endonezya", "Vietnam",
+    "Japonya", "Güney Kore", "Brezilya", "Arjantin"
+]
+
+COUNTRY_MAP = {
+    "Dünya geneli": "",
+    "Almanya": "Germany", "İngiltere": "United Kingdom", "Hollanda": "Netherlands",
+    "Fransa": "France", "İtalya": "Italy", "İspanya": "Spain", "Polonya": "Poland",
+    "Belçika": "Belgium", "Avusturya": "Austria", "İsviçre": "Switzerland",
+    "ABD": "USA", "Kanada": "Canada", "Çin": "China", "Hindistan": "India",
+    "Tayland": "Thailand", "Malezya": "Malaysia", "Endonezya": "Indonesia",
+    "Vietnam": "Vietnam", "Japonya": "Japan", "Güney Kore": "South Korea",
+    "Brezilya": "Brazil", "Arjantin": "Argentina"
+}
+
+def supplier_queries(product, country_label, objective):
+    product = product_aliases(product)[0]
+    country = COUNTRY_MAP.get(country_label, "")
+    c = f" {country}" if country else ""
+
+    q = [
+        f'"{product}" manufacturer{c}',
+        f'"{product}" producer factory{c}',
+        f'"{product}" manufacturing company{c}',
+        f'"{product}" export sales manufacturer{c}',
+    ]
+
+    if "Distribütörlük / temsilcilik" in objective:
+        q += [
+            f'"{product}" manufacturer distributor wanted{c}',
+            f'"{product}" manufacturer distribution partners{c}',
+            f'"{product}" become distributor manufacturer{c}',
+        ]
+
+    if "Private label / fason üretim" in objective:
+        q += [
+            f'"{product}" contract manufacturer{c}',
+            f'"{product}" private label manufacturer{c}',
+            f'"{product}" toll manufacturing{c}',
+        ]
+
+    return list(dict.fromkeys(q))
+
+def supplier_manufacturer_status(product, title, snippet, body, url):
+    """Balanced pre-screen: require product evidence plus a real production signal.
+
+    The previous rule accepted only a handful of exact English phrases such as
+    "we manufacture" and therefore discarded many genuine manufacturers.
+    """
+    text = clean(body).lower()
+    title_path = clean(title + " " + urlparse(url).path.replace("-", " ").replace("_", " ")).lower()
+    if is_blacklisted(url) or editorial_result(title, url) or not text:
+        return "unclear", 0
+
+    aliases = product_aliases(product)
+    product_hit = any(alias in text or alias in title_path for alias in aliases)
+    maker_hit = any(term in text for term in MANUFACTURING_TERMS)
+    strong_factory_hit = bool(re.search(
+        r"\b(factory|factories|plant|plants|production site|manufacturing site|manufacturing facility|production facility)\b",
+        text,
+    ))
+    trader_only = any(x in text for x in ["trading company", "broker", "agent only", "reseller only"])
+
+    if product_hit and strong_factory_hit and not trader_only:
+        return "confirmed", 45
+    if product_hit and maker_hit and not trader_only:
+        return "likely", 25
+    return "unclear", 0
+
+def turkey_presence_check(company, product):
+    queries = [
+        f'"{company}" Turkey distributor',
+        f'"{company}" Türkiye distributor',
+        f'"{company}" Turkey {product}',
+    ]
+    hits = []
+    for q in queries[:2]:
+        for r in live_search(q, 3):
+            snippet = clean(r.get("body", ""))
+            title = clean(r.get("title", ""))
+            text = f"{title} {snippet}".lower()
+            if "turkey" in text or "türkiye" in text or "turkish" in text:
+                hits.append(f"Doğrulanması gereken arama bulgusu: {title} — {snippet[:180]} | {r.get('href', '')}")
+                break
+        if hits:
+            break
+    return hits[0] if hits else ""
+
+def supplier_score(status, email, turkey_presence, text, objective):
+    score = 0
+    if status == "confirmed":
+        score += 45
+    elif status == "likely":
+        score += 30
+    else:
+        score += 10
+
+    if email:
+        score += 15
+
+    low = text.lower()
+    if any(x in low for x in ["export", "international sales", "global sales", "business development"]):
+        score += 10
+    if "Distribütörlük / temsilcilik" in objective and any(
+        x in low for x in ["distributor", "distribution partner", "become a distributor", "agents"]
+    ):
+        score += 15
+    if "Private label / fason üretim" in objective and any(
+        x in low for x in ["private label", "contract manufacturing", "toll manufacturing", "oem"]
+    ):
+        score += 15
+
+    return max(0, min(100, score))
+
+def make_intro_email(product, company, objective, sender_email):
+    objective_line = ""
+    if "Distribütörlük / temsilcilik" in objective:
+        objective_line = (
+            "We are also interested in discussing a potential distribution / representation "
+            "partnership for Türkiye, subject to product and commercial fit."
+        )
+    elif "Private label / fason üretim" in objective:
+        objective_line = (
+            "We would also be interested in discussing contract manufacturing / private-label "
+            "possibilities where relevant."
+        )
+
+    return f"""Dear Sales / Export Team,
+
+My name is Serkan Yazıcıoğlu, representing AS İleri Gıda / AS Food Global Limited.
+
+We are an established importer and distributor of food ingredients and industrial raw materials, supplying major manufacturers in Türkiye and working with international suppliers.
+
+We are currently evaluating suppliers for {product} and would like to learn more about {company}'s manufacturing capabilities and export terms.
+
+Could you please share:
+• Product specification / TDS and SDS where applicable
+• Available grades and packaging
+• MOQ
+• Export price and Incoterm
+• Production lead time
+• Certifications and country of origin
+• Current distribution / representation status in Türkiye
+• Sample availability
+
+{objective_line}
+
+Please reply to: {sender_email}
+
+Kind regards,
+Serkan Yazıcıoğlu
+AS İleri Gıda / AS Food Global Limited"""
+
+def supplier_scan(product, country_label, objective, max_companies, deep_scan, turkey_check):
+    started_at = time.monotonic()
+    queries = supplier_queries(product, country_label, objective)
+    seen_domains = set()
+    rows = []
+    aliases = product_aliases(product)
+    if any(a in {"dextrose", "dextrose monohydrate", "monohydrate dextrose"} for a in aliases):
+        for name, country, product_url, factory_url, evidence in VERIFIED_DEXTROSE:
+            if country_label not in {"Dünya geneli", country}:
+                continue
+            seen_domains.add(get_domain(product_url))
+            rows.append({
+                "Fit Score": 45, "Firma": name, "Hedef Pazar": country_label,
+                "Üretici Ülkesi": country, "Website": "https://" + get_domain(product_url),
+                "Manufacturer Status": "confirmed", "Üretim Kanıtı": evidence,
+                "Üretim Kaynak URL": factory_url, "Kaynak URL": product_url,
+                "Kayıt Türü": "Resmî kaynaklardan araştırılmış başlangıç kaydı · 06.10.2026",
+                "Türkiye Varlığı": "Kontrol edilmedi; temsilcilik durumu bilinmiyor.",
+                "Satış / Export E-mail": "", "Telefon": "", "İletişim URL": "",
+                "Arama Özeti": "Ürün: Dextrose Monohydrate. Bu kayıt canlı arama sonucu değildir.",
+                "Taslak Konu": "Dextrose Monohydrate inquiry – Türkiye",
+                "Taslak E-mail": make_intro_email("Dextrose Monohydrate", name, objective, st.session_state.get("sender_email", "serkan@asileri.com")),
+            })
+    progress = st.progress(0)
+    status = st.empty()
+
+    all_candidates = []
+    for i, q in enumerate(queries, start=1):
+        if time.monotonic() - started_at > 60:
+            break
+        status.write(f"Aranıyor: **{product}** · `{q}`")
+        results = live_search(q, max(6, min(12, max_companies)))
+        for item in results:
+            url = item.get("href", "")
+            d = get_domain(url)
+            if not url or not d or d in seen_domains or is_blacklisted(url) or editorial_result(item.get("title", ""), url):
+                continue
+            all_candidates.append(item)
+        progress.progress(i / max(len(queries), 1))
+
+    # Analyze only a manageable number of unique official-looking domains.
+    for idx, item in enumerate(all_candidates[: max_companies * 3]):
+        if time.monotonic() - started_at > 120:
+            st.warning("Canlı tarama süre sınırına ulaştı. Toplanan sonuçlar gösteriliyor; tüm adaylar incelenemedi.")
+            break
+        if len(rows) >= max_companies:
+            break
+
+        url = item.get("href", "")
+        if get_domain(url) in seen_domains:
+            continue
+        title = clean(item.get("title", ""))
+        snippet = clean(item.get("body", ""))
+        body = email_blob = phone = ""
+
+        if deep_scan:
+            body, email_blob, phone = fetch_page(url)
+        pages = official_supplier_pages(url) if body else []
+        supporting_body = body + " " + " ".join(p[1] for p in pages)
+        email_blob += ";" + ";".join(p[2] for p in pages)
+
+        status_value, base_score = supplier_manufacturer_status(product, title, snippet, supporting_body, url)
+
+        # Exclude traders and candidates without a product/manufacturing signal.
+        if status_value == "unclear":
+            continue
+
+        # A domain label is honest when the legal company name is not verified.
+        company = get_domain(url)
+        seen_domains.add(get_domain(url))
+        sales_email = choose_sales_email(email_blob)
+        turkey_presence = turkey_presence_check(company, product) if turkey_check else ""
+        text = f"{title} {snippet} {body}"
+        score = supplier_score(status_value, sales_email, turkey_presence, text, objective)
+
+        evidence = evidence_context(
+            supporting_body,
+            [
+                "we manufacture", "we produce", "our factory", "our factories",
+                "manufacturing facility", "manufacturing site", "production facility",
+                "production site", "our manufacturing", "our production facilities",
+                "company manufactures", "group manufactures", "factory", "plant"
+            ],
+            width=300,
+        )
+
+        rows.append({
+            "Fit Score": score,
+            "Firma": company,
+            "Hedef Pazar": country_label,
+            "Üretici Ülkesi": "",
+            "Website": f"https://{get_domain(url)}" if get_domain(url) else url,
+            "Manufacturer Status": status_value,
+            "Üretim Kanıtı": evidence,
+            "Üretim Kaynak URL": next(
+                (
+                    p[0] for p in pages
+                    if any(
+                        t in p[1].lower()
+                        for t in [
+                            "we manufacture", "we produce", "our factory",
+                            "manufacturing facility", "manufacturing site",
+                            "production facility", "production site", "plant"
+                        ]
+                    )
+                ),
+                url
+            ),
+            "Kayıt Türü": (
+                "Canlı arama · güçlü üretim kanıtı bulundu"
+                if status_value == "confirmed"
+                else "Canlı arama adayı · üretim teyidi güçlendirilmeli"
+            ),
+            "İletişim URL": next((p[0] for p in pages if re.search(r"contact|enquiry", p[0], re.I)), ""),
+            "Türkiye Varlığı": turkey_presence or ("Doğrulanamadı; temsilcisi olmadığı anlamına gelmez." if turkey_check else "Kontrol edilmedi"),
+            "Satış / Export E-mail": sales_email,
+            "Telefon": phone,
+            "Kaynak URL": url,
+            "Arama Özeti": snippet[:420],
+            "Taslak Konu": f"Inquiry for {product} – Türkiye",
+            "Taslak E-mail": make_intro_email(
+                product,
+                company,
+                objective,
+                st.session_state.get("sender_email", "serkan@asileri.com"),
+            ),
+        })
+
+    progress.empty()
+    status.empty()
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values("Fit Score", ascending=False).reset_index(drop=True)
+    st.session_state["supplier_diagnostics"] = {
+        "Arama sorgusu": len(queries),
+        "İncelenecek bağlantı": len(all_candidates),
+        "Önceden araştırılmış kayıt": sum(r.get("Manufacturer Status") == "confirmed" for r in rows),
+        "Canlı üretici adayı": sum(r.get("Manufacturer Status") == "likely" for r in rows),
+    }
+    return df
+

@@ -3,6 +3,7 @@ name: Isolated real PostgreSQL integration
 on:
   pull_request:
     paths:
+      - "scripts/company_runtime_backup.py"
       - "scripts/company_runtime.py"
       - "scripts/company_runtime_schema.py"
       - "company_runtime_ui.py"
@@ -87,6 +88,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "scripts/company_runtime_backup.py"
       - "scripts/company_runtime.py"
       - "scripts/company_runtime_schema.py"
       - "company_runtime_ui.py"

@@ -116,6 +116,42 @@ class CompanyRuntimeIntegration(unittest.TestCase):
                 with self.assertRaises(psycopg.errors.RaiseException):
                     cur.execute('UPDATE ct_app.customers SET legal_entity_id=3 WHERE id=%s', (customer,))
 
+    def test_z_encrypted_native_backup_restore(self):
+        from scripts.company_runtime_backup import backup_runtime,restore_disposable
+        from urllib.parse import urlsplit,urlunsplit
+        import psycopg
+        passphrase='synthetic-backup-passphrase-2026'
+        status,encrypted=backup_runtime(self.url,passphrase)
+        self.assertEqual(status,'encrypted')
+        p=urlsplit(self.url)
+        target=urlunsplit((p.scheme,p.netloc,'/ct_ci_control_tower_restore','',''))
+        with self.conn.cursor() as cur:
+            cur.execute('CREATE DATABASE ct_ci_control_tower_restore')
+        try:
+            self.assertEqual(restore_disposable(encrypted,passphrase,target),'restored')
+            with psycopg.connect(target,sslmode='disable') as restored:
+                with self.conn.cursor() as source,restored.cursor() as dest:
+                    source.execute("SELECT tablename FROM pg_tables WHERE schemaname='ct_app' ORDER BY tablename")
+                    tables=[r[0] for r in source.fetchall()]
+                    self.assertEqual(len(tables),33)
+                    for table in tables:
+                        statement='SELECT row_to_json(t)::text FROM ct_app.'+table+' t ORDER BY row_to_json(t)::text'
+                        source.execute(statement)
+                        dest.execute(statement)
+                        self.assertEqual(source.fetchall(),dest.fetchall(),table)
+                    dest.execute("SELECT COUNT(*) FROM pg_policies WHERE schemaname='ct_app'")
+                    source.execute("SELECT COUNT(*) FROM pg_policies WHERE schemaname='ct_app'")
+                    self.assertEqual(dest.fetchone(),source.fetchone())
+            # The restored app remains RLS-protected with original restricted roles.
+            beta=self.accounts['beta']['url'].replace('/ct_ci_control_tower','/ct_ci_control_tower_restore')
+            with psycopg.connect(beta,sslmode='disable') as conn,conn.cursor() as cur:
+                cur.execute('SELECT id FROM ct_app.customers')
+                self.assertEqual(cur.fetchall(),[])
+            self.assertEqual(restore_disposable(encrypted,passphrase,target),'target_not_empty')
+        finally:
+            with self.conn.cursor() as cur:
+                cur.execute('DROP DATABASE ct_ci_control_tower_restore')
+
     def test_quote_purchase_invoice_collection(self):
         customer = self.ok('create_customer',name='Quote customer',company=2)
         product = self.ok('create_product',name='Quoted ingredient',company=2)
