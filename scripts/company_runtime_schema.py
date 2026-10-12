@@ -91,6 +91,10 @@ def runtime_ddl():
     admin = "EXISTS (SELECT 1 FROM ct_app.company_login_bindings b WHERE b.db_role=current_user AND b.enabled AND b.app_role='ADMIN')"
     statements += [f'CREATE POLICY runtime_product_read ON ct_app.product_catalog FOR SELECT USING ({known})',
                    f'CREATE POLICY runtime_product_insert ON ct_app.product_catalog FOR INSERT WITH CHECK ({admin})']
+    # Supabase default privileges can grant API roles access to tables created
+    # DURING migration. Revoke again after all new objects exist (service_role
+    # can bypass RLS, so a policy alone cannot protect those default grants).
+    statements.append(next(sql for sql in statements if 'DECLARE r text;' in sql))
     return tuple(statements)
 
 

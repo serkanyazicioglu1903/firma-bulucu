@@ -27,6 +27,8 @@ class CompanyRuntimeIntegration(unittest.TestCase):
             cur.execute('CREATE SCHEMA ct_app')
             cur.execute('SET LOCAL search_path=ct_app,pg_catalog')
             _, ddl, fks = schema_ddl_steps()
+            cur.execute('CREATE ROLE service_role NOLOGIN BYPASSRLS')
+            cur.execute('ALTER DEFAULT PRIVILEGES IN SCHEMA ct_app GRANT ALL ON TABLES TO service_role')
             for statement in [*ddl, *fks, *foundation_ddl(), *runtime_ddl()]:
                 cur.execute(statement)
             cls.codes = tuple(COMPANY_LABELS)
@@ -46,7 +48,9 @@ class CompanyRuntimeIntegration(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         with cls.conn.transaction(), cls.conn.cursor() as cur:
+            cur.execute('ALTER DEFAULT PRIVILEGES IN SCHEMA ct_app REVOKE ALL ON TABLES FROM service_role')
             cur.execute('DROP SCHEMA ct_app CASCADE')
+            cur.execute('DROP ROLE service_role')
             for role in cls.roles:
                 cur.execute('DROP ROLE '+role)
         cls.conn.close()
@@ -85,6 +89,10 @@ class CompanyRuntimeIntegration(unittest.TestCase):
             self.assertEqual(cur.fetchone()[0],75)
 
     def test_core_flow_and_negative_boundaries(self):
+        with self.conn.cursor() as cur:
+            for table in ('customers','company_suppliers','company_requests','company_stock_movements'):
+                cur.execute("SELECT has_table_privilege('service_role',%s,'SELECT')",('ct_app.'+table,))
+                self.assertFalse(cur.fetchone()[0])
         customer = self.ok('create_customer', name='Synthetic customer')
         self.ok('create_contact', customer_id=customer, name='Synthetic contact')
         status, _ = self.call('create_contact', who='beta', company=1, customer_id=customer, name='Cross tenant')
