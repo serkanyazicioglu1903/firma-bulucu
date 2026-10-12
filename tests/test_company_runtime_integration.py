@@ -65,6 +65,25 @@ class CompanyRuntimeIntegration(unittest.TestCase):
         self.assertEqual(status,'ok', operation+': '+status)
         return ident
 
+    def test_concurrent_collection_cannot_over_collect(self):
+        from concurrent.futures import ThreadPoolExecutor
+        customer=self.ok('create_customer',company=2,name='Concurrent customer')
+        bank=self.ok('create_account',company=2,name='Concurrent bank',currency='GBP')
+        invoice=self.ok('create_receivable',company=2,customer_id=customer,invoice_no='CONCURRENT',due_date='2026-12-01',amount=100,currency='GBP')
+        # Patches are shared only for fixed authentication/configuration, not SQL.
+        secrets={'CT_COMPANY_RUNTIME_MODE':rt.WRITE_MODE,'CT_COMPANY_DB_CONNECTIONS_JSON':json.dumps(self.accounts)}
+        def collect(index):
+            return rt.execute_request({},self.codes[2],operation='collect_customer_payment',request_id=str(uuid4()),inputs={'receivable_id':invoice,'account_id':bank,'amount':75,'reference':'CONCURRENT-'+str(index),'payment_date':'2026-10-12'})
+        with patch.object(rt,'_secret',side_effect=lambda k,d='':secrets.get(k,d)),patch.object(rt,'verified_company_principal',return_value='alpha'),patch.object(rt,'current_user',return_value={'role':'ADMIN'}):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results=list(pool.map(collect,[1,2]))
+        self.assertEqual(sum(status=='ok' for status,_ in results),1)
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT paid_amount FROM ct_app.receivables WHERE id=%s',(invoice,))
+            self.assertEqual(cur.fetchone()[0],75)
+            cur.execute('SELECT balance FROM ct_app.cash_accounts WHERE id=%s',(bank,))
+            self.assertEqual(cur.fetchone()[0],75)
+
     def test_core_flow_and_negative_boundaries(self):
         customer = self.ok('create_customer', name='Synthetic customer')
         self.ok('create_contact', customer_id=customer, name='Synthetic contact')

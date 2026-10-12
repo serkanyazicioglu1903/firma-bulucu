@@ -11,6 +11,8 @@ from scripts.four_company_foundation_ddl import private_company_tables
 def runtime_ddl():
     tables = private_company_tables()
     statements = [
+        'REVOKE ALL ON SCHEMA ct_app FROM PUBLIC',
+        'REVOKE ALL ON ALL SEQUENCES IN SCHEMA ct_app FROM PUBLIC',
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='ct_app') THEN RAISE EXCEPTION 'existing_policies_require_review'; END IF; END $$",
         "DO $$ DECLARE r text; BEGIN FOREACH r IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname=r) THEN EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA ct_app FROM %I',r); EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA ct_app FROM %I',r); EXECUTE format('REVOKE ALL ON SCHEMA ct_app FROM %I',r); END IF; END LOOP; END $$",
 

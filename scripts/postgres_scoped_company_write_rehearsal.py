@@ -391,7 +391,7 @@ def hold_inventory_lot_on_cursor(cur, company_id, *,
     cur.execute(
         'SELECT product_id,product_name,quantity_available_kg,'
         'quantity_reserved_kg,quality_status,quality_hold_kg,'
-        'purchase_order_id,shipment_id FROM "ct_app"."inventory_lots" '
+        'purchase_order_id,shipment_id,currency FROM "ct_app"."inventory_lots" '
         'WHERE id=%s AND legal_entity_id=%s FOR UPDATE',
         (lot,company_id),
     )
@@ -407,9 +407,9 @@ def hold_inventory_lot_on_cursor(cur, company_id, *,
         'INSERT INTO "ct_app"."quality_cases" '
         '(case_no,opened_date,product_id,product_name,inventory_lot_id,'
         'purchase_order_id,shipment_id,affected_quantity_kg,description,'
-        'legal_entity_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
+        'legal_entity_id,currency) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
         (case,date.today().isoformat(),row[0],row[1],lot,row[6],row[7],
-         held,description,company_id),
+         held,description,company_id,row[8]),
     )
     case_id=int(cur.fetchone()[0])
     cur.execute(

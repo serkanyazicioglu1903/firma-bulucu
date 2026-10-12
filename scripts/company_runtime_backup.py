@@ -99,3 +99,29 @@ def restore_disposable(encrypted,passphrase,url):
         return 'restored' if result.returncode==0 else 'restore_failed'
     except Exception:
         return 'restore_failed'
+
+
+def main():
+    import argparse
+    parser=argparse.ArgumentParser(description='Explicit read-only encrypted ct_app backup')
+    parser.add_argument('--output',required=True,help='New encrypted .asctpg file; existing files are never overwritten')
+    args=parser.parse_args()
+    status,encrypted=backup_runtime(os.environ.get('CT_RUNTIME_BACKUP_DATABASE_URL',''),os.environ.get('CT_RUNTIME_BACKUP_PASSPHRASE',''))
+    if status!='encrypted':
+        print(status)
+        return 1
+    try:
+        fd=os.open(args.output,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+        with os.fdopen(fd,'wb') as out:
+            out.write(encrypted)
+            out.flush()
+            os.fsync(out.fileno())
+    except OSError:
+        print('output_unavailable')
+        return 1
+    print('encrypted_backup_saved')
+    return 0
+
+
+if __name__=='__main__':
+    raise SystemExit(main())

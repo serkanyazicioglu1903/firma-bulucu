@@ -235,7 +235,7 @@ def execute_request(session_state, company_code, *, section=None, operation=None
     if mode not in (READ_MODE, WRITE_MODE):
         return 'disabled', None
     principal = verified_company_principal(session_state)
-    if not principal or company_code not in COMPANY_LABELS:
+    if not principal or not isinstance(company_code,str) or company_code not in COMPANY_LABELS:
         return 'forbidden', None
     if operation and mode != WRITE_MODE:
         return 'read_only', None
@@ -252,6 +252,8 @@ def execute_request(session_state, company_code, *, section=None, operation=None
                 with conn.cursor() as cur:
                     if not operation:
                         cur.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
+                    else:
+                        cur.execute('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE')
                     cur.execute("SET LOCAL statement_timeout='20s'")
                     cur.execute("SET LOCAL lock_timeout='3s'")
                     cur.execute('SET LOCAL search_path=ct_app,pg_catalog')
