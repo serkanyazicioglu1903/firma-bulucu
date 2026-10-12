@@ -76,7 +76,7 @@ def review_postgres_app_role_on_cursor(cur, expected_db_role):
         cur.execute(
             "SELECT COUNT(*) FROM pg_roles r WHERE "
             "r.rolname <> current_user AND "
-            "pg_has_role(current_user,r.oid,'MEMBER')"
+            "pg_has_role((SELECT oid FROM pg_roles WHERE rolname=current_user),r.oid,'MEMBER')"
         )
         membership = cur.fetchone()
         if (not isinstance(membership, (tuple, list))
