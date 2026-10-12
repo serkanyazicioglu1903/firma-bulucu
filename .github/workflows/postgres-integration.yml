@@ -3,6 +3,11 @@ name: Isolated real PostgreSQL integration
 on:
   pull_request:
     paths:
+      - "scripts/company_runtime_backup.py"
+      - "scripts/company_runtime.py"
+      - "scripts/company_runtime_schema.py"
+      - "company_runtime_ui.py"
+      - "tests/test_company_runtime_integration.py"
       - "scripts/postgres_connection.py"
       - "scripts/postgres_operational_write.py"
       - "scripts/postgres_operational_read.py"
@@ -83,6 +88,11 @@ on:
   push:
     branches: [main]
     paths:
+      - "scripts/company_runtime_backup.py"
+      - "scripts/company_runtime.py"
+      - "scripts/company_runtime_schema.py"
+      - "company_runtime_ui.py"
+      - "tests/test_company_runtime_integration.py"
       - "scripts/postgres_connection.py"
       - "scripts/postgres_operational_write.py"
       - "scripts/postgres_operational_read.py"
@@ -195,5 +205,7 @@ jobs:
           python-version: "3.12"
       - name: Install application dependencies
         run: pip install -r requirements.txt
+      - name: Test dedicated login RLS and atomic company runtime
+        run: python -m unittest tests.test_company_runtime_integration -v
       - name: Execute real PostgreSQL end-to-end test on disposable CI database
         run: python -m unittest tests.test_postgres_live_integration -v

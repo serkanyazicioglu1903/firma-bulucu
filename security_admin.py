@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import io
 import json
+import secrets
 import re
 import sqlite3
 import zipfile
@@ -64,7 +65,7 @@ def _secret(name, default=""):
 
 def hash_password(password, salt=None):
     if salt is None:
-        salt = hashlib.sha256(str(datetime.utcnow().timestamp()).encode()).hexdigest()[:32]
+        salt = secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac(
         "sha256", str(password).encode("utf-8"), str(salt).encode("utf-8"), 200_000
     ).hex()
@@ -98,14 +99,21 @@ def load_users():
         except Exception:
             users = []
 
+    if raw and not users:
+        return []
+
     if users:
         clean = []
+        seen = set()
         for item in users:
             if not isinstance(item, dict):
-                continue
+                return []
             username = str(item.get("username","")).strip().lower()
-            if not username:
-                continue
+            if (not username or username in seen
+                    or type(item.get("enabled", True)) is not bool
+                    or str(item.get("role") or "VIEWER").upper() not in ROLE_PERMISSIONS):
+                return []
+            seen.add(username)
             clean.append({
                 "username": username,
                 "display_name": str(item.get("display_name") or username),
@@ -213,6 +221,9 @@ def logout_button():
     c1,c2 = st.columns([4,1])
     c1.caption("👤 " + str(user.get("display_name","")) + " · " + str(user.get("role","")))
     if c2.button("Çıkış", key="ct_logout"):
+        for key in list(st.session_state):
+            if key.startswith("runtime_"):
+                st.session_state.pop(key, None)
         for key in ["ct_user","ct_session_id","ct_company_session_signature"]:
             st.session_state.pop(key, None)
         st.rerun()

@@ -1,4 +1,7 @@
-"""DISPOSABLE-CI-ONLY customer/contact creation for four legal entities.
+"""Customer/contact cursor handlers and a DISPOSABLE-CI-only URL wrapper.
+
+Low-level create handlers are also used by the signed, role-bound
+company_runtime gateway. The rehearsal URL wrapper below remains CI-only.
 
 No Streamlit form, production entrypoint, migration or customer backfill.
 The only URL entrypoint *rejects all non-local/non-disposable PostgreSQL*.

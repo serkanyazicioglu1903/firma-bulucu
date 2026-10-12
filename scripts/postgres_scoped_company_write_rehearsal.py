@@ -1,6 +1,8 @@
-"""Four-company ATOMIC WRITE rehearsal on DISPOSABLE CI PostgreSQL ONLY.
+"""Company operation cursor handlers and a DISPOSABLE-CI-only URL wrapper.
 
-This module is not connected to Streamlit, background jobs or production.
+The low-level handlers are reused by company_runtime only AFTER its signed
+identity, dedicated DB login, RLS and company authorization checks. This
+module's standalone rehearsal URL wrapper remains CI-only.
 It categorically denies non-loopback Supabase URLs. It requires a verified
 application principal *from the server*, an explicit DB read AND write grant,
 an active legal entity and a verified company-to-warehouse association.
@@ -176,7 +178,7 @@ def _assigned_warehouse(cur, company_id, warehouse_id):
         'SELECT w.id FROM "ct_app"."warehouses" w '
         'JOIN "ct_app"."company_warehouse_scope" x '
         'ON x.warehouse_id=w.id AND x.legal_entity_id=%s '
-        'WHERE w.id=%s AND w.active=1 FOR SHARE OF w,x',
+        'WHERE w.id=%s AND w.active=1',
         (company_id, warehouse_id),
     )
     if cur.fetchone() is None:
@@ -197,7 +199,7 @@ def create_purchase_order_on_cursor(cur, company_id, *,
     _assigned_warehouse(cur, company_id, warehouse)
     cur.execute(
         'SELECT name FROM "ct_app"."product_catalog" '
-        'WHERE id=%s AND active=1 FOR SHARE',
+        'WHERE id=%s AND active=1',
         (prod,),
     )
     product = cur.fetchone()
@@ -208,8 +210,8 @@ def create_purchase_order_on_cursor(cur, company_id, *,
         'SELECT pg_advisory_xact_lock(4601, hashtext(%s))', (number,),
     )
     cur.execute(
-        'SELECT 1 FROM "ct_app"."purchase_orders" WHERE po_number=%s LIMIT 1',
-        (number,),
+        'SELECT 1 FROM "ct_app"."purchase_orders" WHERE po_number=%s AND legal_entity_id=%s LIMIT 1',
+        (number,company_id),
     )
     if cur.fetchone() is not None:
         raise ScopedWriteDenied("duplicate_po")
@@ -362,7 +364,7 @@ def receive_shipment_on_cursor(cur, company_id, *, shipment_id):
         'VALUES (%s,%s,%s,%s,%s,%s,%s,0,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
         (po[0],po[1],warehouse,row[5] or "",row[6] or "",qty,qty,
          po[3],po[4],po_id,shipment,date.today().isoformat(),
-         "CI company-scoped receipt",company_id),
+         "Company-scoped receipt",company_id),
     )
     lot_id = int(cur.fetchone()[0])
     cur.execute(
@@ -391,7 +393,7 @@ def hold_inventory_lot_on_cursor(cur, company_id, *,
     cur.execute(
         'SELECT product_id,product_name,quantity_available_kg,'
         'quantity_reserved_kg,quality_status,quality_hold_kg,'
-        'purchase_order_id,shipment_id FROM "ct_app"."inventory_lots" '
+        'purchase_order_id,shipment_id,currency FROM "ct_app"."inventory_lots" '
         'WHERE id=%s AND legal_entity_id=%s FOR UPDATE',
         (lot,company_id),
     )
@@ -407,9 +409,9 @@ def hold_inventory_lot_on_cursor(cur, company_id, *,
         'INSERT INTO "ct_app"."quality_cases" '
         '(case_no,opened_date,product_id,product_name,inventory_lot_id,'
         'purchase_order_id,shipment_id,affected_quantity_kg,description,'
-        'legal_entity_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
+        'legal_entity_id,currency) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
         (case,date.today().isoformat(),row[0],row[1],lot,row[6],row[7],
-         held,description,company_id),
+         held,description,company_id,row[8]),
     )
     case_id=int(cur.fetchone()[0])
     cur.execute(

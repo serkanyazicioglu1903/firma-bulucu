@@ -2069,6 +2069,9 @@ def sync_quote_to_opportunity(opportunity_id, quote_status,
 
 def render_control_tower():
     """Fail closed on PostgreSQL errors, never fall back to demo/ephemeral data."""
+    from scripts.company_runtime import runtime_mode
+    if runtime_mode() != "disabled":
+        return _render_control_tower_interface()
     url = postgres_url()
     if url:
         status = ready_for_live(url, DB_PATH)
@@ -2091,6 +2094,16 @@ def render_control_tower():
 
 
 def _render_control_tower_interface(live_postgres=False):
+    from scripts.company_runtime import runtime_mode
+    if runtime_mode() != "disabled":
+        from company_runtime_ui import render_company_runtime
+        if not login_gate():
+            return
+        if runtime_mode() == "invalid" or company_review_mode_state() != "disabled":
+            st.error("Şirket çalışma modu geçersiz veya çelişkili; eski ekranlar kapalı.")
+            return
+        render_company_runtime()
+        return
     if not live_postgres:
         init_db()
         init_security_tables(DB_PATH)
