@@ -6,7 +6,7 @@ No database access, user changes, grants, deployments or production approval.
 """
 import re
 
-_HASH = re.compile(r"^pbkdf2_sha256\\$(\\d+)\\$([0-9a-f]{16,128})\\$([0-9a-f]{64})$")
+_HASH = re.compile(r"^pbkdf2_sha256\$(\d+)\$([0-9a-f]{16,128})\$([0-9a-f]{64})$")
 _LOGIN = re.compile(r"^[a-z0-9][a-z0-9._@-]{0,127}$")
 
 
