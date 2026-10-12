@@ -18,7 +18,7 @@
 **Mevcut güvenlik sistemi**, ilk şirket sahipliği alanı veya yeni şirket kayıt tablosunu görür görmez eski, şirket filtresiz Streamlit ekranlarını kapatır. Bu yüzden Aşama A'yı aktif uygulamaya bakım penceresi olmadan uygulamak uygulamayı durdurabilir.
 
 Ayrıca:
-1. Şirket isimleri yalnızca uygulama etiketleridir; her biri için resmî hukuki unvan ve tescil kanıtı gerekir. Özellikle AS İleri Holding A.Ş.'nin fiilen tescilli olup olmadığı doğrulanmalıdır.
+1. Şirket isimleri yalnızca uygulama etiketleridir; her biri için resmî hukuki unvan ve tescil kanıtı gerekir. AS İleri Holding A.Ş.'nin en az 15 yıl önce kurulmuş olduğu şirket yetkilisi tarafından 12 Ekim 2026'da teyit edilmiştir; kuruluş aşamasında olduğu varsayılmamalıdır. Ancak tüm dört şirketin tam güncel ticaret sicili unvanı ve ayrı tüzel kişilik tanımlayıcıları, canlı veritabanı kimlik satırları oluşturulmadan önce yetkili belgelere karşı eşleştirilmelidir.
 2. Dört mevcut kaydın gerçek/dummy durumu ve **hangi şirkete ait olduğu** kanıtla belirlenmelidir; tahmin edilmez ve silinmez.
 3. Gerçek uygulama kullanıcıları, giriş kullanıcı adları ve her kişi için şirket bazında READ/WRITE kararları onaylanmalıdır. ADMIN veya holding etiketi otomatik `*` erişimi vermez.
 4. Üretimin **gerçek sağlayıcı yedeği/geri yükleme tatbikatı**, tam rol/RLS snapshot'ı, eski API/UI yollarının kontrolü, negatif tenant testleri, 26 tabloda kayıt sahipliği mutabakatı ve ayrı kesinti/geri dönüş onayı gerekir.
