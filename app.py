@@ -196,6 +196,17 @@ if review_mode != "disabled":
     render_scoped_company_workspace(url)
     st.stop()
 
+# Standalone quote route is intentionally AFTER global authentication and the
+# exclusive signed company-review guard, but BEFORE expensive legacy tabs.
+# A slow/erroring Control Tower panel must never hide the manual quote form.
+if st.query_params.get("page") == "quote":
+    st.title("🧮 AS Control Tower — Gerçek Teklif / Kârlılık")
+    if st.button("← Ana menüye dön", key="ct_quote_exit"):
+        st.query_params.clear()
+        st.rerun()
+    render_real_quote_workspace()
+    st.stop()
+
 # =========================================================
 # ORTAK AYARLAR
 # =========================================================
@@ -1439,6 +1450,13 @@ with main_tab2:
             st.caption("Bu bir taslaktır. Program e-posta göndermez. Sonuçları saklamak için CSV veya JSON indirin; oturum verileri kalıcı kayıt değildir.")
         else:
             st.info("Seçtiğiniz minimum skoru geçen firma yok. Daha düşük bir skor seçebilirsiniz.")
+
+# Render the lightweight, database-free quote tab FIRST. Streamlit executes
+# every tab body, not just the selected one. An error or slow query inside
+# the heavy Control Tower tab must not prevent tab 4 from being populated.
+# Manual calculation only: no demo seed, no business DB reads or writes.
+with main_tab4:
+    render_real_quote_workspace()
 
 # -------------------------
 # TAB 3: CONTROL TOWER
