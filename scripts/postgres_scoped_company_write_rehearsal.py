@@ -176,7 +176,7 @@ def _assigned_warehouse(cur, company_id, warehouse_id):
         'SELECT w.id FROM "ct_app"."warehouses" w '
         'JOIN "ct_app"."company_warehouse_scope" x '
         'ON x.warehouse_id=w.id AND x.legal_entity_id=%s '
-        'WHERE w.id=%s AND w.active=1 FOR SHARE OF w,x',
+        'WHERE w.id=%s AND w.active=1',
         (company_id, warehouse_id),
     )
     if cur.fetchone() is None:
@@ -197,7 +197,7 @@ def create_purchase_order_on_cursor(cur, company_id, *,
     _assigned_warehouse(cur, company_id, warehouse)
     cur.execute(
         'SELECT name FROM "ct_app"."product_catalog" '
-        'WHERE id=%s AND active=1 FOR SHARE',
+        'WHERE id=%s AND active=1',
         (prod,),
     )
     product = cur.fetchone()
@@ -362,7 +362,7 @@ def receive_shipment_on_cursor(cur, company_id, *, shipment_id):
         'VALUES (%s,%s,%s,%s,%s,%s,%s,0,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
         (po[0],po[1],warehouse,row[5] or "",row[6] or "",qty,qty,
          po[3],po[4],po_id,shipment,date.today().isoformat(),
-         "CI company-scoped receipt",company_id),
+         "Company-scoped receipt",company_id),
     )
     lot_id = int(cur.fetchone()[0])
     cur.execute(

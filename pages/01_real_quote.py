@@ -17,8 +17,19 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+from scripts.company_runtime import runtime_mode
+from company_runtime_ui import render_company_runtime
+
 # Exactly the same application-wide login requirement as app.py.
 if not login_gate():
+    st.stop()
+
+if runtime_mode() != "disabled":
+    if runtime_mode() == "invalid" or company_review_mode_state() != "disabled":
+        st.error("Şirket çalışma modu geçersiz veya çelişkili; eski ekranlar kapalı.")
+    else:
+        logout_button()
+        render_company_runtime()
     st.stop()
 
 # The exclusive company-review mode suppresses all unscoped legacy and

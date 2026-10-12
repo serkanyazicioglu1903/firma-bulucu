@@ -163,9 +163,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+from scripts.company_runtime import runtime_mode
+from company_runtime_ui import render_company_runtime
+
 # Guard every tab, including supplier and acquisition searches. The previous
 # Control Tower-only gate did not protect the rest of the application.
 if not login_gate():
+    st.stop()
+
+if runtime_mode() != "disabled":
+    if runtime_mode() == "invalid" or company_review_mode_state() != "disabled":
+        st.error("Şirket çalışma modu geçersiz veya çelişkili; eski ekranlar kapalı.")
+    else:
+        logout_button()
+        render_company_runtime()
     st.stop()
 logout_button()
 
