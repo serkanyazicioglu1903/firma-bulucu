@@ -15,8 +15,8 @@ from scripts.four_company_foundation_ddl import private_company_tables
 
 APP_ROLE = "ct_sales_001"
 USERS = [
-    {"username": "account_one", "role": "SALES", "enabled": True},
-    {"username": "account_two", "role": "FINANCE", "enabled": True},
+    {"username": "account-one", "role": "SALES", "enabled": True},
+    {"username": "account-two", "role": "FINANCE", "enabled": True},
     {"username": "retired", "role": "ADMIN", "enabled": False},
 ]
 
@@ -44,9 +44,9 @@ def sample_plan():
     return {
         "source_sha256": registry_fingerprint(USERS),
         "bindings": [
-            {"username": "account_one", "db_role": "ct_sales_001",
+            {"username": "account-one", "db_role": "ct_sales_001",
              "evidence_ref": "SECURITY-REVIEW-1001"},
-            {"username": "account_two", "db_role": "ct_finance_002",
+            {"username": "account-two", "db_role": "ct_finance_002",
              "evidence_ref": "SECURITY-REVIEW-1002"},
             {"username": "retired", "db_role": None,
              "evidence_ref": "SECURITY-REVIEW-1003"},
@@ -148,7 +148,7 @@ class AppToDbRoleManifestTests(unittest.TestCase):
         self.assertFalse(summary["database_login_verified"])
         self.assertFalse(summary["company_permissions_granted"])
         self.assertFalse(summary["production_authorized"])
-        self.assertNotIn("account_one", str(summary))
+        self.assertNotIn("account-one", str(summary))
 
     def test_invalid_plan_and_account_state_changes_denied(self):
         for mutate in (
@@ -159,7 +159,7 @@ class AppToDbRoleManifestTests(unittest.TestCase):
             lambda p: p["bindings"][0].update(db_role="*"),
             lambda p: p["bindings"][2].update(db_role=APP_ROLE),
             lambda p: p["bindings"][0].update(evidence_ref=""),
-            lambda p: p["bindings"][1].update(username="account_one"),
+            lambda p: p["bindings"][1].update(username="account-one"),
         ):
             p = sample_plan()
             mutate(p)
