@@ -283,6 +283,176 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                 cur.execute(f'SELECT COUNT(*) FROM "ct_app"."{table}"')
                 self.assertEqual(cur.fetchone()[0], count)
 
+    def test_all_23_business_tables_rls_are_company_scoped_in_disposable_pg(self):
+        """Real 23-table RLS with four SQL roles, read/write denial, rollback.
+
+        This does NOT imply production auth, migrations, or company isolation:
+        the real application currently connects with elevated DB privileges.
+        """
+        from scripts.four_company_foundation_ddl import (
+            foundation_ddl, private_company_tables,
+        )
+        from scripts.four_company_rls_ci_proof import (
+            CI_ROLES, ci_23_table_rls_sql,
+        )
+        import psycopg
+
+        class RollbackRls23(Exception):
+            pass
+
+        before = self.execute(
+            'SELECT COUNT(*) FROM "ct_app"."tasks"'
+        )[0]
+        fake_codes = tuple(f"CI_FICTIONAL_{i}" for i in range(4))
+        try:
+            with self.conn.transaction():
+                with self.conn.cursor() as cur:
+                    for role in CI_ROLES:
+                        cur.execute("SELECT to_regrole(%s)", (role,))
+                        self.assertIsNone(cur.fetchone()[0])
+                    for statement in foundation_ddl():
+                        cur.execute(statement)
+                    for statement in ci_23_table_rls_sql():
+                        cur.execute(statement)
+
+                    # Verify RLS FORCE and both policies for ALL 23 tables.
+                    cur.execute(
+                        "SELECT c.relname, c.relrowsecurity, "
+                        "c.relforcerowsecurity, COUNT(p.oid) "
+                        "FROM pg_class c JOIN pg_namespace n "
+                        "ON n.oid=c.relnamespace "
+                        "LEFT JOIN pg_policy p ON p.polrelid=c.oid "
+                        "WHERE n.nspname='ct_app' AND "
+                        "c.relname = ANY(%s) GROUP BY c.oid,c.relname "
+                        "ORDER BY c.relname",
+                        (list(private_company_tables()),),
+                    )
+                    rows = cur.fetchall()
+                    self.assertEqual(len(rows), 23)
+                    self.assertTrue(all(
+                        rls is True and force is True and n == 2
+                        for name, rls, force, n in rows
+                    ))
+
+                    # Four made-up companies, no real company/real user data.
+                    owned_ids = {}
+                    for code in fake_codes:
+                        cur.execute(
+                            'INSERT INTO "ct_app"."legal_entities" '
+                            '(code,legal_name) VALUES (%s,%s) RETURNING id',
+                            (code, "CI Fictional Entity " + code),
+                        )
+                        ident = cur.fetchone()[0]
+                        owned_ids[code] = ident
+                        cur.execute(
+                            'INSERT INTO "ct_app"."tasks" '
+                            '(title,legal_entity_id) VALUES (%s,%s)',
+                            ("CI fictional task for " + code, ident),
+                        )
+
+                    # Read grant to A, B, D only. Write grant A only.
+                    for role, code in (
+                        (CI_ROLES[0], fake_codes[0]),
+                        (CI_ROLES[1], fake_codes[1]),
+                        (CI_ROLES[3], fake_codes[3]),
+                    ):
+                        cur.execute(
+                            'INSERT INTO "ct_app"."company_read_grants" '
+                            '(principal_id, legal_entity_id, can_read) '
+                            'VALUES (%s,%s,TRUE)',
+                            (role, owned_ids[code]),
+                        )
+                    cur.execute(
+                        'INSERT INTO "ct_app"."company_write_grants" '
+                        '(principal_id, legal_entity_id, can_write) '
+                        'VALUES (%s,%s,TRUE)',
+                        (CI_ROLES[0], owned_ids[fake_codes[0]]),
+                    )
+
+                    for index, role in enumerate(CI_ROLES):
+                        try:
+                            cur.execute("SET LOCAL ROLE " + role)
+                            cur.execute(
+                                'SELECT legal_entity_id FROM '
+                                '"ct_app"."tasks" ORDER BY id'
+                            )
+                            expected = (
+                                [owned_ids[fake_codes[index]]]
+                                if index in (0, 1, 3) else []
+                            )
+                            self.assertEqual(
+                                [r[0] for r in cur.fetchall()], expected
+                            )
+                            # Unassigned pre-migration customer rows are not
+                            # visible to *any* restricted company DB role.
+                            cur.execute(
+                                'SELECT COUNT(*) FROM "ct_app"."customers"'
+                            )
+                            self.assertEqual(cur.fetchone()[0], 0)
+                        finally:
+                            cur.execute("RESET ROLE")
+
+                    # Company A can create a task ONLY within company A.
+                    try:
+                        cur.execute("SET LOCAL ROLE " + CI_ROLES[0])
+                        cur.execute(
+                            'INSERT INTO "ct_app"."tasks" '
+                            '(title,legal_entity_id) VALUES (%s,%s)',
+                            ("CI allowed A", owned_ids[fake_codes[0]]),
+                        )
+                        # Company B is explicitly disallowed even if the
+                        # caller passes its numeric company identifier.
+                        with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                            with self.conn.transaction():
+                                cur.execute(
+                                    'INSERT INTO "ct_app"."tasks" '
+                                    '(title,legal_entity_id) VALUES (%s,%s)',
+                                    ("CI forbidden B", owned_ids[fake_codes[1]]),
+                                )
+                        cur.execute(
+                            'SELECT COUNT(*) FROM "ct_app"."tasks"'
+                        )
+                        self.assertEqual(cur.fetchone()[0], 2)
+                    finally:
+                        cur.execute("RESET ROLE")
+
+                    # Company B has explicit read but NO write permission.
+                    try:
+                        cur.execute("SET LOCAL ROLE " + CI_ROLES[1])
+                        with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                            with self.conn.transaction():
+                                cur.execute(
+                                    'INSERT INTO "ct_app"."tasks" '
+                                    '(title,legal_entity_id) VALUES (%s,%s)',
+                                    ("CI B forbidden write", owned_ids[fake_codes[1]]),
+                                )
+                    finally:
+                        cur.execute("RESET ROLE")
+
+                    raise RollbackRls23()
+        except RollbackRls23:
+            pass
+
+        # Even role creation, RLS policies and fake rows were rolled back.
+        with self.conn.cursor() as cur:
+            for role in CI_ROLES:
+                cur.execute("SELECT to_regrole(%s)", (role,))
+                self.assertIsNone(cur.fetchone()[0])
+            cur.execute(
+                "SELECT COUNT(*) FROM information_schema.columns WHERE "
+                "table_schema='ct_app' AND column_name='legal_entity_id'"
+            )
+            self.assertEqual(cur.fetchone()[0], 0)
+            cur.execute(
+                "SELECT COUNT(*) FROM pg_policy p "
+                "JOIN pg_class c ON c.oid=p.polrelid "
+                "JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname='ct_app'"
+            )
+            self.assertEqual(cur.fetchone()[0], 0)
+            cur.execute('SELECT COUNT(*) FROM "ct_app"."tasks"')
+            self.assertEqual(cur.fetchone()[0], before)
+
     def test_company_crm_customer_contact_rights_on_disposable_postgres(self):
         """Real FK, roles, two-company rows, zero live DB modifications.
 
