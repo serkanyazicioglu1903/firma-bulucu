@@ -198,6 +198,87 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                 denied = inspect_blueprint_fks_on_cursor(cur, blueprint)
                 self.assertEqual(denied["issue_codes"], ("nullable_parent_fk",))
 
+    def test_23_business_owner_columns_and_default_deny_registries_rollback(self):
+        """Real PG setup rehearsal, NO live Supabase or owner assignment."""
+        from scripts.four_company_foundation_ddl import (
+            foundation_ddl, foundation_status_on_cursor,
+            private_company_tables,
+        )
+        from scripts.postgres_company_migration_guard import (
+            company_schema_status_on_cursor,
+        )
+
+        class RollbackFoundation(Exception):
+            pass
+
+        before = {}
+        with self.conn.cursor() as cur:
+            self.assertEqual(
+                foundation_status_on_cursor(cur),
+                "legacy_ready_for_isolated_rehearsal",
+            )
+            for table in ("customers", "contacts", "audit_log"):
+                cur.execute(
+                    f'SELECT COUNT(*) FROM "ct_app"."{table}"'
+                )
+                before[table] = cur.fetchone()[0]
+
+        try:
+            with self.conn.transaction():
+                with self.conn.cursor() as cur:
+                    for statement in foundation_ddl():
+                        cur.execute(statement)
+                    cur.execute(
+                        "SELECT table_name FROM information_schema.columns "
+                        "WHERE table_schema='ct_app' AND "
+                        "column_name='legal_entity_id' "
+                        "AND is_nullable='YES' ORDER BY table_name"
+                    )
+                    self.assertEqual(
+                        {row[0] for row in cur.fetchall()},
+                        set(private_company_tables()),
+                    )
+                    # All company/permission registries remain empty and
+                    # absolutely no user or company is invented by code.
+                    for table in (
+                        "legal_entities", "company_read_grants",
+                        "company_write_grants", "company_warehouse_scope",
+                        "company_operation_audit",
+                    ):
+                        cur.execute(f'SELECT COUNT(*) FROM "ct_app"."{table}"')
+                        self.assertEqual(cur.fetchone()[0], 0)
+                    # Any half-applied company schema MUST stop the unscoped
+                    # legacy application, before any prod migration window.
+                    self.assertEqual(
+                        company_schema_status_on_cursor(cur),
+                        "partial_company_schema",
+                    )
+                    for table, count in before.items():
+                        cur.execute(
+                            f'SELECT COUNT(*) FROM "ct_app"."{table}"'
+                        )
+                        self.assertEqual(cur.fetchone()[0], count)
+                    raise RollbackFoundation()
+        except RollbackFoundation:
+            pass
+
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM information_schema.columns WHERE "
+                "table_schema='ct_app' AND column_name='legal_entity_id'"
+            )
+            self.assertEqual(cur.fetchone()[0], 0)
+            for table in (
+                "legal_entities", "company_read_grants",
+                "company_write_grants", "company_warehouse_scope",
+                "company_operation_audit",
+            ):
+                cur.execute("SELECT to_regclass(%s)", (f"ct_app.{table}",))
+                self.assertIsNone(cur.fetchone()[0])
+            for table, count in before.items():
+                cur.execute(f'SELECT COUNT(*) FROM "ct_app"."{table}"')
+                self.assertEqual(cur.fetchone()[0], count)
+
     def test_company_crm_customer_contact_rights_on_disposable_postgres(self):
         """Real FK, roles, two-company rows, zero live DB modifications.
 
