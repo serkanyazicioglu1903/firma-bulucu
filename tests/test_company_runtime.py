@@ -44,3 +44,11 @@ def test_invalid_mode_no_legacy_downgrade(monkeypatch):
     monkeypatch.setenv(rt.MODE_KEY,rt.WRITE_MODE)
     with patch.object(rt,'_secret',return_value=rt.READ_MODE):
         assert rt.runtime_mode()=='invalid'
+
+
+def test_direct_control_tower_route_never_opens_shared_connection():
+    import control_tower as ct
+    with patch.object(rt,'runtime_mode',return_value=rt.READ_MODE), patch.object(ct,'postgres_url') as shared, patch.object(ct,'_render_control_tower_interface') as screen:
+        ct.render_control_tower()
+        shared.assert_not_called()
+        screen.assert_called_once_with()

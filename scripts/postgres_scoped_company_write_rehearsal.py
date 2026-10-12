@@ -1,6 +1,8 @@
-"""Four-company ATOMIC WRITE rehearsal on DISPOSABLE CI PostgreSQL ONLY.
+"""Company operation cursor handlers and a DISPOSABLE-CI-only URL wrapper.
 
-This module is not connected to Streamlit, background jobs or production.
+The low-level handlers are reused by company_runtime only AFTER its signed
+identity, dedicated DB login, RLS and company authorization checks. This
+module's standalone rehearsal URL wrapper remains CI-only.
 It categorically denies non-loopback Supabase URLs. It requires a verified
 application principal *from the server*, an explicit DB read AND write grant,
 an active legal entity and a verified company-to-warehouse association.

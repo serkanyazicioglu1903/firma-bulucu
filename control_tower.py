@@ -2069,6 +2069,9 @@ def sync_quote_to_opportunity(opportunity_id, quote_status,
 
 def render_control_tower():
     """Fail closed on PostgreSQL errors, never fall back to demo/ephemeral data."""
+    from scripts.company_runtime import runtime_mode
+    if runtime_mode() != "disabled":
+        return _render_control_tower_interface()
     url = postgres_url()
     if url:
         status = ready_for_live(url, DB_PATH)
