@@ -226,6 +226,7 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
 
                     # Real production company IDs and login names are NOT
                     # involved in these fictional rollback-only inserts.
+                    company_ids = []
                     for index in range(4):
                         cur.execute(
                             'INSERT INTO "ct_app"."legal_entities" '
@@ -234,6 +235,7 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                              f"CI Imaginary Company {index}"),
                         )
                         company_id = cur.fetchone()[0]
+                        company_ids.append(company_id)
                         cur.execute(
                             'INSERT INTO "ct_app"."tasks" '
                             '(title,legal_entity_id) VALUES (%s,%s)',
@@ -263,9 +265,8 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                                     cur.execute(
                                         'INSERT INTO "ct_app"."tasks" '
                                         '(title,legal_entity_id) '
-                                        'VALUES (%s,(SELECT id FROM '
-                                        '"ct_app"."legal_entities" LIMIT 1))',
-                                        ("CI forbidden write",),
+                                        'VALUES (%s,%s)',
+                                        ("CI forbidden write", company_ids[0]),
                                     )
                         finally:
                             cur.execute("RESET ROLE")
