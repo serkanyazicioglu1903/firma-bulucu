@@ -11,6 +11,9 @@ from scripts.four_company_foundation_ddl import private_company_tables
 def runtime_ddl():
     tables = private_company_tables()
     statements = [
+        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='ct_app') THEN RAISE EXCEPTION 'existing_policies_require_review'; END IF; END $$",
+        "DO $$ DECLARE r text; BEGIN FOREACH r IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname=r) THEN EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA ct_app FROM %I',r); EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA ct_app FROM %I',r); EXECUTE format('REVOKE ALL ON SCHEMA ct_app FROM %I',r); END IF; END LOOP; END $$",
+
         'CREATE TABLE ct_app.company_login_bindings (principal_id TEXT PRIMARY KEY, db_role NAME UNIQUE NOT NULL, app_role TEXT NOT NULL CHECK (app_role IN (\'ADMIN\',\'VIEWER\')), enabled BOOLEAN NOT NULL DEFAULT FALSE)',
         'CREATE TABLE ct_app.company_requests (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, principal_id TEXT NOT NULL, legal_entity_id BIGINT NOT NULL REFERENCES ct_app.legal_entities(id), request_id UUID NOT NULL, operation TEXT NOT NULL, payload_hash TEXT NOT NULL, record_id BIGINT NOT NULL, UNIQUE(principal_id,request_id))',
     ]
@@ -18,6 +21,16 @@ def runtime_ddl():
     with sqlite_schema() as schema:
         for table in tables:
             target = 'ct_app.' + quote(table)
+            for col in schema.execute('PRAGMA table_info(' + quote(table) + ')'):
+                if col[2] == 'REAL':
+                    statements.append(f'ALTER TABLE {target} ALTER COLUMN {quote(col[1])} TYPE NUMERIC(30,10) USING {quote(col[1])}::numeric')
+            # Legal entities can use identical names/document numbers.
+            for index in schema.execute('PRAGMA index_list(' + quote(table) + ')'):
+                if index[3] == 'u':
+                    cols = [r[2] for r in schema.execute('PRAGMA index_info(' + quote(index[1]) + ')')]
+                    constraint = quote(table + '_' + '_'.join(cols) + '_key')
+                    statements += [f'ALTER TABLE {target} DROP CONSTRAINT {constraint}',
+                                   f'ALTER TABLE {target} ADD UNIQUE (legal_entity_id,' + ','.join(quote(c) for c in cols) + ')']
             statements += [f'ALTER TABLE {target} ALTER COLUMN legal_entity_id SET NOT NULL',
                            f'ALTER TABLE {target} ADD UNIQUE (id,legal_entity_id)']
         for table in tables:
@@ -28,6 +41,14 @@ def runtime_ddl():
                         f'{quote("tenant_fk_" + table + "_" + str(fk[0]))} '
                         f'FOREIGN KEY ({quote(fk[3])},legal_entity_id) '
                         f'REFERENCES ct_app.{quote(fk[2])} ({quote(fk[4])},legal_entity_id)')
+    statements += [
+        'ALTER TABLE ct_app.quotes ADD COLUMN calculation_snapshot JSONB',
+        'ALTER TABLE ct_app.receivables ADD COLUMN quote_id BIGINT',
+        'ALTER TABLE ct_app.receivables ADD UNIQUE (legal_entity_id,quote_id)',
+        'ALTER TABLE ct_app.receivables ADD FOREIGN KEY (quote_id,legal_entity_id) REFERENCES ct_app.quotes(id,legal_entity_id)',
+        'ALTER TABLE ct_app.purchase_orders ADD COLUMN source_quote_id BIGINT',
+        'ALTER TABLE ct_app.purchase_orders ADD FOREIGN KEY (source_quote_id,legal_entity_id) REFERENCES ct_app.quotes(id,legal_entity_id)',
+    ]
     # quality_case_id was added after initial table creation.
     statements.append('ALTER TABLE ct_app.inventory_lots ADD CONSTRAINT tenant_lot_case_fk FOREIGN KEY (quality_case_id,legal_entity_id) REFERENCES ct_app.quality_cases(id,legal_entity_id)')
     statements.append('ALTER TABLE ct_app.company_warehouse_scope ADD CONSTRAINT tenant_warehouse_fk FOREIGN KEY (warehouse_id,legal_entity_id) REFERENCES ct_app.warehouses(id,legal_entity_id)')

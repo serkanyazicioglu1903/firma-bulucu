@@ -125,12 +125,55 @@ def create_receivable(cur, company, *, customer_id, invoice_no, due_date, amount
     return cur.fetchone()[0]
 
 
+def create_quote(cur, company, *, customer_id, product_name, **economics):
+    from scripts.real_quote_estimator import calculate_real_quote
+    customer = _checked_id(customer_id)
+    cur.execute('SELECT id FROM ct_app.customers WHERE id=%s AND legal_entity_id=%s', (customer,company))
+    if cur.fetchone() is None:
+        raise ScopedWriteDenied('wrong_company_customer')
+    cur.execute('SELECT code FROM ct_app.legal_entities WHERE id=%s', (company,))
+    code = cur.fetchone()[0]
+    calc = calculate_real_quote(company_code=code, **economics)
+    name = _checked_text(product_name)
+    columns = ('customer_id','product_name','quantity_kg','base_currency','buy_price_per_kg','buy_currency','buy_fx_to_base','sell_price_per_kg','sell_currency','sell_fx_to_base','landed_cost_per_kg','finance_cost_per_kg','total_cost_per_kg','profit_per_kg','profit_total_base','margin_pct','required_sell_price','legal_entity_id','calculation_snapshot')
+    values = (customer,name,calc['quantity_kg'],calc['base_currency'],calc['buy_price_per_kg'],calc['buy_currency'],calc['buy_fx_to_base'],economics['sell_price_per_kg'],calc['sell_currency'],economics['sell_fx_to_base'],calc['landed_per_kg_base'],calc['finance_per_kg_base'],calc['cost_per_kg_base'],calc['profit_per_kg_base'],calc['profit_base'],calc['margin_pct'],calc['required_sell_price'],company,json.dumps({'inputs':economics,'result':calc},default=str))
+    cur.execute('INSERT INTO ct_app.quotes ('+','.join(columns)+') VALUES ('+','.join(['%s']*len(columns))+') RETURNING id',values)
+    return cur.fetchone()[0]
+
+
+def invoice_quote(cur, company, *, quote_id, invoice_no, due_date):
+    cur.execute('SELECT customer_id,quantity_kg,sell_price_per_kg,sell_currency,status FROM ct_app.quotes WHERE id=%s AND legal_entity_id=%s FOR UPDATE',(_checked_id(quote_id),company))
+    quote = cur.fetchone()
+    if not quote or quote[4] != 'Taslak':
+        raise ScopedWriteDenied('quote_unavailable')
+    amount = _positive(quote[1]) * _positive(quote[2])
+    ident = create_receivable(cur,company,customer_id=quote[0],invoice_no=invoice_no,due_date=due_date,amount=amount,currency=quote[3])
+    cur.execute('UPDATE ct_app.receivables SET quote_id=%s WHERE id=%s AND legal_entity_id=%s',(quote_id,ident,company))
+    cur.execute("UPDATE ct_app.quotes SET status='Faturalandı' WHERE id=%s AND legal_entity_id=%s",(quote_id,company))
+    return ident
+
+
+def purchase_from_quote(cur, company, *, quote_id, po_number, supplier, product_id, warehouse_id):
+    cur.execute('SELECT product_name,quantity_kg,buy_price_per_kg,buy_currency FROM ct_app.quotes WHERE id=%s AND legal_entity_id=%s FOR SHARE',(_checked_id(quote_id),company))
+    quote = cur.fetchone()
+    if quote is None:
+        raise ScopedWriteDenied('quote_unavailable')
+    cur.execute('SELECT name FROM ct_app.product_catalog WHERE id=%s',(_checked_id(product_id),))
+    if cur.fetchone() != (quote[0],):
+        raise ScopedWriteDenied('product_mismatch')
+    ident = _ACTIONS['create_purchase_order'](cur,company,po_number=po_number,supplier=supplier,product_id=product_id,warehouse_id=warehouse_id,quantity_kg=quote[1],unit_price=quote[2],currency=quote[3])
+    cur.execute('UPDATE ct_app.purchase_orders SET source_quote_id=%s WHERE id=%s AND legal_entity_id=%s',(quote_id,ident,company))
+    return ident
+
+
 HANDLERS = {**_ACTIONS, **_CRM_HANDLERS,
             'create_warehouse': create_warehouse, 'create_product': create_product,
-            'create_account': create_account, 'create_receivable': create_receivable}
+            'create_account': create_account, 'create_receivable': create_receivable, 'create_quote': create_quote,
+            'invoice_quote': invoice_quote, 'purchase_from_quote': purchase_from_quote}
 TABLES = {**_ACTION_TABLE, **_CRM_ACTIONS, 'create_warehouse': 'warehouses',
           'create_product': 'product_catalog', 'create_account': 'cash_accounts',
-          'create_receivable': 'receivables'}
+          'create_receivable': 'receivables', 'create_quote':'quotes',
+          'invoice_quote':'receivables', 'purchase_from_quote':'purchase_orders'}
 EXTRA_READS = {
     'Depolar': ('warehouses', ('id','name','city','active')),
     'Ürünler': ('product_catalog', ('id','name','category','active')),

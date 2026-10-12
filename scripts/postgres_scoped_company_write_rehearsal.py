@@ -208,8 +208,8 @@ def create_purchase_order_on_cursor(cur, company_id, *,
         'SELECT pg_advisory_xact_lock(4601, hashtext(%s))', (number,),
     )
     cur.execute(
-        'SELECT 1 FROM "ct_app"."purchase_orders" WHERE po_number=%s LIMIT 1',
-        (number,),
+        'SELECT 1 FROM "ct_app"."purchase_orders" WHERE po_number=%s AND legal_entity_id=%s LIMIT 1',
+        (number,company_id),
     )
     if cur.fetchone() is not None:
         raise ScopedWriteDenied("duplicate_po")

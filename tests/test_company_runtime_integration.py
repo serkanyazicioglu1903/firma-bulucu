@@ -116,6 +116,22 @@ class CompanyRuntimeIntegration(unittest.TestCase):
                 with self.assertRaises(psycopg.errors.RaiseException):
                     cur.execute('UPDATE ct_app.customers SET legal_entity_id=3 WHERE id=%s', (customer,))
 
+    def test_quote_purchase_invoice_collection(self):
+        customer = self.ok('create_customer',name='Quote customer',company=2)
+        product = self.ok('create_product',name='Quoted ingredient',company=2)
+        warehouse = self.ok('create_warehouse',name='Quote warehouse',company=2)
+        quote = self.ok('create_quote',company=2,customer_id=customer,product_name='Quoted ingredient',quantity_kg=100,buy_price_per_kg=2,buy_currency='EUR',buy_fx_to_base=1,base_currency='EUR',sell_price_per_kg=3,sell_currency='EUR',sell_fx_to_base=1,freight_total_base=10,annual_finance_rate_pct=10,prepayment_pct=20,prepayment_lead_days=30,stock_days=10,customer_credit_days=60)
+        self.ok('purchase_from_quote',company=2,quote_id=quote,po_number='CI-Q-PO',supplier='Supplier Q',product_id=product,warehouse_id=warehouse)
+        invoice = self.ok('invoice_quote',company=2,quote_id=quote,invoice_no='CI-Q-INV',due_date='2026-12-01')
+        self.assertEqual(self.call('invoice_quote',company=2,quote_id=quote,invoice_no='DUP',due_date='2026-12-01')[0],'quote_unavailable')
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT amount,quote_id,legal_entity_id FROM ct_app.receivables WHERE id=%s',(invoice,))
+            self.assertEqual(cur.fetchone(),(300,quote,3))
+            cur.execute('SELECT calculation_snapshot FROM ct_app.quotes WHERE id=%s',(quote,))
+            snap = cur.fetchone()[0]
+            self.assertEqual(snap['inputs']['prepayment_pct'],20)
+            self.assertGreater(float(snap['result']['cost_per_kg_base']),2.1)
+
     def test_idempotency_and_revocation(self):
         request = str(uuid4())
         a = self.call('create_customer', name='Retry test', request=request)

@@ -221,6 +221,9 @@ def logout_button():
     c1,c2 = st.columns([4,1])
     c1.caption("👤 " + str(user.get("display_name","")) + " · " + str(user.get("role","")))
     if c2.button("Çıkış", key="ct_logout"):
+        for key in list(st.session_state):
+            if key.startswith("runtime_"):
+                st.session_state.pop(key, None)
         for key in ["ct_user","ct_session_id","ct_company_session_signature"]:
             st.session_state.pop(key, None)
         st.rerun()

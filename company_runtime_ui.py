@@ -24,6 +24,23 @@ FORMS = {
     'Tedarikçiye ödeme': ('pay_supplier', [('payable_id','Borç','Borçlar'),('account_id','Banka / kasa','Banka / Kasa'),('amount','Ödeme tutarı','amount'),('reference','Ödeme referansı','text'),('payment_date','Ödeme tarihi','date')]),
     'Müşteri tahsilatı': ('collect_customer_payment', [('receivable_id','Alacak','Alacaklar'),('account_id','Banka / kasa','Banka / Kasa'),('amount','Tahsilat tutarı','amount'),('reference','Tahsilat referansı','text'),('payment_date','Tahsilat tarihi','date')]),
 }
+FORMS.update({
+    'Maliyetli satış teklifi kaydet': ('create_quote', [
+        ('customer_id','Müşteri','Müşteriler'),('product_name','Ürün adı','text'),
+        ('quantity_kg','Miktar (kg)','amount'),('base_currency','Hesaplama para birimi','currency'),
+        ('buy_price_per_kg','Birim alış fiyatı','amount'),('buy_currency','Alış para birimi','currency'),
+        ('buy_fx_to_base','Alış kuru (aynı para biriminde 1)','amount'),
+        ('sell_price_per_kg','Birim satış fiyatı','amount'),('sell_currency','Satış para birimi','currency'),
+        ('sell_fx_to_base','Satış kuru (aynı para biriminde 1)','amount'),
+        ('freight_total_base','Toplam navlun','amount'),('customs_total_base','Toplam gümrük gideri','amount'),
+        ('import_other_total_base','Diğer ithalat giderleri','amount'),('handling_total_base','Elleçleme / depo giderleri','amount'),
+        ('annual_finance_rate_pct','Yıllık finansman (%)','amount'),('prepayment_pct','Ön ödeme (%)','amount'),
+        ('prepayment_lead_days','Ön ödeme süresi (gün)','days'),('supplier_balance_due_days','Kalan tedarikçi ödeme vadesi (gün)','days'),
+        ('stock_days','Stok süresi (gün)','days'),('customer_credit_days','Müşteri vadesi (gün)','days'),
+        ('sales_commission_pct','Satış komisyonu (%)','amount'),('target_margin_pct','Hedef marj (%)','amount')]),
+    'Tekliften satın alma': ('purchase_from_quote', [('quote_id','Teklif','Teklifler'),('po_number','Sipariş numarası','text'),('supplier','Tedarikçi','text'),('product_id','Ürün','Ürünler'),('warehouse_id','Depo','Depolar')]),
+    'Tekliften alacak oluştur': ('invoice_quote', [('quote_id','Teklif','Teklifler'),('invoice_no','Fatura numarası','text'),('due_date','Vade','date')]),
+})
 MESSAGES = {
     'forbidden': 'Bu şirket veya işlem için yetkiniz bulunmuyor.',
     'connection_not_configured': 'Kullanıcıya özel güvenli veritabanı bağlantısı henüz yapılandırılmadı.',
@@ -93,7 +110,7 @@ def render_company_runtime():
     # Resolve dependencies before the form; no credentials/IDs from other companies.
     lookups = {}
     for name, title, kind in fields:
-        if kind not in ('text','amount','currency','date'):
+        if kind not in ('text','amount','currency','date','days'):
             status, rows = execute_request(st.session_state, company, section=kind)
             if status != 'ok':
                 _message(status)
@@ -113,6 +130,8 @@ def render_company_runtime():
                 inputs[name] = st.text_input(title, key=key)
             elif kind == 'amount':
                 inputs[name] = st.number_input(title, min_value=0.0, value=0.0, format='%.4f', key=key)
+            elif kind == 'days':
+                inputs[name] = st.number_input(title, min_value=0, max_value=3650, value=0, key=key)
             elif kind == 'currency':
                 inputs[name] = st.selectbox(title, ('EUR','USD','GBP','TRY'), key=key)
             elif kind == 'date':
