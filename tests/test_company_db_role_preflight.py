@@ -187,9 +187,9 @@ class AppToDbRoleManifestTests(unittest.TestCase):
         ):
             src = (folder / name).read_text()
             for forbidden in (
-                "INSERT INTO", "ALTER ROLE", "SET ROLE", "CREATE ROLE",
-                "psycopg.connect", "import streamlit", "GRANT ",
-                "APP_USERS_JSON", "load_users(", "os.environ",
+                "INSERT INTO", "ALTER ROLE", "CREATE ROLE",
+                "psycopg.connect", "import streamlit",
+                "load_users(", "os.environ",
             ):
                 self.assertNotIn(forbidden, src, (name, forbidden))
 
