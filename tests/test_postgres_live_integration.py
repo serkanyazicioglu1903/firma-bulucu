@@ -249,9 +249,13 @@ class RealPostgresOperationalIntegrationTests(unittest.TestCase):
                         self.assertEqual(cur.fetchone()[0], 0)
                     # Any half-applied company schema MUST stop the unscoped
                     # legacy application, before any prod migration window.
+                    # All eight critical owner columns exist in
+                    # Phase A, so the guard correctly reports a company
+                    # schema signal (not legacy-only): old unscoped
+                    # screens must remain blocked.
                     self.assertEqual(
                         company_schema_status_on_cursor(cur),
-                        "partial_company_schema",
+                        "company_schema_present",
                     )
                     for table, count in before.items():
                         cur.execute(
