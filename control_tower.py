@@ -2184,6 +2184,8 @@ def _render_control_tower_interface(live_postgres=False):
     st.subheader("🧭 AS CONTROL TOWER")
     st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
     if live_postgres:
+        from private_login_setup_ui import render_private_login_setup
+        render_private_login_setup()
         st.success(
             "🟢 Canlı veri modu: Bütün Control Tower iş ekranları "
             "Supabase PostgreSQL ct_app üzerinden çalışıyor. SQLite kullanılmıyor."
