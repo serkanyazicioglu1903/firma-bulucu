@@ -146,7 +146,9 @@ def render_postgres_quick_encrypted_backup(url):
         )
         uploaded = st.file_uploader(
             "Doğrulanacak şifreli yedek (.asct)",
-            type=["asct"],
+            # iPadOS may disable unknown extensions in the native file picker.
+            # Validate the encrypted header, AES tag and archive contents below.
+            type=None,
             key="ct_pg_encrypted_verify_file",
         )
         verify_pw = st.text_input(
