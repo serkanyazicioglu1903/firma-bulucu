@@ -328,6 +328,11 @@ def render_real_quote_workspace():
         return
 
     st.markdown("#### Sonuç — Ön Ticari Hesap")
+    st.caption(
+        f"Hesaplanan miktar: {_fmt(result['quantity_kg'], 0)} kg "
+        f"({_fmt(result['quantity_kg'] / Decimal(1000), 3)} ton). "
+        "Bütün birim fiyatlar kg başınadır."
+    )
     columns = st.columns(4)
     columns[0].metric(
         "İthal maliyet / kg", _fmt(result["landed_per_kg_base"])
@@ -353,6 +358,10 @@ def render_real_quote_workspace():
     if result["profit_base"] is None:
         st.info("Satış fiyatı girilmedi. Hedef fiyat hesaplandı; kâr henüz hesaplanmadı.")
     else:
+        st.metric(
+            "Toplam satış tutarı (KDV hariç)",
+            _fmt(result["gross_sales_base"], 2) + " " + base_currency,
+        )
         result_cols = st.columns(3)
         result_cols[0].metric(
             "Toplam net katkı",
