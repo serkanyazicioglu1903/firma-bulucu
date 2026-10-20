@@ -6,6 +6,7 @@ authorization to view another company's data. Results are session-only.
 """
 import csv
 from datetime import datetime, timezone
+from decimal import Decimal
 from io import StringIO
 
 import streamlit as st
@@ -19,7 +20,7 @@ from security_admin import current_role, current_user
 _ALLOWED = frozenset({"ADMIN", "SALES", "PURCHASING", "FINANCE"})
 _CURRENCIES = ("EUR", "USD", "GBP", "TRY")
 _FIELD_KEYS = (
-    "ct_rq_customer", "ct_rq_product", "ct_rq_qty", "ct_rq_buy",
+    "ct_rq_customer", "ct_rq_product", "ct_rq_qty", "ct_rq_qty_unit", "ct_rq_buy",
     "ct_rq_sell", "ct_rq_buy_fx", "ct_rq_sell_fx",
     "ct_rq_freight", "ct_rq_customs", "ct_rq_other",
     "ct_rq_handling", "ct_rq_rate", "ct_rq_pre_pct",
@@ -109,6 +110,20 @@ def quote_summary_csv(result):
     return output.getvalue().encode("utf-8-sig")
 
 
+def _quantity_to_kg(value, unit):
+    """Convert an entered kg/ton quantity; prices remain per kilogram."""
+    if unit not in ("kg", "ton"):
+        raise QuoteInputError("quantity_required")
+    try:
+        amount = Decimal(str(value))
+    except (ValueError, ArithmeticError, TypeError):
+        raise QuoteInputError("quantity_required") from None
+    quantity = amount * (Decimal(1000) if unit == "ton" else Decimal(1))
+    if not quantity.is_finite() or quantity <= 0 or quantity > Decimal("1000000000"):
+        raise QuoteInputError("quantity_required")
+    return quantity
+
+
 def render_real_quote_workspace():
     """Manual quote workflow, independent of demo customer/product masters."""
     if current_role() not in _ALLOWED:
@@ -157,11 +172,17 @@ def render_real_quote_workspace():
         x2.text_input("Ürün / hammadde (isteğe bağlı)", key="ct_rq_product")
 
         st.markdown("#### 1. Miktar, fiyat ve manuel kur")
-        a, b1, d = st.columns(3)
-        quantity = a.number_input(
-            "Miktar (kg)", min_value=0.0, max_value=1000000000.0,
-            value=0.0, step=1000.0, key="ct_rq_qty",
+        a, u, b1, d = st.columns(4)
+        quantity_unit = u.selectbox(
+            "Miktar birimi", ("kg", "ton"), key="ct_rq_qty_unit",
         )
+        quantity = a.number_input(
+            f"Miktar ({quantity_unit})", min_value=0.0,
+            max_value=1000000000.0, value=0.0,
+            step=1.0 if quantity_unit == "ton" else 1000.0,
+            key="ct_rq_qty",
+        )
+        st.caption("Alış ve satış fiyatları daima kg başınadır; 1 ton = 1.000 kg.")
         purchase = b1.number_input(
             f"Alış fiyatı ({buy_currency}/kg)", min_value=0.0,
             value=0.0, step=0.01, format="%.4f", key="ct_rq_buy",
@@ -266,7 +287,8 @@ def render_real_quote_workspace():
             st.session_state.pop(key, None)
         try:
             result = calculate_real_quote(
-                company_code=company_code, quantity_kg=quantity,
+                company_code=company_code,
+                quantity_kg=_quantity_to_kg(quantity, quantity_unit),
                 buy_price_per_kg=purchase, buy_currency=buy_currency,
                 buy_fx_to_base=purchase_fx, base_currency=base_currency,
                 sell_price_per_kg=offered, sell_currency=sell_currency,
