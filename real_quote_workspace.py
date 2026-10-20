@@ -92,6 +92,8 @@ def quote_summary_csv(result):
     output = StringIO()
     writer = csv.writer(output)
     writer.writerow(("Kalem", "Tutar", "Para birimi"))
+    writer.writerow(("Miktar (kg)", str(result["quantity_kg"]), "kg"))
+    writer.writerow(("Miktar (ton)", str(result["quantity_kg"] / Decimal(1000)), "ton"))
     money = result["base_currency"]
     for label, key in (
         ("Mal bedeli", "goods_base"),
@@ -99,6 +101,7 @@ def quote_summary_csv(result):
         ("İthal maliyet toplam", "landed_total_base"),
         ("Finansman toplam", "finance_total_base"),
         ("Gerçek toplam maliyet", "total_cost_base"),
+        ("Toplam satış (KDV hariç)", "gross_sales_base"),
         ("Gerçek maliyet kg", "cost_per_kg_base"),
         ("Toplam net katkı", "profit_base"),
         ("Net katkı kg", "profit_per_kg_base"),
