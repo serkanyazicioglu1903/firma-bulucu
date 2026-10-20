@@ -78,6 +78,26 @@ class RealQuoteWorkspaceTests(unittest.TestCase):
             self.assertNotIn(key, st.session_state)
         self.assertEqual(st.session_state["ct_rq_qty"], 24000)
 
+    def test_metric_ton_entry_equals_kilograms_for_quote(self):
+        from decimal import Decimal
+        from scripts.real_quote_estimator import QuoteInputError
+
+        self.assertEqual(ui._quantity_to_kg(250, "ton"), Decimal("250000"))
+        self.assertEqual(ui._quantity_to_kg(250000, "kg"), Decimal("250000"))
+        self.assertEqual(ui._quantity_to_kg("0.5", "ton"), Decimal("500"))
+        for value, unit in ((0, "ton"), (-1, "kg"), ("NaN", "kg"),
+                            (1000001, "ton"), (1, "lb")):
+            with self.subTest(value=value, unit=unit):
+                with self.assertRaises(QuoteInputError):
+                    ui._quantity_to_kg(value, unit)
+
+    def test_quote_form_resets_quantity_unit_on_company_switch(self):
+        with patch.object(ui, "st") as st:
+            st.session_state = {"ct_rq_qty": 250, "ct_rq_qty_unit": "ton"}
+            ui._reset_quote()
+            self.assertNotIn("ct_rq_qty", st.session_state)
+            self.assertNotIn("ct_rq_qty_unit", st.session_state)
+
     def test_csv_numeric_values_only_no_external_customer_strings(self):
         data = ui.quote_summary_csv(amount()).decode("utf-8-sig")
         self.assertIn("Gerçek toplam maliyet,2100", data)
