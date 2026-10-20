@@ -49,6 +49,15 @@ def _reset_result():
         st.session_state.pop(key, None)
 
 
+def _reset_quantity_unit():
+    """Never silently reinterpret an existing kg amount as metric tons."""
+    st.session_state.pop("ct_rq_qty", None)
+    st.session_state.pop(_RESULT_KEY, None)
+    st.session_state.pop(_PO_CSV_KEY, None)
+    for key in _PO_FIELD_KEYS:
+        st.session_state.pop(key, None)
+
+
 def _bound_session():
     """Prevent one signed-in staff session inheriting the previous user's quote.
 
@@ -166,23 +175,25 @@ def render_real_quote_workspace():
         key="ct_rq_base_ccy", on_change=_reset_result,
     )
 
+    quantity_unit = st.selectbox(
+        "Miktar birimi", ("kg", "ton"), key="ct_rq_qty_unit",
+        on_change=_reset_quantity_unit,
+    )
+    st.caption("Alış ve satış fiyatları daima kg başınadır; 1 ton = 1.000 kg.")
+
     with st.form("ct_real_quote_form"):
         x1, x2 = st.columns(2)
         x1.text_input("Müşteri / fırsat (isteğe bağlı)", key="ct_rq_customer")
         x2.text_input("Ürün / hammadde (isteğe bağlı)", key="ct_rq_product")
 
         st.markdown("#### 1. Miktar, fiyat ve manuel kur")
-        a, u, b1, d = st.columns(4)
-        quantity_unit = u.selectbox(
-            "Miktar birimi", ("kg", "ton"), key="ct_rq_qty_unit",
-        )
+        a, b1, d = st.columns(3)
         quantity = a.number_input(
             f"Miktar ({quantity_unit})", min_value=0.0,
             max_value=1000000000.0, value=0.0,
             step=1.0 if quantity_unit == "ton" else 1000.0,
             key="ct_rq_qty",
         )
-        st.caption("Alış ve satış fiyatları daima kg başınadır; 1 ton = 1.000 kg.")
         purchase = b1.number_input(
             f"Alış fiyatı ({buy_currency}/kg)", min_value=0.0,
             value=0.0, step=0.01, format="%.4f", key="ct_rq_buy",
