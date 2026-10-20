@@ -99,6 +99,22 @@ class RealQuoteWorkspaceTests(unittest.TestCase):
                 with self.assertRaises(QuoteInputError):
                     ui._quantity_to_kg(value, unit)
 
+    def test_switching_kg_to_ton_clears_stale_amount_and_result(self):
+        with patch.object(ui, "st") as st:
+            st.session_state = {
+                "ct_rq_qty": 250,
+                "ct_rq_qty_unit": "ton",
+                ui._RESULT_KEY: {"profit_base": 100},
+                ui._PO_CSV_KEY: b"draft",
+                "ct_po_supplier": "Old supplier",
+            }
+            ui._reset_quantity_unit()
+            self.assertEqual(st.session_state["ct_rq_qty_unit"], "ton")
+            self.assertNotIn("ct_rq_qty", st.session_state)
+            self.assertNotIn(ui._RESULT_KEY, st.session_state)
+            self.assertNotIn(ui._PO_CSV_KEY, st.session_state)
+            self.assertNotIn("ct_po_supplier", st.session_state)
+
     def test_quote_form_resets_quantity_unit_on_company_switch(self):
         with patch.object(ui, "st") as st:
             st.session_state = {"ct_rq_qty": 250, "ct_rq_qty_unit": "ton"}
