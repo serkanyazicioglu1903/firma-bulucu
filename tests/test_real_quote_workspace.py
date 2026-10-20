@@ -78,6 +78,13 @@ class RealQuoteWorkspaceTests(unittest.TestCase):
             self.assertNotIn(key, st.session_state)
         self.assertEqual(st.session_state["ct_rq_qty"], 24000)
 
+    def test_csv_exports_quantity_in_kg_ton_and_gross_sales(self):
+        result = amount()
+        csv_text = ui.quote_summary_csv(result).decode("utf-8-sig")
+        self.assertIn("Miktar (kg),1000,kg", csv_text)
+        self.assertIn("Miktar (ton),1,ton", csv_text)
+        self.assertIn("Toplam satış (KDV hariç),3000", csv_text)
+
     def test_metric_ton_entry_equals_kilograms_for_quote(self):
         from decimal import Decimal
         from scripts.real_quote_estimator import QuoteInputError
