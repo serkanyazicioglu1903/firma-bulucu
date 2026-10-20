@@ -26,10 +26,11 @@ def assess_release(evidence=None):
     return {
         "project": "AS Control Tower",
         "companies": list(COMPANY_LABELS.values()),
-        "release_ready": all(checks.values()),
+        "evidence_complete": all(checks.values()),
+        "release_ready": False,
         "checks": checks,
         "missing": [key for key, ok in checks.items() if not ok],
-        "note": "Offline evidence only; verify actual production access and grants before deployment.",
+        "note": "Evidence complete does not authorize deployment. Live grants, access and owner approval must be independently verified.",
     }
 
 
@@ -46,7 +47,7 @@ def main():
             pass
     report = assess_release(evidence)
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0 if report["release_ready"] else 1
+    return 0 if report["evidence_complete"] else 1
 
 
 if __name__ == "__main__":
