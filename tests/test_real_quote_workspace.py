@@ -85,6 +85,14 @@ class RealQuoteWorkspaceTests(unittest.TestCase):
         self.assertEqual(ui._quantity_to_kg(250, "ton"), Decimal("250000"))
         self.assertEqual(ui._quantity_to_kg(250000, "kg"), Decimal("250000"))
         self.assertEqual(ui._quantity_to_kg("0.5", "ton"), Decimal("500"))
+        quoted = calculate_real_quote(
+            company_code="AS_ILERI_GIDA",
+            quantity_kg=ui._quantity_to_kg(250, "ton"),
+            buy_price_per_kg="2", buy_currency="EUR", buy_fx_to_base=1,
+            base_currency="EUR", sell_price_per_kg="2.40",
+            sell_currency="EUR", sell_fx_to_base=1,
+        )
+        self.assertEqual(quoted["gross_sales_base"], Decimal("600000.00"))
         for value, unit in ((0, "ton"), (-1, "kg"), ("NaN", "kg"),
                             (1000001, "ton"), (1, "lb")):
             with self.subTest(value=value, unit=unit):
