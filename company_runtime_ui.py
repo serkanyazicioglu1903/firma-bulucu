@@ -56,6 +56,7 @@ MESSAGES = {
     'read_only': 'Hesabınız salt okunur kullanımda.',
     'not_ready': 'Şirket veri yapısı henüz hazır değil.',
     'invalid_input': 'Alanları ve sayıların geçerliliğini kontrol edin.',
+    'sale_price_required': 'Kaydedilecek teklif için sıfırdan büyük satış fiyatı girin. Sıfır fiyat yalnızca ön hesaplama içindir.',
     'quality_hold_blocks_payment': 'Bu sipariş için açık kalite blokajı var; ödeme kaydedilmedi.',
     'overpayment': 'Ödeme açık borç tutarını aşıyor.',
     'over_collection': 'Tahsilat açık alacak tutarını aşıyor.',
