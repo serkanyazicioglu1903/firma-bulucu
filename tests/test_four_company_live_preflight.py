@@ -1,6 +1,6 @@
 from unittest.mock import Mock
 
-from scripts.four_company_live_preflight import assess_catalog_rows, inspect_on_cursor, SQL
+from scripts.four_company_live_preflight import assess_catalog_rows, inspect_on_cursor, count_existing_rows_on_cursor, SQL
 from scripts.postgres_company_full_coverage import _catalog_tables
 
 
