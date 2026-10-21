@@ -40,3 +40,24 @@ def test_read_only_catalog_query_never_touches_business_rows():
     result = inspect_on_cursor(cur)
     assert result["status"] == "blocked"
     cur.execute.assert_called_once_with(SQL)
+
+
+def test_exact_count_baseline_only_reads_whitelisted_tables():
+    cur = Mock()
+    cur.fetchone.return_value = (0,)
+    report = count_existing_rows_on_cursor(cur)
+    assert len(report["counts"]) == 26
+    assert report["total_rows"] == 0
+    assert report["backup_verified"] is False
+    assert report["owner_assignments_verified"] is False
+    assert cur.execute.call_count == 26
+    assert all(call.args[0].startswith('SELECT count(*) FROM "ct_app"."')
+               for call in cur.execute.call_args_list)
+
+
+def test_invalid_count_fails_closed():
+    cur = Mock()
+    cur.fetchone.return_value = (-1,)
+    import pytest
+    with pytest.raises(ValueError, match="row_count_unavailable"):
+        count_existing_rows_on_cursor(cur)
