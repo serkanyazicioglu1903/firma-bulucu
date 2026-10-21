@@ -68,3 +68,21 @@ def test_saved_quote_rejects_zero_price_preview_without_insert():
         rt.create_quote(cur, 1, customer_id=7, product_name='Test product', **inputs)
     assert exc.value.code == 'sale_price_required'
     assert not any('INSERT INTO ct_app.quotes' in str(c.args[0]) for c in cur.execute.call_args_list)
+
+
+def test_saved_quote_with_positive_price_can_be_invoiced_later():
+    cur = MagicMock()
+    cur.fetchone.side_effect = [(7,), ('AS_ILERI_GIDA',), (123,)]
+    inputs = {
+        'quantity_kg': 1000, 'buy_price_per_kg': 2,
+        'buy_currency': 'EUR', 'buy_fx_to_base': 1,
+        'base_currency': 'EUR', 'sell_price_per_kg': 3,
+        'sell_currency': 'EUR', 'sell_fx_to_base': 1,
+    }
+    ident = rt.create_quote(cur, 1, customer_id=7, product_name='Test product', **inputs)
+    assert ident == 123
+    insert_calls = [c for c in cur.execute.call_args_list
+                    if 'INSERT INTO ct_app.quotes' in str(c.args[0])]
+    assert len(insert_calls) == 1
+    assert 'calculation_snapshot' in insert_calls[0].args[0]
+    assert '3000' in insert_calls[0].args[1][-1]
