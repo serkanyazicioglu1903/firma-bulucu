@@ -58,3 +58,28 @@ def inspect_on_cursor(cur):
     """Caller must supply a read-only transaction; reads metadata only."""
     cur.execute(SQL)
     return assess_catalog_rows(cur.fetchall())
+
+
+def count_existing_rows_on_cursor(cur):
+    """Exact read-only row counts; never read customer names or row contents.
+
+    This is a baseline for backup/restore reconciliation, NOT a backup.
+    Fixed table names come from the audited 26-table application inventory.
+    """
+    names = sorted(_catalog_tables())
+    counts = {}
+    for name in names:
+        cur.execute('SELECT count(*) FROM "ct_app"."' + name + '"')
+        row = cur.fetchone()
+        if (not isinstance(row, (tuple, list)) or len(row) != 1
+                or type(row[0]) is not int or row[0] < 0):
+            raise ValueError("row_count_unavailable")
+        counts[name] = row[0]
+    return {
+        "status": "review_required",
+        "counts": counts,
+        "total_rows": sum(counts.values()),
+        "row_contents_exposed": False,
+        "backup_verified": False,
+        "owner_assignments_verified": False,
+    }
