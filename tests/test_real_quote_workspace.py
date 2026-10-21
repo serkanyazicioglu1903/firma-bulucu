@@ -78,6 +78,57 @@ class RealQuoteWorkspaceTests(unittest.TestCase):
             self.assertNotIn(key, st.session_state)
         self.assertEqual(st.session_state["ct_rq_qty"], 24000)
 
+    def test_csv_exports_quantity_in_kg_ton_and_gross_sales(self):
+        result = amount()
+        csv_text = ui.quote_summary_csv(result).decode("utf-8-sig")
+        self.assertIn("Miktar (kg),1000,kg", csv_text)
+        self.assertIn("Miktar (ton),1,ton", csv_text)
+        self.assertIn("Toplam satış (KDV hariç),3000", csv_text)
+
+    def test_metric_ton_entry_equals_kilograms_for_quote(self):
+        from decimal import Decimal
+        from scripts.real_quote_estimator import QuoteInputError
+
+        self.assertEqual(ui._quantity_to_kg(250, "ton"), Decimal("250000"))
+        self.assertEqual(ui._quantity_to_kg(250000, "kg"), Decimal("250000"))
+        self.assertEqual(ui._quantity_to_kg("0.5", "ton"), Decimal("500"))
+        quoted = calculate_real_quote(
+            company_code="AS_ILERI_GIDA",
+            quantity_kg=ui._quantity_to_kg(250, "ton"),
+            buy_price_per_kg="2", buy_currency="EUR", buy_fx_to_base=1,
+            base_currency="EUR", sell_price_per_kg="2.40",
+            sell_currency="EUR", sell_fx_to_base=1,
+        )
+        self.assertEqual(quoted["gross_sales_base"], Decimal("600000.00"))
+        for value, unit in ((0, "ton"), (-1, "kg"), ("NaN", "kg"),
+                            (1000001, "ton"), (1, "lb")):
+            with self.subTest(value=value, unit=unit):
+                with self.assertRaises(QuoteInputError):
+                    ui._quantity_to_kg(value, unit)
+
+    def test_switching_kg_to_ton_clears_stale_amount_and_result(self):
+        with patch.object(ui, "st") as st:
+            st.session_state = {
+                "ct_rq_qty": 250,
+                "ct_rq_qty_unit": "ton",
+                ui._RESULT_KEY: {"profit_base": 100},
+                ui._PO_CSV_KEY: b"draft",
+                "ct_po_supplier": "Old supplier",
+            }
+            ui._reset_quantity_unit()
+            self.assertEqual(st.session_state["ct_rq_qty_unit"], "ton")
+            self.assertNotIn("ct_rq_qty", st.session_state)
+            self.assertNotIn(ui._RESULT_KEY, st.session_state)
+            self.assertNotIn(ui._PO_CSV_KEY, st.session_state)
+            self.assertNotIn("ct_po_supplier", st.session_state)
+
+    def test_quote_form_resets_quantity_unit_on_company_switch(self):
+        with patch.object(ui, "st") as st:
+            st.session_state = {"ct_rq_qty": 250, "ct_rq_qty_unit": "ton"}
+            ui._reset_quote()
+            self.assertNotIn("ct_rq_qty", st.session_state)
+            self.assertNotIn("ct_rq_qty_unit", st.session_state)
+
     def test_csv_numeric_values_only_no_external_customer_strings(self):
         data = ui.quote_summary_csv(amount()).decode("utf-8-sig")
         self.assertIn("Gerçek toplam maliyet,2100", data)

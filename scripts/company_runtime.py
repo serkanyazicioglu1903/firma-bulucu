@@ -141,6 +141,10 @@ def create_quote(cur, company, *, customer_id, product_name, **economics):
     cur.execute('SELECT code FROM ct_app.legal_entities WHERE id=%s', (company,))
     code = cur.fetchone()[0]
     calc = calculate_real_quote(company_code=code, **economics)
+    # A zero selling price is valid for a preview, never for a persisted
+    # commercial offer that can later be invoiced or dispatched.
+    if calc['gross_sales_base'] is None:
+        raise ScopedWriteDenied('sale_price_required')
     name = _checked_text(product_name)
     columns = ('customer_id','product_name','quantity_kg','base_currency','buy_price_per_kg','buy_currency','buy_fx_to_base','sell_price_per_kg','sell_currency','sell_fx_to_base','landed_cost_per_kg','finance_cost_per_kg','total_cost_per_kg','profit_per_kg','profit_total_base','margin_pct','required_sell_price','legal_entity_id','calculation_snapshot')
     values = (customer,name,calc['quantity_kg'],calc['base_currency'],calc['buy_price_per_kg'],calc['buy_currency'],calc['buy_fx_to_base'],economics['sell_price_per_kg'],calc['sell_currency'],economics['sell_fx_to_base'],calc['landed_per_kg_base'],calc['finance_per_kg_base'],calc['cost_per_kg_base'],calc['profit_per_kg_base'],calc['profit_base'],calc['margin_pct'],calc['required_sell_price'],company,json.dumps({'inputs':economics,'result':calc},default=str))
