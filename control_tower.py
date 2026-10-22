@@ -2184,27 +2184,32 @@ def _render_control_tower_interface(live_postgres=False):
     st.subheader("🧭 AS CONTROL TOWER")
     st.caption("CRM • satış hunisi • takip • görev • yönetici karar merkezi")
     if live_postgres:
-        from private_login_setup_ui import render_private_login_setup
-        render_private_login_setup()
         st.success(
-            "🟢 Canlı veri modu: Bütün Control Tower iş ekranları "
-            "Supabase PostgreSQL ct_app üzerinden çalışıyor. SQLite kullanılmıyor."
+            "🟢 Veritabanı bağlantısı aktif: Control Tower PostgreSQL ct_app "
+            "üzerinden çalışıyor."
         )
-        # Never imply that the connected legacy business screens are already
-        # company-scoped. This phone-visible preview is strictly read-only.
+        st.caption(
+            "Bu yönetici paneli mevcut Control Tower kayıtlarını gösterir. "
+            "Dört şirketin ayrı test kayıtları üstteki 'Dört Şirket Demo' "
+            "sekmesindedir; iki veri alanı henüz birleştirilmemiştir."
+        )
+        # Mobile-critical readiness and backup expanders stay immediately
+        # accessible. CI and operators rely on these without nested tabs.
         render_group_readiness_quick(postgres_url())
-        # Explicit administrator click only; no business rows or writes.
-        render_company_access_security_quick(postgres_url())
-        render_company_ownership_coverage_quick(postgres_url())
-        # Keep an ADMIN-only backup entry outside the 15 main tabs; this
-        # remains reachable even when iOS Safari fails to paint nested tabs.
         render_postgres_quick_backup(postgres_url())
-        render_postgres_quick_encrypted_backup(postgres_url())
-        render_postgres_quick_backup_verify()
-        render_postgres_quick_reconciliation(postgres_url())
-        render_postgres_quick_acceptance(postgres_url())
-        render_postgres_master_import(postgres_url())
-        render_postgres_quick_security(postgres_url())
+        # Less frequent administrator diagnostics stay opt-in to keep the
+        # management dashboard compact on iPad and phone.
+        if st.toggle("⚙️ Diğer teknik kontrolleri göster", value=False, key="ct_technical_admin"):
+            from private_login_setup_ui import render_private_login_setup
+            render_private_login_setup()
+            render_company_access_security_quick(postgres_url())
+            render_company_ownership_coverage_quick(postgres_url())
+            render_postgres_quick_encrypted_backup(postgres_url())
+            render_postgres_quick_backup_verify()
+            render_postgres_quick_reconciliation(postgres_url())
+            render_postgres_quick_acceptance(postgres_url())
+            render_postgres_master_import(postgres_url())
+            render_postgres_quick_security(postgres_url())
     else:
         st.caption(
             "🟠 Pilot veri modu: Bu sürüm SQLite kullanıyor. "
