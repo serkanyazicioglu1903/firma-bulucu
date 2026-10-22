@@ -2195,7 +2195,7 @@ def _render_control_tower_interface(live_postgres=False):
         )
         # Keep technical diagnostics accessible without covering the iPad
         # management dashboard in a long list of maintenance controls.
-        with st.expander("⚙️ Teknik yönetim ve güvenlik kontrolleri", expanded=False):
+        if st.toggle("⚙️ Teknik yönetim ve güvenlik kontrollerini göster", value=False, key="ct_technical_admin"):
             from private_login_setup_ui import render_private_login_setup
             render_private_login_setup()
             render_group_readiness_quick(postgres_url())
