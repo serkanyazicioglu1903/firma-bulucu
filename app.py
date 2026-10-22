@@ -159,6 +159,56 @@ st.markdown(
             width: 100%;
         }
     }
+    /* iPad Safari: prevent a wide form, tab bar or dataframe from making
+       the whole page horizontally scrollable. Tables scroll internally. */
+    html, body, [data-testid="stAppViewContainer"],
+    [data-testid="stMain"], [data-testid="stMainBlockContainer"] {
+        max-width: 100% !important;
+        overflow-x: clip !important;
+    }
+    [data-testid="stMainBlockContainer"] {
+        box-sizing: border-box !important;
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+    [data-testid="stVerticalBlock"],
+    [data-testid="stHorizontalBlock"],
+    [data-testid="column"],
+    [data-testid="stForm"],
+    [data-testid="stSelectbox"],
+    [data-testid="stTextInput"],
+    [data-testid="stNumberInput"] {
+        min-width: 0 !important;
+        max-width: 100% !important;
+    }
+    [data-testid="stDataFrame"] {
+        max-width: 100% !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch;
+    }
+    @media (min-width: 769px) and (max-width: 1199px) {
+        .block-container {
+            max-width: 100% !important;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+        }
+        div[data-testid="stTabs"] [data-baseweb="tab-list"] {
+            display: flex !important;
+            flex-wrap: wrap !important;
+            gap: .25rem !important;
+            max-width: 100% !important;
+        }
+        div[data-testid="stTabs"] [data-baseweb="tab"] {
+            white-space: normal !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+            font-size: .86rem !important;
+            padding: .4rem .55rem !important;
+        }
+        [data-testid="stForm"] {
+            padding: .8rem !important;
+        }
+    }
     </style>
     """,
     unsafe_allow_html=True,
