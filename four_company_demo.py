@@ -173,6 +173,61 @@ def render_four_company_demo():
     else:
         st.caption("Henüz kayıt yok. Aşağıdaki formdan ekleyebilirsiniz.")
 
+    # PDF uses only the already company-filtered rows. No unverified corporate
+    # details and no cross-company lookup. Generating a PDF never writes data.
+    if section in ("Teklifler", "Siparişler") and rows:
+        from company_pdf_export import (
+            DELIVERY, LEAD_TIME, PACKAGING, PAYMENT, generate_company_pdf,
+        )
+        with st.expander("📄 Seçili kayıttan PDF oluştur", expanded=False):
+            selected_pdf_id = st.selectbox(
+                "PDF için kayıt seç", [r["id"] for r in rows],
+                format_func=lambda i: str(i) + " · " +
+                str(next(r["reference"] for r in rows if r["id"] == i)),
+                key=f"ct_pdf_selected_{company}_{section}",
+            )
+            pdf_record = next(r for r in rows if r["id"] == selected_pdf_id)
+            pdf_options = {}
+            if section == "Teklifler":
+                left, right = st.columns(2)
+                pdf_options["payment"] = left.selectbox("Ödeme vadesi", PAYMENT,
+                    key=f"ct_pdf_payment_{company}_{selected_pdf_id}")
+                pdf_options["delivery"] = right.selectbox("Teslim yeri", DELIVERY,
+                    key=f"ct_pdf_delivery_{company}_{selected_pdf_id}")
+                pdf_options["lead_time"] = left.selectbox("Teslim süresi", LEAD_TIME,
+                    key=f"ct_pdf_lead_{company}_{selected_pdf_id}")
+                pdf_options["packaging"] = right.selectbox("Ambalaj", PACKAGING,
+                    key=f"ct_pdf_pack_{company}_{selected_pdf_id}")
+                pdf_options["validity_days"] = left.number_input(
+                    "Teklif geçerliliği (gün)", min_value=1, max_value=365, value=14,
+                    key=f"ct_pdf_valid_{company}_{selected_pdf_id}")
+                pdf_options["discount_pct"] = right.number_input(
+                    "İskonto (%)", min_value=0.0, max_value=100.0, value=0.0,
+                    key=f"ct_pdf_discount_{company}_{selected_pdf_id}")
+                pdf_options["vat_pct"] = left.number_input(
+                    "KDV (%) — oranı kontrol edin", min_value=0.0,
+                    max_value=100.0, value=0.0,
+                    key=f"ct_pdf_vat_{company}_{selected_pdf_id}")
+                st.caption("PDF tutarları seçilen iskonto ve KDV ile hesaplanır. "
+                           "KDV varsayılanı %0'dır; gerçek oranı ayrıca doğrulayın.")
+            pdf_options["notes"] = st.text_area(
+                "PDF notları (isteğe bağlı)", max_chars=1000,
+                key=f"ct_pdf_notes_{company}_{section}_{selected_pdf_id}")
+            try:
+                pdf_data = generate_company_pdf(
+                    company_code=company, kind=section, record=pdf_record,
+                    **pdf_options)
+                st.download_button(
+                    "📄 " + ("Teklif PDF indir" if section == "Teklifler"
+                             else "Sipariş PDF indir"),
+                    data=pdf_data,
+                    file_name=f"{company}_{section}_{selected_pdf_id}_DEMO.pdf",
+                    mime="application/pdf",
+                    key=f"ct_pdf_download_{company}_{section}_{selected_pdf_id}",
+                )
+            except (ValueError, RuntimeError):
+                st.error("PDF oluşturulamadı. Alanları ve PDF yazı tipini kontrol edin.")
+
     mode = st.radio("İşlem", ("Yeni kayıt", "Düzenle", "Sil"), horizontal=True,
                     key="ct_demo_mode")
     if mode != "Yeni kayıt" and not rows:
