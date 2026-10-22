@@ -51,3 +51,13 @@ def test_different_company_code_is_always_in_sql_params():
     assert cur.params[0] == "AS_FOOD_GLOBAL"
     assert "ct_demo.customers" in cur.sql
     assert "ct_app" not in cur.sql
+
+def test_currency_and_status_must_be_supported():
+    from four_company_demo import _fields
+    quote = {"reference":"Q1","customer":"UNO","product":"Lesitin","quantity_kg":"200","unit_price":"20","currency":"TL"}
+    assert _fields("Teklifler",quote)["currency"] == "TL"
+    quote["currency"] = "not-a-currency"
+    with pytest.raises(ValueError):
+        _fields("Teklifler",quote)
+    order = {"reference":"25","customer":"UNO","product":"Lesitin","quantity_kg":"200","status":"onaylandı"}
+    assert _fields("Siparişler",order)["status"] == "onaylandı"
