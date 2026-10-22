@@ -2193,15 +2193,17 @@ def _render_control_tower_interface(live_postgres=False):
             "Dört şirketin ayrı test kayıtları üstteki 'Dört Şirket Demo' "
             "sekmesindedir; iki veri alanı henüz birleştirilmemiştir."
         )
-        # Keep technical diagnostics accessible without covering the iPad
-        # management dashboard in a long list of maintenance controls.
-        if st.toggle("⚙️ Teknik yönetim ve güvenlik kontrollerini göster", value=False, key="ct_technical_admin"):
+        # Mobile-critical readiness and backup expanders stay immediately
+        # accessible. CI and operators rely on these without nested tabs.
+        render_group_readiness_quick(postgres_url())
+        render_postgres_quick_backup(postgres_url())
+        # Less frequent administrator diagnostics stay opt-in to keep the
+        # management dashboard compact on iPad and phone.
+        if st.toggle("⚙️ Diğer teknik kontrolleri göster", value=False, key="ct_technical_admin"):
             from private_login_setup_ui import render_private_login_setup
             render_private_login_setup()
-            render_group_readiness_quick(postgres_url())
             render_company_access_security_quick(postgres_url())
             render_company_ownership_coverage_quick(postgres_url())
-            render_postgres_quick_backup(postgres_url())
             render_postgres_quick_encrypted_backup(postgres_url())
             render_postgres_quick_backup_verify()
             render_postgres_quick_reconciliation(postgres_url())
