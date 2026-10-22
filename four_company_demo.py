@@ -27,8 +27,8 @@ EDITABLE = {
 NUMERIC = {"stock_kg", "quantity_kg", "unit_price"}
 CHOICES = {
     "unit": ("kg", "ton", "adet", "koli", "litre"),
-    "currency": ("EUR", "USD", "GBP", "TRY"),
-    "status": ("Taslak", "Onaylandı", "Hazırlanıyor", "Sevk Edildi", "Teslim Edildi", "İptal"),
+    "currency": ("EUR", "USD", "GBP", "TRY", "TL"),
+    "status": ("Taslak", "Onaylandı", "Hazırlanıyor", "Sevk Edildi", "Teslim Edildi", "İptal", "onaylandı"),
 }
 LABELS = {
     "name": "Ad / Ürün adı", "country": "Ülke", "contact": "İlgili kişi",
