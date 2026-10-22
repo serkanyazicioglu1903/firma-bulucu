@@ -25,6 +25,20 @@ EDITABLE = {
     "Teklifler": ("reference", "customer", "product", "quantity_kg", "unit_price", "currency"),
 }
 NUMERIC = {"stock_kg", "quantity_kg", "unit_price"}
+CHOICES = {
+    "unit": ("kg", "ton", "adet", "koli", "litre"),
+    "currency": ("EUR", "USD", "GBP", "TRY", "TL"),
+    "status": ("Taslak", "Onaylandı", "Hazırlanıyor", "Sevk Edildi", "Teslim Edildi", "İptal", "onaylandı"),
+}
+LABELS = {
+    "name": "Ad / Ürün adı", "country": "Ülke", "contact": "İlgili kişi",
+    "email": "E-posta", "supplier": "Tedarikçi", "unit": "Ölçü birimi",
+    "stock_kg": "Stok miktarı (kg)", "title": "Görev",
+    "owner": "Sorumlu", "due_date": "Termin tarihi",
+    "status": "Durum", "reference": "Referans / Sipariş no.",
+    "customer": "Müşteri", "product": "Ürün", "quantity_kg": "Miktar (kg)",
+    "unit_price": "Birim fiyat", "currency": "Para birimi",
+}
 
 
 def valid_company(code):
@@ -63,7 +77,8 @@ def _fields(section, values):
                 raise ValueError("invalid_number")
         else:
             value = str(value or "").strip()[:250]
-    # Reconstruct, retaining checked values and their column names.
+            if key in CHOICES and value not in CHOICES[key]:
+                raise ValueError("invalid_choice")
         clean[key] = value
     if not clean[allowed[0]]:
         raise ValueError("required_field")
@@ -145,6 +160,9 @@ def render_four_company_demo():
         return
 
     st.metric("Bu şirketteki kayıt", len(rows))
+    if section == "Teklifler" and rows:
+        for item in rows:
+            item["toplam"] = Decimal(str(item["quantity_kg"])) * Decimal(str(item["unit_price"]))
     if rows:
         import pandas as pd
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
@@ -172,14 +190,24 @@ def render_four_company_demo():
         if mode != "Sil":
             for column in columns:
                 original = selected[column] if selected else None
-                if column in NUMERIC:
+                widget_key = f"ct_demo_{company}_{section}_{mode}_{selected['id'] if selected else 'new'}_{column}"
+                label = LABELS.get(column, column)
+                if column in CHOICES:
+                    choices = CHOICES[column]
+                    default = str(original or "")
+                    values[column] = st.selectbox(
+                        label, choices, index=choices.index(default) if default in choices else 0,
+                        key=widget_key)
+                elif column in NUMERIC:
                     values[column] = st.number_input(
-                        column, min_value=0.0, value=float(original or 0),
-                        key=f"ct_demo_{company}_{section}_{mode}_{column}")
+                        label, min_value=0.0, value=float(original or 0),
+                        key=widget_key)
                 else:
                     values[column] = st.text_input(
-                        column, value=str(original or ""),
-                        key=f"ct_demo_{company}_{section}_{mode}_{column}")
+                        label, value=str(original or ""),
+                        key=widget_key)
+            if section == "Teklifler":
+                st.caption("Toplam tutar = Miktar (kg) × Birim fiyat. KDV hariçtir.")
         submitted = st.form_submit_button(
             {"Yeni kayıt": "Kaydet", "Düzenle": "Değişiklikleri kaydet",
              "Sil": "Demo kaydını sil"}[mode])
@@ -193,7 +221,7 @@ def render_four_company_demo():
             else:
                 if not delete_record(company, section, selected["id"]):
                     raise ValueError("record_missing")
-            st.success("İşlem tamamlandı.")
+            st.toast("Kayıt işlemi tamamlandı.", icon="✅")
             st.rerun()
         except ValueError:
             st.error("Alanları kontrol edin. İlk alan boş olamaz; tutarlar negatif olamaz.")
