@@ -2,6 +2,7 @@
 import json
 from datetime import date, timedelta
 import streamlit as st
+from sample_pdf import make_sample_pdf
 
 STATUSES = ["Talep alındı", "Hazırlanıyor", "Gönderildi", "Teslim edildi", "Denemede", "Onaylandı", "Başarısız", "Siparişe dönüştü"]
 
@@ -50,4 +51,20 @@ def render_sample_tracking():
         st.dataframe(records, hide_index=True, width="stretch")
         overdue = [r for r in records if r["Deneme tarihi"] < date.today().isoformat() and r["Durum"] not in ("Onaylandı", "Başarısız", "Siparişe dönüştü")]
         st.metric("Geciken deneme / geri dönüş", len(overdue))
-        st.download_button("Numune bilgi formlarını JSON indir", json.dumps(records, ensure_ascii=False, indent=2).encode("utf-8"), "numune_takip.json", "application/json")
+        st.download_button("Numune kayıtlarını JSON indir", json.dumps(records, ensure_ascii=False, indent=2).encode("utf-8"), "numune_takip.json", "application/json")
+        selected = st.selectbox("Bilgi formu / durum güncelleme için numune seç", range(len(records)),
+                                format_func=lambda i: f'{i+1} · {records[i]["Firma"]} · {records[i]["Ürün"]}')
+        record = records[selected]
+        st.download_button("📄 Numune bilgi formu PDF indir", make_sample_pdf(record),
+                           file_name=f"numune_bilgi_formu_{selected+1}.pdf", mime="application/pdf")
+        with st.form("sample_update_form"):
+            new_status = st.selectbox("Güncel durum", STATUSES,
+                                      index=STATUSES.index(record["Durum"]) if record["Durum"] in STATUSES else 0)
+            new_notes = st.text_area("Deneme sonucu / takip notları", value=record["Not"])
+            new_trial = st.date_input("Yeni deneme / geri dönüş tarihi",
+                                      value=date.fromisoformat(record["Deneme tarihi"]))
+            if st.form_submit_button("Durumu ve notları güncelle"):
+                record["Durum"] = new_status
+                record["Not"] = new_notes.strip()
+                record["Deneme tarihi"] = new_trial.isoformat()
+                st.success("Oturumdaki numune kaydı güncellendi.")
