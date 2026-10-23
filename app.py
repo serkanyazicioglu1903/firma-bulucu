@@ -18,6 +18,7 @@ except Exception:
 from control_tower import render_control_tower
 from four_company_demo import render_four_company_demo
 from real_quote_workspace import render_real_quote_workspace
+from sample_tracking import render_sample_tracking
 from security_admin import login_gate, logout_button
 from scoped_company_workspace_ui import (
     company_review_mode_state, render_scoped_company_workspace,
@@ -271,12 +272,13 @@ from supplier_discovery import *  # Shared legacy/public research helpers
 st.title("🏭 AS İleri – Firma & Ürün Bulucu")
 st.caption("Şirket satın alma + yeni ürün / hammadde / üretici / distribütörlük araştırması tek uygulamada")
 
-main_tab1, main_tab2, main_tab3, main_tab4, main_tab5 = st.tabs([
+main_tab1, main_tab2, main_tab3, main_tab4, main_tab5, main_tab6 = st.tabs([
     "🏢 Firma Satın Alma / Halefiyet",
     "🧪 Satın Alma / Üretici Bulucu",
     "🧭 AS Control Tower",
     "🧮 Gerçek Teklif / Kârlılık",
     "🏢 Dört Şirket Demo",
+    "🧪 Numune Takip",
 ])
 
 # Streamlit evaluates ALL st.tabs panels on each rerun, even when hidden.
@@ -290,6 +292,9 @@ with main_tab4:
 
 with main_tab5:
     render_four_company_demo()
+
+with main_tab6:
+    render_sample_tracking()
 
 # -------------------------
 # TAB 1: ACQUISITION
