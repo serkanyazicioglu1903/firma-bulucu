@@ -4,13 +4,35 @@ from datetime import date, timedelta
 import streamlit as st
 from sample_pdf import make_sample_pdf
 from sample_backup import parse_sample_backup
+from scripts.sample_persistence_readiness import sample_persistence_readiness_on_cursor
+from scripts.live_backend import postgres_url
 
 STATUSES = ["Talep alındı", "Hazırlanıyor", "Gönderildi", "Teslim edildi", "Denemede", "Onaylandı", "Başarısız", "Siparişe dönüştü"]
 
 
 def render_sample_tracking():
     st.header("🧪 Numune Takip")
-    st.caption("Bu ilk sürüm yalnızca oturum içi takip içindir. Kalıcı kayıt ve şirket bazlı yetkilendirme henüz bağlı değildir.")
+    st.caption("Numuneler hâlâ oturumda tutulur; kalıcı kayıt yalnızca güvenli şirket yetkileri doğrulandıktan sonra açılacaktır.")
+    with st.expander("🔐 Kalıcı kayıt güvenlik durumu", expanded=False):
+        url = postgres_url()
+        if not url or url == "INVALID_POSTGRES_URL":
+            st.warning("Doğrulanmış PostgreSQL bağlantısı bulunamadı. Kalıcı kayıt kapalı.")
+        else:
+            try:
+                import psycopg2
+                from scripts.postgres_connection import sslmode_for
+                with psycopg2.connect(url, sslmode=sslmode_for(url), connect_timeout=5) as connection:
+                    with connection.cursor() as cursor:
+                        status = sample_persistence_readiness_on_cursor(cursor)
+                if status["ready"]:
+                    st.info("Şema güvenlik önkoşulları mevcut. Kullanıcı izinleri ve uçtan uca yazma testleri henüz tamamlanmadığından kalıcı kayıt kapalı.")
+                else:
+                    st.warning("Canlı veritabanında numune kayıtlarının güvenli şirket ayrımı henüz hazır değil. Kalıcı kayıt kapalı.")
+                    st.caption("Eksik güvenlik tabloları: " + ", ".join(status["missing"]) if status["missing"] else "Eksik güvenlik tablosu yok.")
+                    if status["rls_not_forced"]:
+                        st.caption("Zorunlu RLS eksik: " + ", ".join(status["rls_not_forced"]))
+            except Exception:
+                st.warning("Güvenlik kontrolü tamamlanamadı. Kalıcı kayıt kapalı.")
     if "sample_tracking_drafts" not in st.session_state:
         st.session_state["sample_tracking_drafts"] = []
     with st.expander("📥 Önceki oturumdan numune kayıtlarını geri yükle"):
