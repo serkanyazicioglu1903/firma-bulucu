@@ -3,6 +3,7 @@ import json
 from datetime import date, timedelta
 import streamlit as st
 from sample_pdf import make_sample_pdf
+from sample_backup import parse_sample_backup
 
 STATUSES = ["Talep alındı", "Hazırlanıyor", "Gönderildi", "Teslim edildi", "Denemede", "Onaylandı", "Başarısız", "Siparişe dönüştü"]
 
@@ -12,6 +13,20 @@ def render_sample_tracking():
     st.caption("Bu ilk sürüm yalnızca oturum içi takip içindir. Kalıcı kayıt ve şirket bazlı yetkilendirme henüz bağlı değildir.")
     if "sample_tracking_drafts" not in st.session_state:
         st.session_state["sample_tracking_drafts"] = []
+    with st.expander("📥 Önceki oturumdan numune kayıtlarını geri yükle"):
+        st.warning("Yalnızca daha önce bu ekrandan indirdiğiniz JSON dosyasını kullanın. "
+                   "Yükleme mevcut oturum listesini değiştirir; veritabanına yazmaz.")
+        uploaded = st.file_uploader("Numune JSON dosyası", type=["json"], key="sample_restore_file")
+        confirmed = st.checkbox("Mevcut oturum listesini değiştirmeyi onaylıyorum",
+                                key="sample_restore_confirm")
+        if st.button("Dosyadaki kayıtları oturuma yükle", disabled=not (uploaded and confirmed)):
+            try:
+                restored = parse_sample_backup(uploaded.getvalue())
+            except ValueError:
+                st.error("Dosya geçersiz veya desteklenen numune kayıt biçiminde değil.")
+            else:
+                st.session_state["sample_tracking_drafts"] = restored
+                st.success(f"{len(restored)} kayıt oturuma yüklendi. Kalıcı kaydedilmedi.")
     with st.form("sample_tracking_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
         with c1:
