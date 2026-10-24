@@ -19,9 +19,9 @@ def render_sample_tracking():
             st.warning("Doğrulanmış PostgreSQL bağlantısı bulunamadı. Kalıcı kayıt kapalı.")
         else:
             try:
-                import psycopg2
+                import psycopg
                 from scripts.postgres_connection import sslmode_for
-                with psycopg2.connect(url, sslmode=sslmode_for(url), connect_timeout=5) as connection:
+                with psycopg.connect(url, sslmode=sslmode_for(url), connect_timeout=5) as connection:
                     with connection.cursor() as cursor:
                         status = sample_persistence_readiness_on_cursor(cursor)
                 if status["ready"]:
