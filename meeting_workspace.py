@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 
 import streamlit as st
 
+from meeting_extensions_ui import (archive_controls, edit_transcript, save_current_meeting, voice_profile_controls)
 from meeting_core import (
     compile_report, my_speech_text, prepare_chunks, summarize_meeting,
     transcript_text, transcribe_chunks, voice_reference,
@@ -31,7 +32,7 @@ def _reset() -> None:
     for key in (
         "meeting_audio_hash", "meeting_segments", "meeting_parts",
         "meeting_has_voice", "meeting_summary", "meeting_signature",
-        "meeting_speaker_selection",
+        "meeting_speaker_selection", "meeting_record_id",
     ):
         st.session_state.pop(key, None)
 
@@ -45,8 +46,8 @@ def render_meeting_workspace(*, company_scope: str = "") -> None:
         "kayıt dosyasını yükleyin. Tarayıcıdan kayıt, ekran kilitlenirse kesilebilir."
     )
     st.warning(
-        "Kayıt ve rapor bu oturumda geçici olarak tutulur; şirket veritabanına "
-        "otomatik kaydedilmez. Toplantı sonunda raporu cihazınıza indirin."
+        "Toplantılar şifreli arşiv dosyanıza kaydedilebilir. Sunucuya otomatik kalıcı "
+        "kayıt yapılmaz; her değişiklikten sonra güncel arşivi cihazınıza indirin."
     )
 
     api_key = _config("OPENAI_API_KEY")
@@ -56,9 +57,12 @@ def render_meeting_workspace(*, company_scope: str = "") -> None:
             "tanımlanması gerekiyor. Bu ayar tamamlanana kadar AI analizi kullanılamaz."
         )
 
+    archive_controls(company_scope)
+
     with st.expander("1 · Toplantı bilgileri", expanded=True):
         title = st.text_input("Görüşme konusu", placeholder="Örn. Pantur 1250 teknik görüşmesi", key="meeting_title")
-        company = st.text_input("Karşı taraf / firma", value=company_scope, key="meeting_company")
+        company = st.text_input("Karşı taraf / firma", value=company_scope,
+                                disabled=bool(company_scope), key="meeting_company")
         when = st.date_input("Toplantı tarihi", value=date.today(), key="meeting_date")
         participants = st.text_input("Katılımcılar", key="meeting_participants")
         my_name = st.text_input("Benim adım", value="Serkan", key="meeting_my_name")
@@ -100,6 +104,8 @@ def render_meeting_workspace(*, company_scope: str = "") -> None:
                 key="meeting_sample_file",
             )
 
+        voice_profile_controls(sample)
+
     consent = st.checkbox(
         "Katılımcıların ses kaydı ve bulut tabanlı yapay zekâ ile işleme için "
         "gerekli izinlerini aldım.",
@@ -140,12 +146,13 @@ def render_meeting_workspace(*, company_scope: str = "") -> None:
                     source = work / ("recording" + suffix)
                     source.write_bytes(audio_bytes)
                     parts = prepare_chunks(source, work / "parts")
-                    ref = None
+                    ref = st.session_state.get("meeting_saved_voice")
                     if sample is not None:
                         sample_ext = Path(getattr(sample, "name", "") or "voice.wav").suffix.lower() or ".wav"
                         voice_file = work / ("reference" + sample_ext)
                         voice_file.write_bytes(sample.getvalue())
                         ref = voice_reference(voice_file, work)
+                        st.session_state["meeting_saved_voice"] = ref
                     client = OpenAI(api_key=api_key, max_retries=2)
                     segments = transcribe_chunks(client, parts, ref)
                     st.session_state["meeting_segments"] = segments
@@ -177,10 +184,13 @@ def render_meeting_workspace(*, company_scope: str = "") -> None:
     selected = st.multiselect(
         "Bana ait konuşmacılar",
         options=speakers,
-        default=["BEN"] if "BEN" in speakers else [],
+        default=["BEN"] if "BEN" in speakers else (speakers if len(speakers) == 1 else []),
         key="meeting_speaker_selection",
         help="Emin olmadığınız bir konuşmacıyı seçmeyin.",
     )
+    if len(speakers) == 1 and "BEN" not in speakers:
+        st.caption("Tek konuşmacı bulundu ve varsayılan olarak siz seçildiniz. Doğrulayın.")
+    edit_transcript(segments)
     transcript = transcript_text(segments, set(selected), my_name.strip() or "Ben")
     mine = my_speech_text(segments, set(selected))
     tab_full, tab_mine = st.tabs(("🗣️ Tam konuşmalar", "🙋 Benim söylediklerim"))
@@ -240,3 +250,5 @@ def render_meeting_workspace(*, company_scope: str = "") -> None:
             "Toplantı raporu oturum kapanmadan indirilmeli. "
             "Ses kaydı ve konuşmalar OpenAI API'ye işleme için gönderilir."
         )
+        save_current_meeting(company, title, str(when),
+                             st.session_state["meeting_summary"], transcript, mine)
