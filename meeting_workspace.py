@@ -16,6 +16,7 @@ from meeting_extensions_ui import (archive_controls, edit_transcript, save_curre
 from meeting_core import (
     compile_report, my_speech_text, prepare_chunks, summarize_meeting,
     transcript_text, transcribe_chunks, voice_reference,
+    transcribe_turkish_precise, replace_single_speaker_transcript,
 )
 
 
@@ -32,7 +33,7 @@ def _reset() -> None:
     for key in (
         "meeting_audio_hash", "meeting_segments", "meeting_parts",
         "meeting_has_voice", "meeting_summary", "meeting_signature",
-        "meeting_speaker_selection", "meeting_record_id",
+        "meeting_speaker_selection", "meeting_record_id", "meeting_transcript_language",
     ):
         st.session_state.pop(key, None)
 
@@ -68,6 +69,18 @@ def render_meeting_workspace(*, company_scope: str = "") -> None:
         my_name = st.text_input("Benim adım", value="Serkan", key="meeting_my_name")
 
     st.subheader("2 · Ses kaydını ekle")
+    spoken_language = st.selectbox(
+        "Konuşma dili",
+        ("Türkçe", "Türkçe ve İngilizce (otomatik)", "İngilizce"),
+        index=0,
+        key="meeting_spoken_language",
+        help="Türkçe toplantılarda Türkçe seçili kalmalı. Bu ayar çeviri değil, yazıya dökme dilini belirler.",
+    )
+    language_code = {
+        "Türkçe": "tr",
+        "Türkçe ve İngilizce (otomatik)": None,
+        "İngilizce": "en",
+    }[spoken_language]
     mode = st.radio(
         "Kayıt yöntemi",
         ("Ses dosyası yükle", "Mikrofonla şimdi kaydet"),
@@ -118,7 +131,9 @@ def render_meeting_workspace(*, company_scope: str = "") -> None:
         st.error("Kayıt çok büyük. Daha küçük bir dosya yükleyin.")
     if audio_bytes:
         digest = hashlib.sha256(audio_bytes).hexdigest()
-        if st.session_state.get("meeting_audio_hash") != digest:
+        if (st.session_state.get("meeting_audio_hash") != digest
+                or (st.session_state.get("meeting_segments")
+                    and st.session_state.get("meeting_transcript_language") != language_code)):
             _reset()
             st.session_state["meeting_audio_hash"] = digest
         st.audio(audio_bytes, format=getattr(audio, "type", None) or "audio/wav")
@@ -154,9 +169,12 @@ def render_meeting_workspace(*, company_scope: str = "") -> None:
                         ref = voice_reference(voice_file, work)
                         st.session_state["meeting_saved_voice"] = ref
                     client = OpenAI(api_key=api_key, max_retries=2)
-                    segments = transcribe_chunks(client, parts, ref)
+                    segments = transcribe_chunks(
+                        client, parts, ref, language_code=language_code
+                    )
                     st.session_state["meeting_segments"] = segments
                     st.session_state["meeting_parts"] = len(parts)
+                    st.session_state["meeting_transcript_language"] = language_code
                     st.session_state["meeting_has_voice"] = bool(ref)
                     st.session_state.pop("meeting_summary", None)
                     st.session_state.pop("meeting_signature", None)
@@ -173,6 +191,44 @@ def render_meeting_workspace(*, company_scope: str = "") -> None:
             "Fiyatları ve taahhütleri raporu kullanmadan önce kontrol edin."
         )
         return
+
+    # Explicit retry uses a separate accuracy-focused Turkish model. Speaker
+    # annotations are kept only where there was exactly one original speaker.
+    if language_code == "tr" and len({row.speaker for row in segments}) == 1:
+        with st.expander("🇹🇷 Türkçe yanlış yazıldıysa yeniden çöz", expanded=False):
+            st.caption(
+                "Türkçe yanlışlıkla İngilizce yazıldıysa mevcut ses kaydını tekrar "
+                "Türkçe çözümleyin. Ek API kullanımı ücretlidir. Tek konuşmacının "
+                "zaman işaretleri bu işlemden sonra yaklaşık olacaktır."
+            )
+            if st.button(
+                "🔄 Kaydı hassas Türkçe modeliyle tekrar çöz",
+                key="meeting_precise_turkish_retry",
+                disabled=not (audio_bytes and api_key and consent),
+                use_container_width=True,
+            ):
+                try:
+                    from openai import OpenAI
+                    with st.spinner("Türkçe ses yeniden çözümleniyor..."):
+                        with TemporaryDirectory(prefix="as_meeting_retry_") as temp:
+                            work = Path(temp)
+                            ext = Path(getattr(audio, "name", "") or "recording.wav").suffix.lower() or ".wav"
+                            source = work / ("recording" + ext)
+                            source.write_bytes(audio_bytes)
+                            parts = prepare_chunks(source, work / "parts")
+                            precise_texts = transcribe_turkish_precise(
+                                OpenAI(api_key=api_key, max_retries=2), parts
+                            )
+                            st.session_state["meeting_segments"] = replace_single_speaker_transcript(
+                                segments, precise_texts
+                            )
+                            st.session_state.pop("meeting_summary", None)
+                            st.session_state.pop("meeting_signature", None)
+                            st.rerun()
+                except ValueError as error:
+                    st.error(str(error))
+                except Exception:
+                    st.error("Türkçe ses tekrar çözümlenemedi. Bağlantıyı ve API ayarlarını kontrol edin.")
 
     st.subheader("4 · Konuşmacıları kontrol et")
     speakers = sorted({segment.speaker for segment in segments})
