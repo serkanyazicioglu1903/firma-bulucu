@@ -91,7 +91,11 @@ def render_company_runtime():
         return
     company = st.selectbox('Şirket', tuple(COMPANY_LABELS), format_func=COMPANY_LABELS.get, key='runtime_company')
     st.caption('Kayıtlar seçilen şirkete aittir. Ürün kataloğu dört şirket arasında ortaktır.')
-    view = st.selectbox('Bölüm', ('Yönetici Özeti', 'Üretici / Tedarikçi Bulma', *CRM_READ_SECTIONS, *OWNED_READ_SECTIONS, *EXTRA_READS), key='runtime_section')
+    view = st.selectbox('Bölüm', ('Yönetici Özeti', 'Üretici / Tedarikçi Bulma', 'Toplantı Hafızası', *CRM_READ_SECTIONS, *OWNED_READ_SECTIONS, *EXTRA_READS), key='runtime_section')
+    if view == 'Toplantı Hafızası':
+        from meeting_workspace import render_meeting_workspace
+        render_meeting_workspace()
+        return
     if view == 'Üretici / Tedarikçi Bulma':
         # Explicit DB grant required even for the external research workspace.
         status, _ = execute_request(st.session_state, company, section='Depolar')
