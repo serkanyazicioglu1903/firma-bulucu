@@ -10,3 +10,6 @@ psycopg[binary]>=3.2
 psycopg_pool>=3.2
 cryptography>=44.0
 reportlab>=4.2
+
+openai>=2.0
+imageio-ffmpeg>=0.6
