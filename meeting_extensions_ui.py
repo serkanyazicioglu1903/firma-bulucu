@@ -68,7 +68,7 @@ def archive_controls(company_scope: str = "") -> None:
             with st.expander("Eski görüşmenin konuşma dökümü"):
                 st.text_area("Arşivlenmiş transkript", value=entry["transcript"],
                              height=240, disabled=True,
-                             key="meeting_archive_old_transcript")
+                             key=f"meeting_archive_old_transcript_{selected}")
             st.download_button(
                 "Bu transkripti indir", entry["transcript"],
                 file_name="AS_Toplanti_Transkripti.txt", mime="text/plain",
