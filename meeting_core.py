@@ -87,7 +87,10 @@ def parse_transcription(response: Any, part: int, offset: float) -> list[Speech]
     return rows
 
 
-def transcribe_chunks(client: Any, chunks: list[Path], known_voice: str | None = None) -> list[Speech]:
+def transcribe_chunks(
+    client: Any, chunks: list[Path], known_voice: str | None = None,
+    language_code: str | None = "tr",
+) -> list[Speech]:
     rows = []
     for part, path in enumerate(chunks, start=1):
         opts: dict[str, Any] = {
@@ -96,6 +99,11 @@ def transcribe_chunks(client: Any, chunks: list[Path], known_voice: str | None =
             "chunking_strategy": "auto",
             "timeout": 600.0,
         }
+        if language_code not in ("tr", "en", None):
+            raise ValueError("Desteklenmeyen konuşma dili.")
+        if language_code:
+            # ISO 639-1 guides the diarization model without translating speech.
+            opts["language"] = language_code
         if known_voice:
             # The Python SDK accepts these extensions through extra_body.
             opts["extra_body"] = {
@@ -107,6 +115,54 @@ def transcribe_chunks(client: Any, chunks: list[Path], known_voice: str | None =
         rows.extend(parse_transcription(response, part, (part - 1) * SEGMENT_SECONDS))
     if not rows:
         raise ValueError("Kayıtta konuşma bulunamadı.")
+    return rows
+
+
+
+def transcribe_turkish_precise(client: Any, chunks: list[Path]) -> list[str]:
+    """Second, opt-in Turkish transcription pass for incorrectly detected speech.
+
+    This model returns full text, not speaker/timestamp annotations. Never
+    silently overwrite a multi-speaker transcription with a single label.
+    """
+    output = []
+    for path in chunks:
+        with path.open("rb") as stream:
+            response = client.audio.transcriptions.create(
+                file=stream,
+                model="gpt-4o-transcribe",
+                response_format="json",
+                language="tr",
+                prompt=(
+                    "Bu kayıt Türkçe bir konuşmadır. Türkçe duyulan sözleri "
+                    "olduğu gibi yaz; İngilizceye çevirme, duyulmayan cümle ekleme."
+                ),
+                timeout=600.0,
+            )
+        words = str(_get(response, "text", "") or "").strip()
+        if not words:
+            raise ValueError("Türkçe tekrar çözümlemede konuşma bulunamadı.")
+        output.append(words)
+    return output
+
+
+def replace_single_speaker_transcript(segments: list[Speech], precise_texts: list[str]) -> list[Speech]:
+    """Only safe for one distinct voice. Preserve each chunk's rough bounds."""
+    if len({row.speaker for row in segments}) != 1 or not segments:
+        raise ValueError("Bu işlem yalnızca tek konuşmacılı kayıtlar için.")
+    parts = sorted({row.part for row in segments})
+    if len(parts) != len(precise_texts) or any(not str(x).strip() for x in precise_texts):
+        raise ValueError("Türkçe metin bölümleri eksik.")
+    rows = []
+    for part, words in zip(parts, precise_texts):
+        matching = [row for row in segments if row.part == part]
+        rows.append(Speech(
+            start=min(row.start for row in matching),
+            end=max(row.end for row in matching),
+            speaker=matching[0].speaker,
+            text=words.strip(),
+            part=part,
+        ))
     return rows
 
 
