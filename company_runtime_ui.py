@@ -94,7 +94,7 @@ def render_company_runtime():
     view = st.selectbox('Bölüm', ('Yönetici Özeti', 'Üretici / Tedarikçi Bulma', 'Toplantı Hafızası', *CRM_READ_SECTIONS, *OWNED_READ_SECTIONS, *EXTRA_READS), key='runtime_section')
     if view == 'Toplantı Hafızası':
         from meeting_workspace import render_meeting_workspace
-        render_meeting_workspace()
+        render_meeting_workspace(company_scope=COMPANY_LABELS[company])
         return
     if view == 'Üretici / Tedarikçi Bulma':
         # Explicit DB grant required even for the external research workspace.
