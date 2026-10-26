@@ -122,7 +122,7 @@ def render_sample_tracking():
             selected = st.selectbox("Bilgi formu / durum güncelleme için numune seç", visible_indices,
                                 format_func=lambda i: f'{i+1} · {records[i]["Firma"]} · {records[i]["Ürün"]}')
             record = records[selected]
-                st.download_button("📄 Numune bilgi formu PDF indir", make_sample_pdf(record),
+            st.download_button("📄 Numune bilgi formu PDF indir", make_sample_pdf(record),
                                file_name=f"numune_bilgi_formu_{selected+1}.pdf", mime="application/pdf")
             with st.form("sample_update_form"):
                 new_status = st.selectbox("Güncel durum", STATUSES,
