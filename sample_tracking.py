@@ -4,6 +4,7 @@ from datetime import date, timedelta
 import streamlit as st
 from sample_pdf import make_sample_pdf
 from sample_backup import parse_sample_backup
+from sample_reporting import filter_samples, sample_summary, samples_csv
 from scripts.sample_persistence_readiness import sample_persistence_readiness_on_cursor
 from scripts.live_backend import postgres_url
 
@@ -85,23 +86,52 @@ def render_sample_tracking():
     records = st.session_state["sample_tracking_drafts"]
     if records:
         st.subheader("Numune takip listesi")
-        st.dataframe(records, hide_index=True, width="stretch")
-        overdue = [r for r in records if r["Deneme tarihi"] < date.today().isoformat() and r["Durum"] not in ("Onaylandı", "Başarısız", "Siparişe dönüştü")]
-        st.metric("Geciken deneme / geri dönüş", len(overdue))
-        st.download_button("Numune kayıtlarını JSON indir", json.dumps(records, ensure_ascii=False, indent=2).encode("utf-8"), "numune_takip.json", "application/json")
-        selected = st.selectbox("Bilgi formu / durum güncelleme için numune seç", range(len(records)),
+        metrics = sample_summary(records)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Toplam numune", metrics["total"])
+        m2.metric("Geciken takip", metrics["overdue"])
+        m3.metric("Denemede", metrics["in_trial"])
+        m4.metric("Onaylanan", metrics["approved"])
+
+        search = st.text_input("Firma, ürün veya ilgili kişi ara", key="sample_filter_search")
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            status_filter = st.selectbox("Durum filtresi", ["Tümü"] + STATUSES,
+                                         key="sample_filter_status")
+        with f2:
+            suppliers = sorted({r.get("Üretici", "").strip() for r in records
+                                if r.get("Üretici", "").strip()})
+            supplier_filter = st.selectbox("Üretici filtresi", ["Tümü"] + suppliers,
+                                           key="sample_filter_supplier")
+        with f3:
+            overdue_only = st.checkbox("Yalnızca gecikenler", key="sample_filter_overdue")
+        visible_indices = filter_samples(records, search=search, status=status_filter,
+                                         supplier=supplier_filter, overdue_only=overdue_only)
+        visible = [records[i] for i in visible_indices]
+        st.caption(f"{len(visible)} / {len(records)} numune gösteriliyor.")
+        if not visible:
+            st.info("Bu filtrelerle eşleşen numune yok.")
+        else:
+            st.dataframe(visible, hide_index=True, width="stretch")
+        st.download_button("Tüm numuneleri JSON indir",
+                           json.dumps(records, ensure_ascii=False, indent=2).encode("utf-8"),
+                           "numune_takip.json", "application/json")
+        st.download_button("Filtrelenen numuneleri Excel uyumlu CSV indir",
+                           samples_csv(visible), "numune_takip_filtreli.csv", "text/csv")
+        if visible_indices:
+            selected = st.selectbox("Bilgi formu / durum güncelleme için numune seç", visible_indices,
                                 format_func=lambda i: f'{i+1} · {records[i]["Firma"]} · {records[i]["Ürün"]}')
-        record = records[selected]
-        st.download_button("📄 Numune bilgi formu PDF indir", make_sample_pdf(record),
-                           file_name=f"numune_bilgi_formu_{selected+1}.pdf", mime="application/pdf")
-        with st.form("sample_update_form"):
-            new_status = st.selectbox("Güncel durum", STATUSES,
-                                      index=STATUSES.index(record["Durum"]) if record["Durum"] in STATUSES else 0)
-            new_notes = st.text_area("Deneme sonucu / takip notları", value=record["Not"])
-            new_trial = st.date_input("Yeni deneme / geri dönüş tarihi",
-                                      value=date.fromisoformat(record["Deneme tarihi"]))
-            if st.form_submit_button("Durumu ve notları güncelle"):
-                record["Durum"] = new_status
-                record["Not"] = new_notes.strip()
-                record["Deneme tarihi"] = new_trial.isoformat()
-                st.success("Oturumdaki numune kaydı güncellendi.")
+            record = records[selected]
+                st.download_button("📄 Numune bilgi formu PDF indir", make_sample_pdf(record),
+                               file_name=f"numune_bilgi_formu_{selected+1}.pdf", mime="application/pdf")
+            with st.form("sample_update_form"):
+                new_status = st.selectbox("Güncel durum", STATUSES,
+                                          index=STATUSES.index(record["Durum"]) if record["Durum"] in STATUSES else 0)
+                new_notes = st.text_area("Deneme sonucu / takip notları", value=record["Not"])
+                new_trial = st.date_input("Yeni deneme / geri dönüş tarihi",
+                                          value=date.fromisoformat(record["Deneme tarihi"]))
+                if st.form_submit_button("Durumu ve notları güncelle"):
+                    record["Durum"] = new_status
+                    record["Not"] = new_notes.strip()
+                    record["Deneme tarihi"] = new_trial.isoformat()
+                    st.success("Oturumdaki numune kaydı güncellendi.")
