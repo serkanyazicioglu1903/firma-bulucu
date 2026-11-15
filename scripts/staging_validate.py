@@ -64,7 +64,7 @@ def expected_structure():
     return tables
 
 
-def compare_structure(expected, actual_columns, actual_constraints):
+def compare_structure(expected, actual_columns, actual_constraints, *, legacy_live=False):
     """Return only structural discrepancies, never business records."""
     differences = []
     for table, specification in expected.items():
@@ -75,6 +75,9 @@ def compare_structure(expected, actual_columns, actual_constraints):
         for col, wanted in specification["columns"].items():
             found = cols.get(col)
             if found is None:
+                # Keep the existing live app available before the additive task migration.
+                if legacy_live and (table, col) == ("tasks", "followup_details"):
+                    continue
                 differences.append(table + "." + col + ": sütun eksik")
             elif found != wanted:
                 differences.append(table + "." + col + ": veri tipi veya zorunluluk uyumsuz")
@@ -158,7 +161,9 @@ def validate_staging_structure(url, schema=SCHEMA):
                             tuple(reference_columns or ()) if kind == "f" else (),
                         )
                     )
-        differences = compare_structure(expected, actual_columns, actual_constraints)
+        differences = compare_structure(
+            expected, actual_columns, actual_constraints, legacy_live=schema == "ct_app"
+        )
         return ("mismatch", differences) if differences else ("ok", [])
     except Exception:
         # No raw DB exception should reach UI; these can contain the connection URI.

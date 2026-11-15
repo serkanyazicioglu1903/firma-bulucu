@@ -70,7 +70,10 @@ def _check_layout(source):
             def signature(conn):
                 return [(r[1], r[2].upper(), r[3], r[5])
                         for r in _columns(conn, name)]
-            if signature(source) != signature(expected):
+            actual, wanted = signature(source), signature(expected)
+            if name == "tasks" and all(column[0] != "followup_details" for column in actual):
+                wanted = [column for column in wanted if column[0] != "followup_details"]
+            if actual != wanted:
                 raise MigrationSafetyError("Source columns differ from approved schema.")
             if _foreign_keys(source, name) != _foreign_keys(expected, name):
                 raise MigrationSafetyError("Source foreign keys differ.")

@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from ai_manager import render_ai_manager
+from task_followup import load_tasks, render_task_followup, render_weekly_followup
 from sales_matching import normalize, matched_sectors
 from management_reports import render_management_reports
 from postgres_workspace import render_postgres_workspace
@@ -77,10 +78,11 @@ def execute(sql, params=()):
     if not authorize_write(sql):
         raise PermissionError("Bu işlem mevcut kullanıcı rolü için yetkili değil.")
     with get_conn() as conn:
-        conn.execute(sql, params)
+        rowcount = conn.execute(sql, params).rowcount
         conn.commit()
     if not postgres_url():
         audit_sql_write(DB_PATH, sql)
+    return rowcount
 
 
 def query_df(sql, params=()):
@@ -534,10 +536,12 @@ def init_db():
         );
         """)
 
+        conn.execute("BEGIN IMMEDIATE")
         ensure_column(conn, "opportunities", "last_contact_date", "TEXT DEFAULT ''")
         ensure_column(conn, "opportunities", "expected_close_date", "TEXT DEFAULT ''")
         ensure_column(conn, "opportunities", "lost_reason", "TEXT DEFAULT ''")
         ensure_column(conn, "opportunities", "updated_at", "TEXT DEFAULT ''")
+        ensure_column(conn, "tasks", "followup_details", "TEXT")
         ensure_column(conn, "customers", "product_profile", "TEXT DEFAULT ''")
         ensure_column(conn, "customers", "priority_tier", "TEXT DEFAULT 'B'")
         ensure_column(conn, "customers", "credit_limit", "REAL DEFAULT 0")
@@ -2227,7 +2231,7 @@ def _render_control_tower_interface(live_postgres=False):
             "🧪 Kalite & Regülasyon",
             "💰 Satış Pipeline",
             "📞 Takip Merkezi",
-            "✅ Görevler",
+            "✅ Görev ve Takip",
             "🤖 AI Yönetici",
             "📈 Raporlar",
             "🎯 Serkan Ekranı",
@@ -2236,7 +2240,9 @@ def _render_control_tower_interface(live_postgres=False):
         ]
     )
 
+    task_rows, followup_ready = load_tasks(query_df)
     with dashboard:
+        render_weekly_followup(task_rows)
         customer_count = int(query_df("SELECT COUNT(*) n FROM customers").iloc[0]["n"])
         active_opps = int(query_df(
             "SELECT COUNT(*) n FROM opportunities WHERE stage NOT IN ('Kazanıldı','Kaybedildi')"
@@ -4777,52 +4783,14 @@ def _render_control_tower_interface(live_postgres=False):
         st.dataframe(recent, width="stretch", hide_index=True)
 
     with tasks_tab:
-        task_df = query_df("""
-            SELECT id, title AS görev, related_to AS ilgili, owner AS sorumlu,
-                   priority AS öncelik, due_date AS son_tarih, status AS durum
-            FROM tasks
-            ORDER BY CASE priority
-                WHEN 'Kritik' THEN 1 WHEN 'Yüksek' THEN 2
-                WHEN 'Orta' THEN 3 ELSE 4 END,
-                due_date ASC
-        """)
-        st.dataframe(task_df, width="stretch", hide_index=True)
+        def audit_task_import(sql):
+            if not live_postgres:
+                audit_sql_write(DB_PATH, sql)
 
-        with st.expander("Yeni görev ekle"):
-            with st.form("ct_task_form", clear_on_submit=True):
-                title = st.text_input("Görev *", key="ct_task_title")
-                related = st.text_input("İlgili müşteri / ürün", key="ct_task_related")
-                owner = st.text_input("Sorumlu", key="ct_task_owner")
-                t1, t2 = st.columns(2)
-                priority = t1.selectbox("Öncelik", ["Kritik", "Yüksek", "Orta", "Düşük"])
-                due = t2.date_input("Son tarih", value=date.today() + timedelta(days=1))
-                notes = st.text_area("Not", key="ct_task_notes")
-                if st.form_submit_button("Görev ekle", type="primary") and title.strip():
-                    execute(
-                        """INSERT INTO tasks
-                        (title,related_to,owner,priority,due_date,status,notes)
-                        VALUES (?,?,?,?,?,'Açık',?)""",
-                        (title.strip(), related, owner, priority, str(due), notes)
-                    )
-                    st.success("Görev eklendi.")
-                    st.rerun()
-
-        if not task_df.empty:
-            st.markdown("#### Görev durumunu değiştir")
-            task_id = st.selectbox(
-                "Görev",
-                task_df["id"].tolist(),
-                format_func=lambda x: task_df.loc[task_df["id"] == x, "görev"].iloc[0],
-                key="ct_task_close"
-            )
-            new_status = st.selectbox(
-                "Yeni durum", ["Açık", "Devam", "Bekliyor", "Tamamlandı"],
-                key="ct_task_new_status"
-            )
-            if st.button("Görevi güncelle"):
-                execute("UPDATE tasks SET status=? WHERE id=?", (new_status, int(task_id)))
-                st.success("Görev güncellendi.")
-                st.rerun()
+        render_task_followup(
+            task_rows, followup_ready, execute, get_conn,
+            live_postgres=live_postgres, audit_import=audit_task_import,
+        )
 
     with ai_tab:
         render_ai_manager(DB_PATH)

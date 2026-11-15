@@ -16,6 +16,7 @@ except Exception:
     DDGS = None
 
 from control_tower import render_control_tower
+from task_followup import DRAFT_NOTICE
 from four_company_demo import render_four_company_demo
 from real_quote_workspace import render_real_quote_workspace
 from sample_tracking import render_sample_tracking
@@ -27,7 +28,7 @@ from scoped_company_workspace_ui import (
 from scripts.live_backend import postgres_url
 
 st.set_page_config(
-    page_title="AS İleri | Control Tower",
+    page_title="AS İleri | Control Tower · Görev ve Takip",
     page_icon="🏭",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -451,6 +452,7 @@ with main_tab1:
             if selected["Ülke"] == "Almanya":
                 st.subheader("Hazır Almanca ilk temas taslağı")
                 email_text = german_acquisition_email(selected["Başlık"], selected["İlan / kaynak URL"])
+                st.warning(DRAFT_NOTICE)
                 st.text_area("E-posta", email_text, height=430, key=f"acq_mail_{selected_idx}")
                 st.download_button(
                     "Almanca e-postayı indir",
@@ -566,9 +568,10 @@ with main_tab2:
             selected_index = st.selectbox("Firma seç", list(range(len(supplier_view))), format_func=lambda i: supplier_view.iloc[i]["Firma"], key="supplier_mail_index")
             selected_row = supplier_view.iloc[selected_index]
             draft_key = f"{selected_row['Kaynak URL']}:{selected_row['Taslak Konu']}"
+            st.warning(DRAFT_NOTICE)
             st.text_input("Konu", value=selected_row["Taslak Konu"], key=f"subject:{draft_key}")
             st.text_area("E-posta", value=selected_row["Taslak E-mail"], height=430, key=f"body:{draft_key}")
-            st.caption("Bu bir taslaktır. Program e-posta göndermez. Sonuçları saklamak için CSV veya JSON indirin; oturum verileri kalıcı kayıt değildir.")
+            st.caption("Araştırma sonuçlarını saklamak için CSV veya JSON indirin.")
         else:
             st.info("Seçtiğiniz minimum skoru geçen firma yok. Daha düşük bir skor seçebilirsiniz.")
 

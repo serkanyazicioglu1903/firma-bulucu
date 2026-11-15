@@ -119,7 +119,13 @@ def verify_disposable_backup_restore(url, payload):
                 )] for table in names
             }
         for name, rows in batches.items():
-            if any(set(row) != set(columns[name]) for row in rows):
+            expected_columns = set(columns[name])
+            if any(
+                set(row) != expected_columns and not (
+                    name == "tasks" and set(row) == expected_columns - {"followup_details"}
+                )
+                for row in rows
+            ):
                 return "invalid_archive", None
 
         import psycopg
@@ -155,6 +161,19 @@ def verify_disposable_backup_restore(url, payload):
                             )
                         if source_baseline["status"] != "baseline_captured":
                             raise ValueError("Source recovery baseline incomplete")
+                        cur.execute(
+                            "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+                            "WHERE table_schema='ct_app' AND table_name='tasks' "
+                            "AND column_name='followup_details') AS present"
+                        )
+                        if cur.fetchone()["present"]:
+                            for row in batches["tasks"]:
+                                row.setdefault("followup_details", None)
+                        else:
+                            if any("followup_details" in row for row in batches["tasks"]):
+                                return "invalid_archive", None
+                            _, create_sql, foreign_keys = schema_ddl_steps(include_followup_details=False)
+                            columns["tasks"].remove("followup_details")
                         cur.execute('CREATE SCHEMA "' + _RESTORE_SCHEMA + '"')
                         cur.execute(
                             'SET LOCAL search_path TO "' + _RESTORE_SCHEMA
