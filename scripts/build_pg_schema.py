@@ -20,7 +20,7 @@ def quote(identifier):
     return '"' + identifier + '"'
 
 
-def sqlite_schema():
+def sqlite_schema(*, include_followup_details=True):
     """Load exactly the checked-in SQLite CREATE TABLE scripts in memory."""
     conn = sqlite3.connect(":memory:")
     for source in SOURCES:
@@ -36,6 +36,8 @@ def sqlite_schema():
         text,
     )
     for table, column, definition in additions:
+        if not include_followup_details and (table, column) == ("tasks", "followup_details"):
+            continue
         conn.execute(
             "ALTER TABLE " + quote(table) + " ADD COLUMN " + quote(column) + " " + definition
         )

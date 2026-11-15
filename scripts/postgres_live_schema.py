@@ -15,9 +15,9 @@ LIVE_SCHEMA = "ct_app"
 EXPLICIT_CONFIRMATION = "CREATE_NEW_EMPTY_CT_APP"
 
 
-def schema_ddl_steps():
+def schema_ddl_steps(*, include_followup_details=True):
     """Offline, fixed-schema plan from checked-in, audited SQLite definitions."""
-    with sqlite_schema() as connection:
+    with sqlite_schema(include_followup_details=include_followup_details) as connection:
         names = [
             row[0] for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' "

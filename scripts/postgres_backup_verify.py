@@ -46,7 +46,9 @@ def inspect_export_zip(payload):
             }
 
         if any(
-            set(row) != columns[table]
+            set(row) != columns[table] and not (
+                table == "tasks" and set(row) == columns[table] - {"followup_details"}
+            )
             for table, rows in batches.items()
             for row in rows
         ):
